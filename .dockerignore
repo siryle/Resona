@@ -1,0 +1,10 @@
+.git
+.tools
+.build
+dist
+artifacts
+ios
+docs
+data
+music
+.env

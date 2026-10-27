@@ -1,0 +1,34 @@
+services:
+  resona:
+    image: ${RESONA_IMAGE:-ghcr.io/siryle/resona:latest}
+    build: .
+    container_name: resona
+    restart: unless-stopped
+    ports:
+      - "${RESONA_PORT:-8080}:8080"
+    environment:
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SCRAPE_ENABLED: ${SCRAPE_ENABLED:-true}
+      SCAN_INTERVAL: ${SCAN_INTERVAL:-15m}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - resona-data:/data
+      - ${MUSIC_INBOX:-./music/inbox}:/music/inbox
+      - ${MUSIC_LIBRARY:-./music/library}:/music/library
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  resona-data:

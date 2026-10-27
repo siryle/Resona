@@ -1,0 +1,529 @@
+// Copyright (c) 2025 @AmarnathCJD
+
+package utils
+
+import (
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"maps"
+	"net"
+	"net/url"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/amarnathcjd/gogram/internal/encoding/tl"
+
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+)
+
+var (
+	RegexpDCMigrate = regexp.MustCompile(`DC (\d+)`)
+)
+
+// ------------------ Telegram Data Center Configs ------------------
+
+var DCList = DCOptions{
+	DCs: map[int][]DC{
+		1: {{Addr: "149.154.175.58:443", IPv6: false}},
+		2: {{Addr: "149.154.167.50:443", IPv6: false}},
+		3: {{Addr: "149.154.175.100:443", IPv6: false}},
+		4: {
+			{Addr: "149.154.167.91:443", IPv6: false},
+			{Addr: "[2001:067c:04e8:f002::a]:443", IPv6: true}, // dc2 ipv6, since ipv6 of dc4 is unreachable
+		},
+		5: {{Addr: "91.108.56.151:443", IPv6: false}},
+	},
+	TestDCs: map[int]string{
+		1: "149.154.175.10:443",
+		2: "149.154.167.40:443",
+		3: "149.154.175.117:443",
+	},
+	CDNDCs: map[int][]DC{
+		201: {{Addr: "91.108.23.100:443", IPv6: false}},
+		203: {
+			{Addr: "91.105.192.100:443", IPv6: false},
+			{Addr: "[2a0a:f280:0203:000a:5000:0000:0000:0100]:443", IPv6: true},
+		},
+	},
+	MediaDCs: map[int][]DC{},
+}
+
+type DC struct {
+	Addr string
+	IPv6 bool
+}
+
+type DCOptions struct {
+	mu       sync.RWMutex
+	DCs      map[int][]DC
+	TestDCs  map[int]string
+	CDNDCs   map[int][]DC
+	MediaDCs map[int][]DC
+}
+
+func NewDCOptions() *DCOptions {
+	DCList.mu.RLock()
+	defer DCList.mu.RUnlock()
+	options := &DCOptions{
+		DCs:      maps.Clone(DCList.DCs),
+		TestDCs:  maps.Clone(DCList.TestDCs),
+		CDNDCs:   maps.Clone(DCList.CDNDCs),
+		MediaDCs: maps.Clone(DCList.MediaDCs),
+	}
+	for _, dcs := range []map[int][]DC{options.DCs, options.CDNDCs, options.MediaDCs} {
+		for id, addrs := range dcs {
+			dcs[id] = slices.Clone(addrs)
+		}
+	}
+	return options
+}
+
+func (opt *DCOptions) SetDCs(dcs map[int][]DC, cdnDCs map[int][]DC) {
+	opt.SetAllDCs(dcs, cdnDCs, nil)
+}
+
+func (opt *DCOptions) SetAllDCs(dcs map[int][]DC, cdnDCs map[int][]DC, mediaDCs map[int][]DC) {
+	opt.mu.Lock()
+	defer opt.mu.Unlock()
+	if opt.DCs == nil {
+		opt.DCs = make(map[int][]DC)
+	}
+	if opt.CDNDCs == nil {
+		opt.CDNDCs = make(map[int][]DC)
+	}
+	for id, newDCs := range dcs {
+		opt.DCs[id] = mergeUnique(opt.DCs[id], newDCs)
+	}
+
+	for id, newCDNs := range cdnDCs {
+		opt.CDNDCs[id] = mergeUnique(opt.CDNDCs[id], newCDNs)
+	}
+
+	if opt.MediaDCs == nil {
+		opt.MediaDCs = make(map[int][]DC)
+	}
+	for id, newMedias := range mediaDCs {
+		opt.MediaDCs[id] = mergeUnique(opt.MediaDCs[id], newMedias)
+	}
+}
+
+func mergeUnique(existing, new []DC) []DC {
+	seen := make(map[DC]struct{}, len(existing)+len(new))
+	result := make([]DC, 0, len(existing)+len(new))
+
+	for _, dc := range existing {
+		if _, exists := seen[dc]; !exists {
+			seen[dc] = struct{}{}
+			result = append(result, dc)
+		}
+	}
+
+	for _, dc := range new {
+		if _, exists := seen[dc]; !exists {
+			seen[dc] = struct{}{}
+			result = append(result, dc)
+		}
+	}
+
+	return result
+}
+
+func (opt *DCOptions) GetCDNAddr(dc int) (string, bool) {
+	opt.mu.RLock()
+	defer opt.mu.RUnlock()
+	addrs, ok := opt.CDNDCs[dc]
+	if !ok || len(addrs) == 0 {
+		return "", false
+	}
+	return addrs[0].Addr, addrs[0].IPv6
+}
+
+func (opt *DCOptions) GetMediaAddr(dc int, ipv6 bool) (string, bool) {
+	opt.mu.RLock()
+	defer opt.mu.RUnlock()
+	addrs, ok := opt.MediaDCs[dc]
+	if !ok || len(addrs) == 0 {
+		return "", false
+	}
+	return selectDCAddr(addrs, ipv6), true
+}
+
+func (opt *DCOptions) GetMediaOrHostIP(dc int, test, ipv6 bool) string {
+	if !test {
+		if addr, ok := opt.GetMediaAddr(dc, ipv6); ok {
+			return addr
+		}
+	}
+	return opt.GetHostIP(dc, test, ipv6)
+}
+
+func (opt *DCOptions) GetHostIP(dc int, test, ipv6 bool) string {
+	opt.mu.RLock()
+	defer opt.mu.RUnlock()
+	if test {
+		if addr, ok := opt.TestDCs[dc]; ok {
+			return addr
+		}
+	}
+
+	dcAddrs, ok := opt.DCs[dc]
+	if !ok {
+		return ""
+	}
+
+	return selectDCAddr(dcAddrs, ipv6)
+}
+
+func GetDefaultHostIP(dc int, test, ipv6 bool) string {
+	return DCList.GetHostIP(dc, test, ipv6)
+}
+
+func selectDCAddr(dcs []DC, preferIPv6 bool) string {
+	if len(dcs) == 0 {
+		return ""
+	}
+
+	if preferIPv6 {
+		for _, dc := range dcs {
+			if dc.IPv6 {
+				return dc.Addr
+			}
+		}
+	}
+
+	for _, dc := range dcs {
+		if !dc.IPv6 {
+			return FmtIP(dc.Addr)
+		}
+	}
+
+	return dcs[0].Addr
+}
+
+func (opt *DCOptions) SearchAddr(addr string) int {
+	opt.mu.RLock()
+	defer opt.mu.RUnlock()
+	for dcID, host := range opt.TestDCs {
+		if host == addr {
+			return dcID
+		}
+	}
+	for dcID, addrs := range opt.DCs {
+		for _, dc := range addrs {
+			if dc.Addr == addr {
+				return dcID
+			}
+		}
+	}
+	for dcID, addrs := range opt.CDNDCs {
+		for _, dc := range addrs {
+			if dc.Addr == addr {
+				return dcID
+			}
+		}
+	}
+	for dcID, addrs := range opt.MediaDCs {
+		for _, dc := range addrs {
+			if dc.Addr == addr {
+				return dcID
+			}
+		}
+	}
+
+	switch {
+	case strings.Contains(addr, "91.108.56"):
+		return 5
+	case strings.Contains(addr, "149.154.175"):
+		return 1
+	case strings.Contains(addr, "149.154.167"):
+		return 2
+	default:
+		return 4
+	}
+}
+
+func FmtIP(ipv6WithPort string) string {
+	if strings.Contains(ipv6WithPort, ".") || strings.HasPrefix(ipv6WithPort, "[") {
+		return ipv6WithPort
+	}
+
+	lastColon := strings.LastIndex(ipv6WithPort, ":")
+	if lastColon == -1 {
+		return ipv6WithPort
+	}
+
+	host := strings.Trim(ipv6WithPort[:lastColon], "[]")
+	port := ipv6WithPort[lastColon+1:]
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return ipv6WithPort
+	}
+
+	return net.JoinHostPort(ip.String(), port)
+}
+
+type PingParams struct {
+	PingID int64
+}
+
+func (*PingParams) CRC() uint32 {
+	return 0x7abe77ec
+}
+
+type UpdatesGetStateParams struct{}
+
+func NewMsgIDGenerator() func(timeOffset int64) int64 {
+	var (
+		mu             sync.Mutex
+		lastMsgID      int64
+		lastTimeOffset int64
+	)
+	return func(timeOffset int64) int64 {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if timeOffset != lastTimeOffset {
+			lastMsgID = 0
+			lastTimeOffset = timeOffset
+		}
+
+		now_time := time.Now().Add(time.Duration(timeOffset) * time.Second)
+		now := now_time.UnixNano()
+
+		nowSec := now / int64(time.Second)
+		nowNano := (now % int64(time.Second)) & -4 // mod 4
+
+		msgID := (nowSec << 32) | nowNano
+		if msgID <= lastMsgID {
+			msgID = lastMsgID + 4
+		}
+
+		lastMsgID = msgID
+		return msgID
+	}
+}
+
+func AuthKeyHash(key []byte) []byte {
+	return Sha1Byte(key)[12:20]
+}
+
+func GenerateSessionID() int64 {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return int64(binary.BigEndian.Uint64(b))
+}
+
+func Sha1Byte(input []byte) []byte {
+	r := sha1.Sum(input)
+	return r[:]
+}
+
+func Sha1(input string) []byte {
+	r := sha1.Sum([]byte(input))
+	return r[:]
+}
+
+func RandomBytes(size int) []byte {
+	b := make([]byte, size)
+	_, _ = rand.Read(b)
+	return b
+}
+
+func Xor(dst, src []byte) {
+	for i := range dst {
+		dst[i] ^= src[i]
+	}
+}
+
+func RandomSenderID() string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 2)
+	for i := range b {
+		buf := make([]byte, 1)
+		_, err := rand.Read(buf)
+		if err != nil {
+			return ""
+		}
+		b[i] = chars[int(buf[0])%len(chars)]
+	}
+	return string(b)
+}
+
+func OrDefault[T comparable](val, def T) T {
+	var zero T
+	if val == zero {
+		return def
+	}
+	return val
+}
+
+func AskForConfirmation() bool {
+	var response string
+	_, _ = fmt.Scanln(&response)
+	return response == "y" || response == "Y"
+}
+
+func FmtMethod(data tl.Object) string {
+	if data == nil {
+		return "nil"
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(fmt.Sprintf("%T", data), "*telegram."), "Params")
+}
+
+func MinSafeDuration(d int) time.Duration {
+	if d == 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(d) * time.Second
+}
+
+func IsTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrShortWrite) {
+		return true
+	}
+	// Socket errors vary by operating system and locale. Match the wrapped
+	// network error instead of depending only on its English error text.
+	var networkError *net.OpError
+	if errors.As(err, &networkError) {
+		return true
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "transport is closed") ||
+		strings.Contains(errStr, "connection was forcibly closed") ||
+		strings.Contains(errStr, "connection reset by peer") ||
+		strings.Contains(errStr, "broken pipe")
+}
+
+func IsFatalConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	fatalMTProxyErrors := []string{
+		"unsupported secret format",
+		"invalid secret length",
+		"failed to decode secret",
+		"mtproxy secret is required",
+	}
+
+	for _, fatalErr := range fatalMTProxyErrors {
+		if strings.Contains(errStr, fatalErr) {
+			return true
+		}
+	}
+
+	fatalErrors := []string{
+		"unsupported proxy scheme",
+		"unsupported connection type",
+		"socks version not supported",
+		"socks address type not supported",
+		"SOCKS4 only supports",
+		"invalid websocket URL",
+		"invalid Sec-WebSocket-Accept",
+		"invalid local address",
+		"protocol ID must be 4 bytes or less",
+		"mtproxy secret is required",
+	}
+
+	for _, fatalErr := range fatalErrors {
+		if strings.Contains(errStr, fatalErr) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ------------------ Proxy Configuration ------------------
+
+type Proxy struct {
+	Type     string // socks4, socks5, http, https, mtproxy
+	Host     string
+	Port     int
+	Username string
+	Password string
+	Secret   string // for MTProxy
+}
+
+func (p *Proxy) GetHost() string     { return p.Host }
+func (p *Proxy) GetPort() int        { return p.Port }
+func (p *Proxy) GetType() string     { return p.Type }
+func (p *Proxy) GetUsername() string { return p.Username }
+func (p *Proxy) GetPassword() string { return p.Password }
+func (p *Proxy) GetSecret() string   { return p.Secret }
+
+func (p *Proxy) IsEmpty() bool {
+	return p == nil || p.Host == ""
+}
+
+func (p *Proxy) String() string {
+	if p.IsEmpty() {
+		return ""
+	}
+	if p.Type == "mtproxy" {
+		return fmt.Sprintf("mtproxy://%s@%s", p.Secret, net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
+	}
+	return p.ToURL().String()
+}
+
+func (p *Proxy) ToURL() *url.URL {
+	if p.IsEmpty() {
+		return nil
+	}
+
+	u := &url.URL{
+		Scheme: p.Type,
+		Host:   net.JoinHostPort(strings.Trim(p.Host, "[]"), strconv.Itoa(p.Port)),
+	}
+
+	if p.Username != "" {
+		if p.Password != "" {
+			u.User = url.UserPassword(p.Username, p.Password)
+		} else {
+			u.User = url.User(p.Username)
+		}
+	}
+
+	return u
+}
+
+// AtomicWriteFile leaves the old file intact if encoding or writing fails.
+// The temporary file resides beside its destination so rename stays on one volume.
+func AtomicWriteFile(path string, mode fs.FileMode, write func(io.Writer) error) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if err := f.Chmod(mode); err != nil {
+		return err
+	}
+	if err := write(f); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}

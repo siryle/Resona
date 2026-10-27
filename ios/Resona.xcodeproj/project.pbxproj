@@ -1,0 +1,34 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+CA0171A4D123456789000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Offline.swift"; sourceTree = "<group>"; };
+CA0171A4D123456789000002 = {isa = PBXBuildFile; fileRef = CA0171A4D123456789000001; };
+F3A2B14E7F4CAA29A1881F44 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ResonaApp.swift"; sourceTree = "<group>"; };
+6A5FA98193CFAE81B4D972F0 = {isa = PBXBuildFile; fileRef = F3A2B14E7F4CAA29A1881F44; };
+7D8CFA98D8D3943FEE0BEE98 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "API.swift"; sourceTree = "<group>"; };
+E3AE4BE37633FF5347B67FCF = {isa = PBXBuildFile; fileRef = 7D8CFA98D8D3943FEE0BEE98; };
+71C0CEC06E1DD574D2FE9A49 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Player.swift"; sourceTree = "<group>"; };
+F54B0240CD3D1976151C4FC2 = {isa = PBXBuildFile; fileRef = 71C0CEC06E1DD574D2FE9A49; };
+469BC39359C356E5080A4FE8 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Lyrics.swift"; sourceTree = "<group>"; };
+F210E1BF3F43152C612BF45F = {isa = PBXBuildFile; fileRef = 469BC39359C356E5080A4FE8; };
+BE8B31ACB8791B7E16438F01 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views.swift"; sourceTree = "<group>"; };
+E5D7EBF0B7F5696AB8C1A0D6 = {isa = PBXBuildFile; fileRef = BE8B31ACB8791B7E16438F01; };
+795A02A63DC9C1E86758E98F = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+6FE0BBEC37407380D400F491 = {isa = PBXBuildFile; fileRef = 795A02A63DC9C1E86758E98F; };
+9AC3B5AD93CBC0305C62F78F = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+A172CEDCAE47474B615C54D5 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Resona.app; sourceTree = BUILT_PRODUCTS_DIR; };
+5CA4F3850CCC331AAF8A257D = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Generated/Version.xcconfig; sourceTree = "<group>"; };
+4813494D137E1631BBA301D5 = {isa = PBXGroup; children = (878A52FC5FF6A57D50B7B870, 5CA4F3850CCC331AAF8A257D, 0A3E27B8CA818264D75C8D81); sourceTree = "<group>"; };
+878A52FC5FF6A57D50B7B870 = {isa = PBXGroup; children = (CA0171A4D123456789000001, F3A2B14E7F4CAA29A1881F44, 7D8CFA98D8D3943FEE0BEE98, 71C0CEC06E1DD574D2FE9A49, 469BC39359C356E5080A4FE8, BE8B31ACB8791B7E16438F01, 795A02A63DC9C1E86758E98F, 9AC3B5AD93CBC0305C62F78F); path = Resona; sourceTree = "<group>"; };
+0A3E27B8CA818264D75C8D81 = {isa = PBXGroup; children = (A172CEDCAE47474B615C54D5); name = Products; sourceTree = "<group>"; };
+311359423C6C0D478222A53A = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (CA0171A4D123456789000002, 6A5FA98193CFAE81B4D972F0, E3AE4BE37633FF5347B67FCF, F54B0240CD3D1976151C4FC2, F210E1BF3F43152C612BF45F, E5D7EBF0B7F5696AB8C1A0D6); runOnlyForDeploymentPostprocessing = 0; };
+CCB84210AD295E9F575C2012 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (6FE0BBEC37407380D400F491); runOnlyForDeploymentPostprocessing = 0; };
+C2FFCD06FBE37B042DC2BBB3 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+34A04005BCAF206EEC990BD9 = {isa = PBXNativeTarget; buildConfigurationList = A1C421DAD96DFF096646A753; buildPhases = (311359423C6C0D478222A53A, C2FFCD06FBE37B042DC2BBB3, CCB84210AD295E9F575C2012); buildRules = (); dependencies = (); name = Resona; productName = Resona; productReference = A172CEDCAE47474B615C54D5; productType = "com.apple.product-type.application"; };
+244210E48437B6556980A702 = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2700; }; buildConfigurationList = A964DD4136F390AFDF0E5FBA; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh_CN; hasScannedForEncodings = 0; knownRegions = (en, zh_CN, Base); mainGroup = 4813494D137E1631BBA301D5; productRefGroup = 0A3E27B8CA818264D75C8D81; projectDirPath = ""; projectRoot = ""; targets = (34A04005BCAF206EEC990BD9); };
+73EBF6644258C120893E685D = {isa = XCBuildConfiguration;  buildSettings = {CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf;}; name = Debug; };
+0B0C687DF8B6B8DC790B519C = {isa = XCBuildConfiguration;  buildSettings = {CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";}; name = Release; };
+A964DD4136F390AFDF0E5FBA = {isa = XCConfigurationList; buildConfigurations = (73EBF6644258C120893E685D, 0B0C687DF8B6B8DC790B519C); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+6C7EFF6369083C8E1F2B1994 = {isa = XCBuildConfiguration; baseConfigurationReference = 5CA4F3850CCC331AAF8A257D; buildSettings = {CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; INFOPLIST_FILE = Resona/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = app.resona.ios; PRODUCT_NAME = Resona; TARGETED_DEVICE_FAMILY = 1; CODE_SIGN_STYLE = Automatic; ENABLE_PREVIEWS = YES; SUPPORTS_MACCATALYST = NO; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf;}; name = Debug; };
+DD75E2CB1C510A828AC72D96 = {isa = XCBuildConfiguration; baseConfigurationReference = 5CA4F3850CCC331AAF8A257D; buildSettings = {CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; INFOPLIST_FILE = Resona/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = app.resona.ios; PRODUCT_NAME = Resona; TARGETED_DEVICE_FAMILY = 1; CODE_SIGN_STYLE = Automatic; ENABLE_PREVIEWS = YES; SUPPORTS_MACCATALYST = NO; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";}; name = Release; };
+A1C421DAD96DFF096646A753 = {isa = XCConfigurationList; buildConfigurations = (6C7EFF6369083C8E1F2B1994, DD75E2CB1C510A828AC72D96); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+}; rootObject = 244210E48437B6556980A702; }

@@ -1,0 +1,1032 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#f5f2ec" />
+    <title>Resona · 让音乐归于有序</title>
+    <link rel="icon" href="/icon.png" />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/lyrics.js" defer></script>
+    <script src="/playback.js" defer></script>
+    <script src="/app.js" defer></script>
+    <script src="/plugins.js" defer></script>
+    <script src="/logs.js" defer></script>
+    <script src="/files.js" defer></script>
+    <script src="/cloud115.js" defer></script>
+  </head>
+  <body>
+    <div id="toast" role="status" aria-live="polite" hidden></div>
+    <section id="login-view" class="login-view">
+      <div class="login-art">
+        <a class="brand" href="/"
+          ><img src="/icon.png" alt="" /><span
+            >Resona<span class="brand-dot">.</span></span
+          ></a
+        >
+        <div class="login-copy">
+          <p class="eyebrow">A HOME FOR YOUR SOUND</p>
+          <h1>收藏热爱，<br />聆听共鸣。</h1>
+          <p>让散落的旋律，回到自己的音乐宇宙。</p>
+        </div>
+        <div class="record login-record" aria-hidden="true">
+          <div class="record-label">
+            <span>resona</span><i></i><small>SIDE A · YOUR COLLECTION</small>
+          </div>
+        </div>
+        <span class="login-foot">YOUR MUSIC. YOUR SPACE.</span>
+      </div>
+      <div class="login-form-wrap">
+        <form id="login-form">
+          <p class="eyebrow" id="auth-kicker">WELCOME BACK</p>
+          <h2 id="auth-title">每一首，都有归处。</h2>
+          <p class="muted" id="auth-subtitle">登录，回到你的私人音乐库。</p>
+          <label for="username">用户名</label
+          ><input
+            id="username"
+            name="username"
+            autocomplete="username"
+            required
+            maxlength="128"
+            placeholder="admin"
+          />
+          <label for="password">密码</label
+          ><input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            maxlength="1024"
+            placeholder="输入管理员密码"
+          />
+          <div id="confirm-password-wrap" hidden>
+            <label for="confirm-password">确认密码</label
+            ><input
+              id="confirm-password"
+              name="confirm-password"
+              type="password"
+              autocomplete="new-password"
+              maxlength="1024"
+              placeholder="再次输入管理员密码"
+            />
+          </div>
+          <p id="login-error" class="form-error" role="alert"></p>
+          <button class="primary" id="login-button" type="submit" disabled>
+            正在连接服务器…
+          </button>
+          <p class="login-note">你的收藏，始终由你掌握。</p>
+        </form>
+      </div>
+    </section>
+    <div id="app" class="app" hidden>
+      <aside class="sidebar">
+        <a class="brand" href="/"
+          ><img src="/icon.png" alt="" /><span
+            >Resona<span class="brand-dot">.</span></span
+          ></a
+        >
+        <p class="nav-caption">你的音乐空间</p>
+        <nav aria-label="主导航">
+          <button class="nav-item active" data-view="overview">
+            <span>◉</span>概览
+          </button>
+          <button class="nav-item" data-view="tracks">
+            <span>♫</span>全部音乐
+          </button>
+          <button class="nav-item" data-view="albums">
+            <span>▣</span>专辑
+          </button>
+          <button class="nav-item" data-view="artists">
+            <span>♧</span>艺术家
+          </button>
+          <button class="nav-item" data-view="favorites">
+            <span>♡</span>我喜欢的
+          </button>
+        </nav>
+        <p class="nav-caption second">音乐库管理</p>
+        <nav aria-label="管理">
+          <button class="nav-item" data-view="manage">
+            <span>▤</span>音乐库
+          </button>
+          <button class="nav-item" data-view="files">
+            <span aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+              >
+                <path
+                  d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
+                /></svg></span
+            >文件管理
+          </button>
+          <button class="nav-item" data-view="jobs">
+            <span>⇄</span>任务<span
+              id="job-dot"
+              class="job-dot"
+              hidden
+            ></span>
+          </button>
+          <button class="nav-item" data-view="settings">
+            <span>⚙</span>设置
+          </button>
+          <button class="nav-item" data-view="logs">
+            <span aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+              >
+                <path
+                  d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"
+                  stroke-linecap="round"
+                /></svg></span
+            >系统日志
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="server-status"><i></i><span>私人音乐服务器</span></div>
+          <small id="version-label">Resona</small>
+        </div>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <span class="breadcrumb"
+            >音乐空间 <span>/</span> <strong id="breadcrumb">概览</strong></span
+          >
+          <div id="library-scope-control">
+            <label class="sr-only" for="library-scope">选择音乐库</label>
+            <select id="library-scope" aria-label="选择音乐库">
+              <option value="local">本地音乐库</option>
+              <option value="cloud">网盘音乐库</option>
+            </select>
+          </div>
+          <form id="search-form" class="search">
+            <span aria-hidden="true">⌕</span
+            ><input
+              id="search"
+              type="search"
+              aria-label="搜索音乐"
+              placeholder="搜索歌曲、艺术家、专辑…"
+              maxlength="200"
+            />
+          </form>
+          <button
+            id="logout"
+            class="account"
+            title="退出登录"
+            aria-label="退出登录"
+          >
+            退出登录
+          </button>
+        </header>
+        <main id="main" tabindex="-1">
+          <section class="page-heading">
+            <div>
+              <p class="eyebrow" id="page-kicker">
+                YOUR PERSONAL MUSIC UNIVERSE
+              </p>
+              <h1 id="page-title">音乐，井然有声<span>.</span></h1>
+              <p id="page-subtitle" class="muted">
+                把收藏交给 Resona，把时间留给聆听。
+              </p>
+            </div>
+            <button id="scan-button" class="primary compact">
+              ＋ 扫描音乐库
+            </button>
+          </section>
+          <section id="overview" class="view">
+            <div class="hero">
+              <div class="hero-copy">
+                <span class="pill">OWN YOUR SOUND</span>
+                <h2>好音乐，<br />值得好好收藏。</h2>
+                <p>
+                  从第一张唱片，到每一次心动。<br />让你的音乐，自成一片天地。
+                </p>
+                <button id="play-library" class="dark-button">
+                  ▶ 开始聆听
+                </button>
+              </div>
+              <div class="hero-art" aria-hidden="true">
+                <div class="orbit orbit-one"></div>
+                <div class="orbit orbit-two"></div>
+                <div class="record">
+                  <div class="record-label">
+                    <span>resona</span><i></i><small>THE SOUND OF YOU</small>
+                  </div>
+                </div>
+                <span class="hero-caption"
+                  >33⅓ RPM / ENDLESS POSSIBILITIES</span
+                >
+              </div>
+            </div>
+            <div class="stats">
+              <article>
+                <span>音乐收藏</span><strong id="stat-tracks">0</strong
+                ><small>首歌曲 <span>↗</span></small>
+              </article>
+              <article>
+                <span>专辑唱片</span><strong id="stat-albums">0</strong
+                ><small>张专辑 <span>▣</span></small>
+              </article>
+              <article>
+                <span>艺术家</span><strong id="stat-artists">0</strong
+                ><small>位音乐人 <span>♫</span></small>
+              </article>
+              <article>
+                <span>聆听时光</span><strong id="stat-hours">0</strong
+                ><small>小时音乐 <span>◷</span></small>
+              </article>
+            </div>
+            <div class="section-title">
+              <h2>最近入库 <span>FRESH IN YOUR COLLECTION</span></h2>
+              <button data-view="albums" class="text-button">
+                查看全部 ↗
+              </button>
+            </div>
+            <div id="recent-albums" class="album-grid"></div>
+          </section>
+          <section id="library-view" class="view" hidden>
+            <div class="section-title">
+              <h2 id="library-title">全部音乐</h2>
+              <span id="track-count" class="muted"></span>
+            </div>
+            <div id="library-actions" class="library-actions" hidden>
+              <button id="play-all" class="dark-button">▶ 全部播放</button>
+              <button id="enqueue-all" class="outline-button">
+                ＋ 加入播放列表
+              </button>
+              <button id="shuffle-all" class="outline-button">
+                ⇄ 随机播放
+              </button>
+              <button
+                id="select-tracks"
+                class="text-button"
+                aria-pressed="false"
+              >
+                选择歌曲
+              </button>
+              <label id="selection-controls" class="selection-controls" hidden>
+                <input
+                  id="select-all-tracks"
+                  type="checkbox"
+                  aria-label="选择全部匹配歌曲"
+                />
+                <span id="selection-count">全选</span>
+              </label>
+              <span
+                id="library-action-status"
+                class="muted"
+                role="status"
+              ></span>
+            </div>
+            <div id="track-list"></div>
+            <button id="load-more" class="outline-button" hidden>
+              加载更多
+            </button>
+          </section>
+          <section id="albums-view" class="view" hidden>
+            <div id="all-albums" class="album-grid"></div>
+          </section>
+          <section id="artists-view" class="view" hidden>
+            <div id="artist-list" class="artist-grid"></div>
+          </section>
+          <section id="tasks-view" class="view" hidden>
+            <div id="tasks-tabs" class="settings-tabs" role="tablist" aria-label="任务分类">
+              <button id="tasks-tab-jobs" type="button" role="tab" data-view="jobs" aria-controls="jobs-view" aria-selected="true">整理与刮削</button>
+              <button id="tasks-tab-probe" type="button" role="tab" data-view="probe" aria-controls="cloud-probe-view" aria-selected="false" tabindex="-1">STRM 预探测</button>
+            </div>
+          <section id="jobs-view" role="tabpanel" aria-labelledby="tasks-tab-jobs" hidden>
+            <p class="task-intro">将音乐放入导入目录后开始扫描。自动去重并按艺术家和专辑整理，成功入库后删除导入来源，失败文件保留以便重试。</p>
+            <div class="section-title">
+              <h2>任务记录</h2>
+              <div class="task-actions"><button id="jobs-scan-button" class="primary" type="button">整理入库</button><button id="rescrape-button" class="outline-button" type="button">重新刮削已有音乐</button></div>
+            </div>
+            <div class="job-toolbar">
+              <label
+                ><input id="jobs-select-all" type="checkbox" />
+                全选可删除记录</label
+              >
+              <span id="jobs-selection-count" class="muted" role="status"
+                >已选 0 项</span
+              >
+              <button id="jobs-delete-selected" class="outline-button" disabled>
+                删除所选
+              </button>
+              <button id="jobs-delete-all" class="text-button" disabled>
+                全部删除
+              </button>
+            </div>
+            <div id="jobs-list"></div>
+          </section>
+            <section id="cloud-probe-view" role="tabpanel" aria-labelledby="tasks-tab-probe" hidden>
+              <p class="task-intro">预先补全网盘歌曲的标签、时长与封面，缩短客户端首次加载的等待。</p>
+              <div class="section-title cloud-task-heading"><h2>STRM 预探测</h2><div class="cloud-actions"><button id="cloud-probe" class="primary" type="button">开始预探测</button><button id="cloud-retry" class="outline-button" type="button">重试失败项</button><button id="cloud-probe-stop" class="outline-button danger-text" type="button" hidden>终止预探测</button></div></div>
+              <p class="dialog-hint">任务在后台运行，可离开页面。预探测逐首执行；终止后保留队列，点击「开始预探测」继续。</p>
+              <p id="cloud-probe-progress" role="status" aria-live="polite">等待预探测</p>
+              <p id="cloud-progress" role="status" aria-live="polite"></p>
+              <div class="cloud-actions cloud-filter">
+                <label for="cloud-state">显示</label><select id="cloud-state"><option value="">全部文件</option><option value="pending">待探测</option><option value="probing">探测中</option><option value="ready">已准备</option><option value="failed">探测失败</option><option value="missing">来源失效</option><option value="skipped">已跳过</option></select>
+                <button id="cloud-refresh" class="text-button" type="button">刷新状态</button>
+              </div>
+              <div class="files-table-wrap"><table class="cloud-table"><thead><tr><th>音乐文件</th><th>准备状态</th><th>操作</th></tr></thead><tbody id="cloud-items"></tbody></table></div>
+              <button id="cloud-more" class="outline-button" type="button" hidden>加载更多</button>
+              <p id="cloud-probe-error" class="form-error" role="alert"></p>
+            </section>
+          </section>
+          <section id="job-detail-view" class="view" hidden>
+            <div class="section-title">
+              <button class="text-button" data-view="jobs">
+                ← 返回任务记录
+              </button>
+              <div id="job-detail-actions"></div>
+            </div>
+            <p id="job-detail-status" role="status" aria-live="polite"></p>
+            <button id="job-detail-retry" class="outline-button" type="button" hidden>重新加载任务详情</button>
+            <div id="job-detail-summary" class="job-card"></div>
+            <div class="section-title">
+              <h2>提示条目</h2>
+              <span id="job-warning-count" class="muted"></span>
+            </div>
+            <div id="job-warnings" class="job-card"></div>
+            <div class="section-title">
+              <h2>文件明细</h2>
+              <span id="job-file-count" class="muted"></span>
+            </div>
+            <div id="job-files" class="job-card"></div>
+          </section>
+          <section id="settings-view" class="view" hidden>
+            <div id="settings-tabs" class="settings-tabs" role="tablist" aria-label="设置分类">
+              <button id="settings-tab-settings" type="button" role="tab" data-view="settings" aria-controls="system-settings-panel" aria-selected="true">系统设置</button>
+              <button id="settings-tab-plugins" type="button" role="tab" data-view="plugins" aria-controls="plugins-view" aria-selected="false" tabindex="-1">插件</button>
+              <button id="settings-tab-cloud115" type="button" role="tab" data-view="cloud115" aria-controls="cloud115-view" aria-selected="false" tabindex="-1">115 网盘</button>
+            </div>
+            <section id="system-settings-panel" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-settings" hidden>
+              <form id="source-settings" class="settings-card">
+                <h2>刮削源与歌词源</h2>
+                <p class="muted">
+                  默认来源为「自动」时，按优先级尝试已启用的来源。识别时优先选择时长一致的可信结果。选择具体来源时只使用该来源。
+                </p>
+                <div class="source-fields">
+                  <div>
+                    <label
+                      >默认刮削源<select
+                        id="default-metadata-source"
+                        aria-label="默认刮削源"
+                      ></select
+                    ></label>
+                    <h3 class="priority-heading">刮削优先级</h3>
+                    <p id="priority-hint" class="dialog-hint">
+                      自动模式按顺序尝试已启用来源，成功后停止。
+                    </p>
+                    <ol
+                      id="metadata-priority"
+                      class="source-priority"
+                      aria-label="刮削优先级"
+                    ></ol>
+                  </div>
+                  <div>
+                    <label
+                      >默认歌词源<select
+                        id="default-lyrics-source"
+                        aria-label="默认歌词源"
+                      ></select
+                    ></label>
+                    <h3 class="priority-heading">歌词优先级</h3>
+                    <p id="lyrics-priority-hint" class="dialog-hint"></p>
+                    <ol
+                      id="lyrics-priority"
+                      class="source-priority"
+                      aria-label="歌词优先级"
+                    ></ol>
+                  </div>
+                </div>
+                <p id="source-capabilities" class="dialog-hint"></p>
+                <p id="source-error" class="form-error" role="alert"></p>
+                <button id="source-save" type="submit" class="outline-button">
+                  保存来源设置
+                </button>
+              </form>
+            <form id="scan-schedule" class="settings-card">
+              <h2>定时整理与刮削</h2>
+              <div class="source-fields">
+                <label>执行方式<select id="scan-schedule-mode"><option value="manual">仅手动执行</option><option value="daily">每天定时执行</option></select></label>
+                <label id="scan-time-wrap" hidden>每天执行时间<input id="scan-schedule-time" type="time" value="03:00" required /></label>
+              </div>
+              <p id="scan-schedule-zone" class="dialog-hint">按服务端本地时间执行。任务运行中会跳过重叠执行；保存后立即生效并在重启后保留。</p>
+              <p id="scan-schedule-status" role="status"></p>
+              <p id="scan-schedule-error" class="form-error" role="alert"></p>
+              <button id="scan-schedule-save" type="submit" class="outline-button">保存执行计划</button>
+            </form>
+              <div class="settings-card">
+                <h2>你的音乐服务器</h2>
+                <dl id="settings-list"></dl>
+              </div>
+              <div class="info-note">
+                管理员密码在首次访问时设置，并安全保存在服务器数据目录。iOS
+                客户端使用相同的服务器地址与账号登录。
+              </div>
+            </section>
+            <section id="plugins-view" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-plugins" hidden>
+              <div class="section-title">
+                <h2>让收藏，多一种可能</h2>
+                <button id="plugins-refresh" class="text-button">刷新状态</button>
+              </div>
+              <div id="plugin-cards" class="plugin-cards"></div>
+              <p class="info-note">
+                移植自 Seed680 / MoviePilot Plugins。插件随 Resona
+                内置，配置保存在服务器，仅管理员可操作。
+              </p>
+            </section>
+<section id="cloud115-view" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-cloud115" hidden>
+<div class="account-sheet">
+<header class="sheet-title"><h2>115 网盘</h2><span class="connection-label"><i></i><span id="cloud-account" role="status">尚未连接</span></span></header>
+<section aria-label="115 账号信息" class="account-overview">
+<div class="identity"><span class="avatar"><img alt="115 账号头像" hidden="" id="cloud-avatar" referrerpolicy="no-referrer"/><svg aria-hidden="true" class="ui-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"></circle><path d="M4 22v-3a8 8 0 0 1 16 0v3"></path></svg></span><div class="identity-copy"><div class="identity-line"><strong id="cloud-account-name">连接 115 账号</strong><span class="membership" hidden="" id="cloud-membership"></span></div><p id="cloud-identity-note">使用 115 客户端扫码登录，无需应用 ID。</p></div></div>
+<div class="account-actions"><button class="quiet-button" id="cloud-account-refresh" type="button"><svg aria-hidden="true" class="ui-icon" viewBox="0 0 24 24"><path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"></path></svg>刷新资料</button><button class="quiet-button disconnect" id="cloud-disconnect" type="button">断开账号</button><button class="primary" hidden="" id="cloud-authorize" type="button">扫码登录</button></div>
+</section>
+<section aria-label="网盘容量" class="storage">
+<div class="storage-heading"><h3>网盘容量</h3><span id="cloud-storage-values"></span></div>
+<div aria-label="已使用容量" aria-valuemax="100" aria-valuemin="0" aria-valuenow="0" class="storage-meter" hidden="" id="cloud-storage-meter" role="meter"><span></span></div>
+<div class="storage-footer"><span id="cloud-storage-used"></span><span id="cloud-storage-remaining"></span></div>
+<p class="storage-note" id="cloud-storage-note">扫码登录后显示会员状态与网盘容量。</p>
+</section>
+<form class="settings-rows" id="cloud-form">
+<div class="setting-row"><div class="row-copy"><label for="cloud-root-path">音乐目录</label><p>选择要生成 STRM 的网盘目录。</p></div><div class="row-control"><div class="folder-control"><span><svg aria-hidden="true" class="ui-icon" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span><input id="cloud-root-path" readonly value="/" placeholder="请选择音乐目录"/><button class="folder-button" id="cloud-browse" type="button">选择目录</button></div><input id="cloud-root-id" type="hidden" value="0"/></div></div>
+<div class="setting-row"><div class="row-copy"><label for="cloud-base-url">播放访问地址</label><p>客户端可访问的 Resona 主服务地址</p></div><div class="row-control"><input id="cloud-base-url" placeholder="留空使用当前访问地址" type="url" value=""/><small>沿用主服务端口，播放时 302 跳转至 115。</small></div></div><div class="setting-row"><div class="row-copy"><label for="cloud-sync-time">定时同步</label><p>每天在指定时间生成 STRM，不自动预探测</p></div><div class="row-control"><div class="schedule-control"><select aria-label="同步执行方式" id="cloud-sync-mode"><option value="daily">每天定时</option><option selected="" value="manual">仅手动同步</option></select><input aria-describedby="cloud-sync-zone" id="cloud-sync-time" required="" step="60" type="time" value="03:00"/></div><small id="cloud-sync-zone">按服务端时间 UTC+08:00 执行。</small></div></div>
+<div class="setting-row"><div class="row-copy"><label for="cloud-download-http">下载接口连接</label><p>服务器获取 115 下载地址所用的协议</p></div><div class="row-control"><select aria-describedby="cloud-download-http-hint" id="cloud-download-http"><option value="false">HTTPS（默认）</option><option value="true">HTTP（兼容模式）</option></select><small id="cloud-download-http-hint">仅影响地址获取，播放仍通过主端口 302 跳转。</small></div></div>
+<div class="setting-row switch-row"><div class="row-copy"><label for="cloud-enabled">启用网盘音源</label><p>在网盘音乐库中访问已同步歌曲</p></div><label class="switch"><input aria-label="启用网盘音源" id="cloud-enabled" role="switch" type="checkbox"/><span></span></label></div>
+<div class="setting-row switch-row"><div class="row-copy"><label for="cloud-download-lyrics">同步同目录 LRC 歌词</label><p>随 STRM 同步同目录、同名歌词文件</p></div><label class="switch"><input aria-label="同步同目录 LRC 歌词" id="cloud-download-lyrics" role="switch" type="checkbox"/><span></span></label></div>
+<footer class="sheet-footer"><div class="footer-copy"><span id="cloud-save-note">生成后自动刷新网盘音乐库，标签与封面可在预探测任务中补全。</span><button class="quiet-button" id="cloud-go-tasks" type="button">前往预探测任务 <svg aria-hidden="true" class="ui-icon" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"></path></svg></button><p hidden="" id="cloud-generation-login-hint">请先扫码登录，再生成 STRM。</p></div><div class="sheet-actions"><button class="outline-button" type="submit">保存设置</button><button class="primary" id="cloud-sync" type="button">快速生成 STRM</button><button class="outline-button danger-text" hidden="" id="cloud-sync-stop" type="button">终止生成</button></div></footer><p aria-live="polite" id="cloud-sync-progress" role="status">等待生成</p>
+</form>
+</div>
+<p id="cloud-error" class="form-error" role="alert"></p>
+<dialog id="cloud-directory-browser" class="track-dialog directory-picker" aria-labelledby="cloud-directory-title" aria-describedby="cloud-directory-hint">
+  <div class="dialog-header">
+    <h2 id="cloud-directory-title">选择音乐目录</h2>
+    <button id="cloud-directory-close" class="directory-close" type="button" aria-label="关闭目录选择"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg></button>
+  </div>
+  <p id="cloud-directory-hint" class="muted">进入目标文件夹后，确认选择当前目录。</p>
+  <nav id="cloud-folder-path" class="directory-breadcrumbs" aria-label="网盘目录路径"></nav>
+  <div id="cloud-folders" class="cloud-folder-list" aria-busy="false"></div>
+  <p id="cloud-directory-error" class="form-error" role="alert"></p>
+  <div class="directory-pagination">
+    <span id="cloud-folder-count" role="status"></span>
+    <div><button id="cloud-folder-prev" class="quiet-button" type="button" aria-label="上一页"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"></path></svg></button><button id="cloud-folder-next" class="quiet-button" type="button" aria-label="下一页"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg></button></div>
+  </div>
+  <div class="directory-footer"><button id="cloud-folder-retry" class="outline-button" type="button" hidden>重试</button><button id="cloud-folder-use" class="primary" type="button">选择当前目录</button></div>
+</dialog>
+<dialog aria-labelledby="cloud-auth-title" class="track-dialog cloud-auth" id="cloud-auth">
+<div class="dialog-header"><h2 id="cloud-auth-title">115 网盘扫码登录</h2></div>
+<fieldset class="cloud-auth-methods" id="cloud-auth-methods">
+<legend>请选择扫码方式</legend>
+<div class="cloud-auth-options">
+<label><input checked="" name="cloud-client-type" type="radio" value="alipaymini"/><span>支付宝</span></label>
+<label><input name="cloud-client-type" type="radio" value="wechatmini"/><span>微信</span></label>
+<label><input name="cloud-client-type" type="radio" value="115android"/><span>安卓</span></label>
+<label><input name="cloud-client-type" type="radio" value="115ios"/><span>iOS</span></label>
+<label><input name="cloud-client-type" type="radio" value="web"/><span>网页</span></label>
+<label><input name="cloud-client-type" type="radio" value="115ipad"/><span>PAD</span></label>
+<label><input name="cloud-client-type" type="radio" value="tv"/><span>TV</span></label>
+</div>
+</fieldset>
+<p class="cloud-auth-hint">以上方式均使用 115 客户端扫码；所选方式决定登录设备，可能使同类设备的旧会话下线。</p>
+<div class="cloud-auth-content">
+<img alt="使用 115 客户端扫描此二维码登录" height="220" hidden="" id="cloud-qr" width="220"/>
+<div><p id="cloud-auth-state" role="status">扫码后请在 115 中确认登录。</p><a hidden="" id="cloud-auth-link" rel="noopener noreferrer" target="_blank">在 115 中打开登录地址</a><div class="cloud-actions"><button class="outline-button" id="cloud-auth-refresh" type="button">刷新二维码</button><button class="text-button" id="cloud-auth-cancel" type="button">关闭扫码</button></div></div>
+</div>
+</dialog>
+</section>
+          </section>
+          <section id="logs-view" class="view" hidden>
+            <div class="section-title admin-actions">
+              <p id="logs-status" role="status">正在读取日志…</p>
+              <div class="admin-buttons">
+                <button id="logs-refresh" class="outline-button">
+                  刷新日志
+                </button>
+                <button
+                  id="logs-pause"
+                  class="outline-button"
+                  aria-pressed="false"
+                >
+                  暂停刷新
+                </button>
+                <button id="logs-clear" class="outline-button danger-text">
+                  清空日志
+                </button>
+              </div>
+            </div>
+            <div class="logs-filters">
+              <div
+                id="logs-levels"
+                class="logs-levels"
+                role="group"
+                aria-label="日志等级"
+              ></div>
+              <label class="sr-only" for="logs-category">日志类别</label>
+              <select id="logs-category">
+                <option value="">全部类别</option>
+                <option value="system">系统运行</option>
+                <option value="scan">整理与刮削</option>
+                <option value="plugin">插件</option>
+                <option value="settings">设置更改</option>
+                <option value="strm">STRM 生成</option>
+                <option value="probe">STRM 预探测</option>
+                <option value="playback">302 播放</option>
+              </select>
+              <label class="sr-only" for="logs-search">筛选日志内容</label>
+              <input
+                id="logs-search"
+                type="search"
+                placeholder="筛选日志内容…"
+                maxlength="512"
+              />
+            </div>
+            <div class="section-title logs-meta">
+              <span id="logs-count"></span
+              ><span>保留最近 2000 条 · 每 5 秒自动刷新</span>
+            </div>
+            <p id="logs-error" class="form-error" role="alert"></p>
+            <div
+              id="logs-list"
+              class="logs-list"
+              aria-label="系统日志记录"
+            ></div>
+          </section>
+          <section id="files-view" class="view" hidden>
+            <div id="files-tabs" class="settings-tabs" role="tablist" aria-label="文件存储">
+              <button id="files-tab-local" type="button" role="tab" data-storage="local" aria-selected="true" aria-controls="files-panel">本地管理</button>
+              <button id="files-tab-cloud" type="button" role="tab" data-storage="cloud" aria-selected="false" aria-controls="files-panel" tabindex="-1" hidden>115网盘</button>
+            </div>
+            <div id="files-panel" role="tabpanel" aria-labelledby="files-tab-local">
+            <div class="file-workspace">
+            <header class="file-location"><nav id="files-breadcrumbs" aria-label="当前文件路径"></nav><span id="files-summary" role="status"></span></header>
+            <form id="files-path-form" class="files-path-form">
+              <label class="sr-only" for="files-root">管理目录</label>
+              <select id="files-root">
+                <option value="filesystem">服务器文件系统</option>
+                <option value="library" selected>音乐库</option>
+                <option value="inbox">导入目录</option>
+                <option value="plugins">插件收件目录</option>
+                <option value="strm">STRM 目录</option>
+              </select>
+              <button
+                id="files-up"
+                type="button"
+                class="outline-button"
+                aria-label="上一级目录"
+              >
+                上一级
+              </button>
+              <label class="sr-only" for="files-path">目录路径</label>
+              <input id="files-path" placeholder="/" aria-label="目录路径" />
+              <button class="outline-button" type="submit">前往</button>
+              <button id="files-refresh" class="outline-button" type="button">
+                刷新
+              </button>
+            </form>
+            <div class="files-toolbar">
+              <span id="files-selected" role="status">已选 0 项</span>
+              <button data-file-action="copy" class="outline-button" disabled>
+                复制
+              </button>
+              <button data-file-action="cut" class="outline-button" disabled>
+                剪切
+              </button>
+              <button data-file-action="paste" class="outline-button" disabled>
+                粘贴
+              </button>
+              <button data-file-action="move" class="outline-button" disabled>
+                移动到
+              </button>
+              <button data-file-action="rename" class="outline-button" disabled>
+                重命名
+              </button>
+              <button
+                data-file-action="delete"
+                class="outline-button danger-text"
+                disabled
+              >
+                删除
+              </button>
+            </div>
+            <p id="files-hint" class="dialog-hint">
+              可浏览服务器任意可访问目录。音乐库、导入目录、插件收件目录和 STRM 目录为快捷入口；文件操作会同步更新曲库索引。
+            </p>
+            <p id="files-error" class="form-error" role="alert"></p>
+            <div class="files-table-wrap">
+              <table class="files-table">
+                <caption class="sr-only">当前目录的文件与文件夹</caption>
+                <thead>
+                  <tr>
+                    <th>
+                      <input
+                        id="files-all"
+                        type="checkbox"
+                        aria-label="全选当前目录"
+                      />
+                    </th>
+                    <th>名称</th>
+                    <th>类型</th>
+                    <th>大小</th>
+                    <th>修改时间</th>
+                  </tr>
+                </thead>
+                <tbody id="files-list"></tbody>
+              </table>
+            </div>
+            </div>
+            </div>
+          </section>
+          <section
+            id="now-playing-view"
+            class="listening-view"
+            aria-label="海报与歌词"
+            hidden
+          >
+            <header class="listening-header">
+              <button
+                id="collapse-player"
+                class="outline-button"
+                aria-label="收起播放页"
+              >
+                ⌄ 收起
+              </button>
+              <span class="eyebrow">LET THE MUSIC STAY</span>
+              <button id="listening-lyrics" class="text-button">
+                歌词来源与获取
+              </button>
+            </header>
+            <div class="listening-layout">
+              <div class="listening-poster">
+                <div id="listening-record" class="listening-record">
+                  <div id="listening-art" class="listening-art"></div>
+                </div>
+                <h2 id="listening-title"></h2>
+                <p id="listening-artist" class="muted"></p>
+                <p id="listening-album" class="dialog-hint"></p>
+                <button id="listening-details" class="text-button">
+                  歌曲详情 ↗
+                </button>
+              </div>
+              <div class="listening-words">
+                <p id="listening-source" class="eyebrow" role="status"></p>
+                <div
+                  id="listening-lyrics-list"
+                  class="listening-lyrics"
+                  tabindex="0"
+                  aria-label="歌词，点击同步歌词可跳转播放位置"
+                ></div>
+              </div>
+            </div>
+          </section>
+        </main>
+        <footer class="page-footer">
+          <span>Resona — 让每一份热爱，产生共鸣。</span
+          ><span>MADE FOR THE LOVE OF MUSIC</span>
+        </footer>
+      </div>
+      <section
+        id="player-bar"
+        class="player-bar"
+        aria-label="音乐播放器"
+        hidden
+      >
+        <div class="now-playing">
+          <button
+            id="expand-player"
+            class="player-art-button"
+            aria-label="展开海报与歌词"
+            aria-expanded="false"
+            aria-controls="now-playing-view"
+          >
+            <span id="player-art" class="player-art"></span
+            ><span class="expand-player-icon" aria-hidden="true">⌃</span>
+          </button>
+          <div>
+            <strong id="player-title"></strong
+            ><small id="player-artist"></small>
+          </div>
+          <button
+            id="player-favorite"
+            class="icon-button"
+            aria-label="收藏当前歌曲"
+          >
+            ♡
+          </button>
+        </div>
+        <div class="transport">
+          <div class="transport-buttons">
+            <button id="previous" class="icon-button" aria-label="上一首">
+              ⏮</button
+            ><button
+              id="play-pause"
+              class="play-toggle"
+              aria-label="播放或暂停"
+            >
+              ▶</button
+            ><button id="next" class="icon-button" aria-label="下一首">
+              ⏭
+            </button>
+          </div>
+          <div class="progress">
+            <span id="elapsed">0:00</span
+            ><input
+              id="seek"
+              type="range"
+              min="0"
+              max="1000"
+              value="0"
+              aria-label="播放进度"
+            /><span id="duration">0:00</span>
+          </div>
+        </div>
+        <div class="player-tools">
+          <div class="volume">
+            <span aria-hidden="true">♫</span
+            ><input
+              id="volume"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value="0.8"
+              aria-label="音量"
+            /><small id="player-format"></small>
+          </div>
+          <div class="playback-options">
+            <button
+              id="repeat-mode"
+              class="icon-button playback-option"
+              aria-label="顺序播放，切换为列表循环"
+              aria-pressed="false"
+              title="顺序播放，点击切换为列表循环"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  id="repeat-symbol"
+                  d="m17 2 4 4-4 4M3 11V8a2 2 0 0 1 2-2h16M7 22l-4-4 4-4m14-1v3a2 2 0 0 1-2 2H3"
+                />
+              </svg>
+              <span
+                id="repeat-single"
+                class="repeat-single"
+                aria-hidden="true"
+                hidden
+                >1</span
+              >
+            </button>
+            <button
+              id="queue-toggle"
+              class="icon-button playback-option"
+              aria-label="播放列表"
+              aria-expanded="false"
+              aria-controls="queue-panel"
+              title="播放列表"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 5h18M3 11h12M3 17h8m9-6v9l-5-3z" />
+              </svg>
+              <span id="queue-badge" class="queue-badge" aria-hidden="true"
+                >0</span
+              >
+            </button>
+          </div>
+        </div>
+      </section>
+      <section
+        id="queue-panel"
+        class="queue-panel"
+        aria-labelledby="queue-title"
+        hidden
+      >
+        <header class="queue-header">
+          <div>
+            <h2 id="queue-title">播放列表</h2>
+            <p id="queue-count" class="muted"></p>
+          </div>
+          <button
+            id="queue-close"
+            class="icon-button"
+            aria-label="关闭播放列表"
+          >
+            ×
+          </button>
+        </header>
+        <div id="queue-list" class="queue-list"></div>
+      </section>
+    </div>
+    <dialog
+      id="correction-dialog"
+      class="track-dialog"
+      aria-labelledby="correction-title"
+    >
+      <header class="dialog-header">
+        <div>
+          <p class="eyebrow">FIND THE RIGHT RECORD</p>
+          <h2 id="correction-title">识别更正</h2>
+          <p id="correction-track" class="muted"></p>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          data-close="correction-dialog"
+          aria-label="关闭识别更正"
+        >
+          ×
+        </button>
+      </header>
+      <form id="match-form" class="match-search">
+        <label class="source-choice"
+          >刮削源<select id="match-source" aria-label="选择刮削源"></select
+        ></label>
+        <label
+          >歌曲名称<input id="match-title" required maxlength="1024"
+        /></label>
+        <label>艺术家<input id="match-artist" maxlength="1024" /></label>
+        <button id="match-search" class="outline-button" type="submit">
+          搜索候选
+        </button>
+      </form>
+      <p class="dialog-hint">
+        选择来源并搜索候选，核对标签后保存，也可以直接手动更正。
+      </p>
+      <div
+        id="match-results"
+        class="match-results"
+        role="region"
+        aria-label="候选结果"
+        aria-live="polite"
+      ></div>
+      <form id="metadata-form">
+        <fieldset id="metadata-fields" class="metadata-fields">
+          <label
+            >歌曲名称<input name="title" required maxlength="1024"
+          /></label>
+          <label>艺术家<input name="artist" required maxlength="1024" /></label>
+          <label>专辑<input name="album" maxlength="1024" /></label>
+          <label
+            >专辑艺术家<input name="album_artist" maxlength="1024"
+          /></label>
+          <label
+            >年份<input
+              name="year"
+              inputmode="numeric"
+              pattern="[0-9]{4}"
+              maxlength="4"
+              placeholder="可留空"
+          /></label>
+          <label>流派<input name="genre" maxlength="1024" /></label>
+          <label
+            >曲序<input name="number" type="number" min="0" max="9999" step="1"
+          /></label>
+          <label
+            >碟号<input name="disc" type="number" min="0" max="9999" step="1"
+          /></label>
+          <input name="mbid" type="hidden" /><input
+            name="release_id"
+            type="hidden"
+          />
+          <input name="source" type="hidden" />
+        </fieldset>
+        <p class="dialog-hint">
+          更正保存到曲库，重新扫描或刮削会保留。音频文件的标签与位置保持原样；修改歌曲身份后，请重新获取在线歌词。
+        </p>
+        <p id="metadata-error" class="form-error" role="alert"></p>
+        <footer class="dialog-footer">
+          <button
+            type="button"
+            class="outline-button"
+            data-close="correction-dialog"
+          >
+            取消</button
+          ><button id="metadata-save" class="primary" type="submit">
+            保存更正 ↗
+          </button>
+        </footer>
+      </form>
+    </dialog>
+    <dialog
+      id="lyrics-dialog"
+      class="track-dialog lyrics-dialog"
+      aria-labelledby="lyrics-title"
+    >
+      <header class="dialog-header">
+        <div>
+          <p class="eyebrow">WORDS TO YOUR MUSIC</p>
+          <h2 id="lyrics-title">刮削歌词</h2>
+          <p id="lyrics-track" class="muted"></p>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          data-close="lyrics-dialog"
+          aria-label="关闭歌词"
+        >
+          ×
+        </button>
+      </header>
+      <p class="dialog-hint">
+        按歌曲、艺术家、专辑和时长匹配，优先获取同步歌词。已下载或缓存的歌词为本机快照，更新后需重新下载或清理播放缓存。
+      </p>
+      <label class="source-choice"
+        >歌词源<select id="lyrics-source" aria-label="选择歌词源"></select
+      ></label>
+      <p id="lyrics-status" class="lyrics-status" role="status"></p>
+      <pre id="lyrics-preview" class="lyrics-preview"></pre>
+      <label id="lyrics-replace-wrap" class="replace-option" hidden
+        ><input id="lyrics-replace" type="checkbox" />替换现有歌词（原始 LRC
+        与文件标签会保留）</label
+      >
+      <p id="lyrics-error" class="form-error" role="alert"></p>
+      <label id="lyrics-embed-replace-wrap" class="replace-option"
+        ><input
+          id="lyrics-embed-replace"
+          type="checkbox"
+        />覆盖标签中已有的歌词（仅在写入标签时生效）</label
+      >
+      <p id="lyrics-storage-hint" class="dialog-hint">
+        写入标签支持
+        MP3、FLAC、M4A、OGG、Opus，不重新编码音频。修改的是音乐库副本，原导入文件保持不变。
+      </p>
+      <footer class="dialog-footer">
+        <button type="button" class="outline-button" data-close="lyrics-dialog">
+          关闭</button
+        ><button
+          id="lyrics-embed"
+          type="button"
+          class="outline-button"
+          disabled
+        >
+          写入文件标签</button
+        ><button id="lyrics-scrape" type="button" class="primary">
+          获取并保存歌词 ↗
+        </button>
+      </footer>
+    </dialog>
+    <dialog
+      id="track-dialog"
+      class="track-dialog"
+      aria-labelledby="track-detail-title"
+    >
+      <header class="dialog-header">
+        <div>
+          <p class="eyebrow">EVERY RECORD HAS A STORY</p>
+          <h2 id="track-detail-title">歌曲详情</h2>
+        </div>
+        <button
+          class="icon-button"
+          data-close="track-dialog"
+          aria-label="关闭歌曲详情"
+        >
+          ×
+        </button>
+      </header>
+      <div class="track-detail-heading">
+        <div id="track-detail-art" class="track-detail-art"></div>
+        <div>
+          <h3 id="track-detail-name"></h3>
+          <p id="track-detail-artist" class="muted"></p>
+        </div>
+      </div>
+      <dl id="track-detail-fields" class="track-detail-fields"></dl>
+      <footer id="track-detail-actions" class="dialog-footer"></footer>
+    </dialog>
+    <dialog
+      id="plugin-dialog"
+      class="track-dialog"
+      aria-labelledby="plugin-title"
+    >
+      <header class="dialog-header">
+        <div>
+          <p class="eyebrow">A LITTLE MORE POSSIBILITY</p>
+          <h2 id="plugin-title">插件配置</h2>
+        </div>
+        <button
+          type="button"
+          id="plugin-close"
+          class="icon-button"
+          aria-label="关闭插件配置"
+        >
+          ×
+        </button>
+      </header>
+      <form id="plugin-form">
+        <p id="plugin-description" class="dialog-hint"></p>
+        <div id="plugin-fields" class="plugin-fields"></div>
+        <p id="plugin-help" class="dialog-hint"></p>
+        <p id="plugin-error" class="form-error" role="alert"></p>
+        <footer class="dialog-footer">
+          <button id="plugin-save" class="primary" type="submit">
+            保存配置
+          </button>
+        </footer>
+      </form>
+    </dialog>
+    <audio id="audio" preload="metadata"></audio>
+  </body>
+</html>

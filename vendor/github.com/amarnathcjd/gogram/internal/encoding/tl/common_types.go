@@ -1,0 +1,98 @@
+// Copyright (c) 2025 @AmarnathCJD
+
+package tl
+
+import (
+	"math/big"
+)
+
+// Int128 is alias-like type for fixed size of big int (128 bit value). It using only for tl objects encoding
+// cause native big.Int isn't supported for en(de)coding
+type Int128 struct {
+	*big.Int
+}
+
+func (i *Int128) Bytes() []byte {
+	if i == nil {
+		return nil
+	}
+	b, _ := BigIntBytes(i.Int, Int128Len*bitsInByte)
+	return b
+}
+
+// RandomInt128 creates int128 with random value
+func RandomInt128() *Int128 {
+	i := &Int128{Int: big.NewInt(0)}
+	i.SetBytes(RandomBytes(Int128Len))
+	return i
+}
+
+// MarshalTL implements tl marshaler from this package. Just don't use it by your hands, tl.Encoder does all
+// what you need
+func (i *Int128) MarshalTL(e *Encoder) error {
+	b, err := BigIntBytes(i.Int, Int128Len*bitsInByte)
+	if err != nil {
+		return err
+	}
+	e.PutRawBytes(b)
+	return nil
+}
+
+// UnmarshalTL implements tl unmarshaler from this package. Just don't use it by your hands, tl.Decoder does
+// all what you need
+func (i *Int128) UnmarshalTL(d *Decoder) error {
+	val := d.PopRawBytes(Int128Len)
+	if d.err != nil {
+		return d.err
+	}
+	i.Int = big.NewInt(0).SetBytes(val)
+	return nil
+}
+
+// Int256 is alias-like type for fixed size of big int (256 bit value). It using only for tl objects encoding
+// cause native big.Int isn't supported for en(de)coding
+type Int256 struct {
+	*big.Int
+}
+
+func (i *Int256) Bytes() []byte {
+	if i == nil {
+		return nil
+	}
+	b, _ := BigIntBytes(i.Int, Int256Len*bitsInByte)
+	return b
+}
+
+// RandomInt256 creates int256 with random value
+func RandomInt256() *Int256 {
+	i := &Int256{big.NewInt(0)}
+	i.SetBytes(RandomBytes(Int256Len))
+	return i
+}
+
+// NewInt256 creates int256 from the given big-endian bytes.
+func NewInt256(b []byte) *Int256 {
+	return &Int256{big.NewInt(0).SetBytes(b)}
+}
+
+// MarshalTL implements tl marshaler from this package. Just don't use it by your hands, tl.Encoder does all
+// what you need
+func (i *Int256) MarshalTL(e *Encoder) error {
+	b, err := BigIntBytes(i.Int, Int256Len*bitsInByte)
+	if err != nil {
+		return err
+	}
+	e.PutRawBytes(b)
+	return nil
+}
+
+// UnmarshalTL implements tl unmarshaler from this package. Just don't use it by your hands, tl.Decoder does
+// all what you need
+func (i *Int256) UnmarshalTL(d *Decoder) error {
+	val := d.PopRawBytes(Int256Len)
+	if d.err != nil {
+		return d.err
+	}
+	i.Int = big.NewInt(0).SetBytes(val)
+	return nil
+}

@@ -1,0 +1,1384 @@
+// Copyright (c) 2025 @AmarnathCJD
+
+package telegram
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
+	"errors"
+)
+
+// GetChatPhotos returns the profile photos of a chat
+//
+//	Params:
+//	 - chatID: The ID of the chat
+//	 - limit: The maximum number of photos to be returned
+func (c *Client) GetChatPhotos(chatID any, limit ...int32) ([]Photo, error) {
+	l := getVariadic(limit, 1)
+	messages, err := c.GetMessages(chatID, &SearchOption{
+		Limit:  l,
+		Filter: &InputMessagesFilterChatPhotos{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var photos []Photo
+	for _, message := range messages {
+		if message.Action != nil {
+			switch action := message.Action.(type) {
+			case *MessageActionChatEditPhoto:
+				photos = append(photos, action.Photo)
+			case *MessageActionChatDeletePhoto:
+			}
+		}
+	}
+	return photos, nil
+}
+
+// GetChatPhoto returns the current chat photo
+//
+//	Params:
+//	 - chatID: chat id
+func (c *Client) GetChatPhoto(chatID any) (Photo, error) {
+	return c.getChatPhoto(chatID, c)
+}
+
+type chatPhotoRequests interface {
+	ChannelsGetFullChannel(InputChannel) (*MessagesChatFull, error)
+	MessagesGetFullChat(int64) (*MessagesChatFull, error)
+	UsersGetFullUser(InputUser) (*UsersUserFull, error)
+}
+
+func (c *Client) getChatPhoto(chatID any, rpc chatPhotoRequests) (Photo, error) {
+	peer, err := c.ResolvePeer(chatID)
+	if err != nil {
+		return nil, err
+	}
+	var full *MessagesChatFull
+	var photo Photo
+	switch p := peer.(type) {
+	case *InputPeerChannel, *InputPeerChannelFromMessage:
+		channel, err := c.GetSendableChannel(peer)
+		if err != nil {
+			return nil, err
+		}
+		full, err = rpc.ChannelsGetFullChannel(channel)
+		if err != nil {
+			return nil, err
+		}
+		if full == nil {
+			return nil, errors.New("missing full channel info")
+		}
+	case *InputPeerChat:
+		full, err = rpc.MessagesGetFullChat(p.ChatID)
+		if err != nil {
+			return nil, err
+		}
+		if full == nil {
+			return nil, errors.New("missing full chat info")
+		}
+	case *InputPeerUser, *InputPeerUserFromMessage, *InputPeerSelf:
+		var user InputUser = &InputUserSelf{}
+		if _, self := p.(*InputPeerSelf); !self {
+			user, err = c.GetSendableUser(peer)
+			if err != nil {
+				return nil, err
+			}
+		}
+		result, err := rpc.UsersGetFullUser(user)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil || result.FullUser == nil {
+			return nil, errors.New("missing full user info")
+		}
+		c.Cache.UpdatePeersToCache(result.Users, result.Chats)
+		photo = result.FullUser.ProfilePhoto
+		if !isNilSource(result.FullUser.PersonalPhoto) {
+			photo = result.FullUser.PersonalPhoto
+		}
+	default:
+		return nil, fmt.Errorf("unsupported chat photo peer: %T", peer)
+	}
+	if full != nil {
+		c.Cache.UpdatePeersToCache(full.Users, full.Chats)
+		switch chat := full.FullChat.(type) {
+		case *ChannelFull:
+			if chat == nil {
+				return nil, errors.New("missing full channel info")
+			}
+			photo = chat.ChatPhoto
+		case *ChatFullObj:
+			if chat == nil {
+				return nil, errors.New("missing full chat info")
+			}
+			photo = chat.ChatPhoto
+		default:
+			return nil, fmt.Errorf("unexpected full chat: %T", full.FullChat)
+		}
+	}
+	if isNilSource(photo) {
+		return &PhotoEmpty{}, nil
+	}
+	return photo, nil
+}
+
+// JoinChannel joins a channel or chat by its username or id
+//
+//	Params:
+//	- Channel: the username or id of the channel or chat
+func (c *Client) JoinChannel(channel any) (*Channel, error) {
+	switch p := channel.(type) {
+	case string:
+		p = strings.TrimSpace(p)
+		if TgJoinRe.MatchString(p) {
+			match := TgJoinRe.FindStringSubmatch(p)[1]
+			result, err := c.MessagesImportChatInvite(match)
+			if err != nil {
+				if !MatchError(err, "USER_ALREADY_PARTICIPANT") {
+					return nil, err
+				}
+				resp, errJoin := c.MessagesCheckChatInvite(match)
+				if errJoin != nil {
+					return nil, errJoin
+				}
+				if already, ok := resp.(*ChatInviteAlready); ok {
+					c.Cache.UpdatePeersToCache(nil, []Chat{already.Chat})
+					if chat, ok := already.Chat.(*Channel); ok {
+						return chat, nil
+					}
+				}
+				return nil, err
+			}
+
+			if res, ok := result.(*MessagesChatInviteJoinResultOk); ok {
+				if updates, ok := res.Updates.(*UpdatesObj); ok {
+					c.Cache.UpdatePeersToCache(updates.Users, updates.Chats)
+					for _, chat := range updates.Chats {
+						if ch, ok := chat.(*Channel); ok {
+							return ch, nil
+						}
+					}
+				}
+			} else if _, ok := result.(*MessagesChatInviteJoinResultWebView); ok {
+				return nil, errors.New("join via webview is not supported")
+			}
+			return nil, nil
+		}
+		if UsernameRe.MatchString(p) {
+			return c.joinChannelByPeer(UsernameRe.FindStringSubmatch(p)[1])
+		}
+		return nil, errors.New("invalid channel or chat")
+	case *InputPeerChannel, *InputPeerChat, int, int32, int64:
+		return c.joinChannelByPeer(p)
+	case *ChatInviteExported:
+		return c.JoinChannel(p.Link)
+	default:
+		return c.joinChannelByPeer(channel)
+	}
+}
+
+func (c *Client) joinChannelByPeer(channel any) (*Channel, error) {
+	channel, err := c.ResolvePeer(channel)
+	if err != nil {
+		return nil, err
+	}
+	if chat, ok := channel.(*InputPeerChannel); ok {
+		result, err := c.ChannelsJoinChannel(&InputChannelObj{ChannelID: chat.ChannelID, AccessHash: chat.AccessHash})
+		if err != nil {
+			if !MatchError(err, "USER_ALREADY_PARTICIPANT") {
+				return nil, err
+			}
+
+			channel, err := c.ChannelsGetChannels([]InputChannel{&InputChannelObj{ChannelID: chat.ChannelID, AccessHash: chat.AccessHash}})
+			if err != nil {
+				return nil, err
+			}
+
+			switch ch := channel.(type) {
+			case *MessagesChatsObj:
+				c.Cache.UpdatePeersToCache([]User{}, ch.Chats)
+				if len(ch.Chats) > 0 {
+					if ch, ok := ch.Chats[0].(*Channel); ok {
+						return ch, nil
+					}
+				}
+			case *MessagesChatsSlice:
+				c.Cache.UpdatePeersToCache([]User{}, ch.Chats)
+				if len(ch.Chats) > 0 {
+					if ch, ok := ch.Chats[0].(*Channel); ok {
+						return ch, nil
+					}
+				}
+			}
+		}
+
+		switch res := result.(type) {
+		case *MessagesChatInviteJoinResultOk:
+			if updates, ok := res.Updates.(*UpdatesObj); ok {
+				c.Cache.UpdatePeersToCache(updates.Users, updates.Chats)
+				for _, chat := range updates.Chats {
+					if ch, ok := chat.(*Channel); ok {
+						return ch, nil
+					}
+				}
+			}
+		case *MessagesChatInviteJoinResultWebView:
+			return nil, errors.New("join via webview is not supported")
+		}
+		return c.GetChannel(chat.ChannelID)
+	} else if chat, ok := channel.(*InputPeerChat); ok {
+		_, err = c.MessagesAddChatUser(chat.ChatID, &InputUserEmpty{}, 0)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, fmt.Errorf("peer is not a channel or chat, but %T", channel)
+	}
+	return nil, nil
+}
+
+// LeaveChannel leaves a channel or chat
+//
+//	Params:
+//	 - Channel: Channel or chat to leave
+//	 - Revoke: If true, the channel will be deleted
+func (c *Client) LeaveChannel(Channel any, Revoke ...bool) error {
+	revokeChat := getVariadic(Revoke, false)
+	channel, err := c.ResolvePeer(Channel)
+	if err != nil {
+		return err
+	}
+	if chat, ok := channel.(*InputPeerChannel); ok {
+		_, err = c.ChannelsLeaveChannel(&InputChannelObj{ChannelID: chat.ChannelID, AccessHash: chat.AccessHash})
+		if err != nil {
+			return err
+		}
+	} else if chat, ok := channel.(*InputPeerChat); ok {
+		_, err = c.MessagesDeleteChatUser(revokeChat, chat.ChatID, &InputUserSelf{})
+		if err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("peer is not a channel or chat, but %T", channel)
+	}
+	return nil
+}
+
+const (
+	Admin      = "admin"
+	Creator    = "creator"
+	Member     = "member"
+	Restricted = "restricted"
+	Left       = "left"
+	Kicked     = "kicked"
+)
+
+type Participant struct {
+	User        *UserObj           `json:"user,omitempty"`
+	Participant ChannelParticipant `json:"participant,omitempty"`
+	Status      string             `json:"status,omitempty"`
+	Rights      *ChatAdminRights   `json:"rights,omitempty"`
+	Rank        string             `json:"rank,omitempty"`
+}
+
+func (c *Client) processParticipant(p ChannelParticipant) (*Participant, error) {
+	var (
+		status string           = Member
+		rights *ChatAdminRights = &ChatAdminRights{}
+		rank   string           = ""
+		userID int64            = 0
+	)
+	switch pt := p.(type) {
+	case *ChannelParticipantCreator:
+		status, rights, rank, userID = Creator, pt.AdminRights, pt.Rank, pt.UserID
+	case *ChannelParticipantAdmin:
+		status, rights, rank, userID = Admin, pt.AdminRights, pt.Rank, pt.UserID
+	case *ChannelParticipantObj:
+		userID = pt.UserID
+	case *ChannelParticipantSelf:
+		userID = pt.UserID
+	case *ChannelParticipantBanned:
+		status = Restricted
+		userID = c.GetPeerID(pt.Peer)
+	case *ChannelParticipantLeft:
+		status = Left
+		userID = c.GetPeerID(pt.Peer)
+	}
+	user, err := c.GetUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	return &Participant{
+		User:        user,
+		Participant: p,
+		Status:      status,
+		Rights:      rights,
+		Rank:        rank,
+	}, nil
+}
+
+// GetChatMember returns the members of a chat
+//
+//	Params:
+//	 - chatID: The ID of the chat
+//	 - userID: The ID of the user
+func (c *Client) GetChatMember(chatID, userID any) (*Participant, error) {
+	channel, err := c.ResolvePeer(chatID)
+	if err != nil {
+		return nil, err
+	}
+	user, err := c.ResolvePeer(userID)
+	if err != nil {
+		return nil, err
+	}
+	chat, ok := channel.(*InputPeerChannel)
+	if !ok {
+		return nil, fmt.Errorf("peer is not a channel, but %T", channel)
+	}
+	participant, err := c.ChannelsGetParticipant(&InputChannelObj{ChannelID: chat.ChannelID, AccessHash: chat.AccessHash}, user)
+	if err != nil {
+		return nil, err
+	}
+	c.Cache.UpdatePeersToCache(participant.Users, participant.Chats)
+	return c.processParticipant(participant.Participant)
+}
+
+type ParticipantOptions struct {
+	Ctx              context.Context           `json:"-"` // Cancel this context when ending an iterator early.
+	Query            string                    `json:"query,omitempty"`
+	Filter           ChannelParticipantsFilter `json:"filter,omitempty"`
+	Offset           int32                     `json:"offset,omitempty"`
+	Limit            int32                     `json:"limit,omitempty"`
+	SleepThresholdMs int32                     `json:"sleep_threshold_ms,omitempty"`
+	ErrorCallback    IterErrorCallback         `json:"-"` // callback for handling errors with progress info
+}
+
+// GetChatMembers returns the members of a chat
+//
+//	Params:
+//	 - chatID: The ID of the chat
+//	 - filter: The filter to use
+//	 - offset: The offset to use
+//	 - limit: The limit to use
+func (c *Client) GetChatMembers(chatID any, Opts ...*ParticipantOptions) ([]*Participant, int32, error) {
+	channel, err := c.ResolvePeer(chatID)
+	if err != nil {
+		return nil, 0, err
+	}
+	chat, ok := channel.(*InputPeerChannel)
+	if !ok {
+		return nil, 0, fmt.Errorf("peer is not a channel, but %T", channel)
+	}
+	opts := *getVariadic(Opts, &ParticipantOptions{Filter: &ChannelParticipantsSearch{}, Limit: 1})
+	if opts.Query != "" {
+		opts.Filter = &ChannelParticipantsSearch{Q: opts.Query}
+	} else if opts.Filter == nil {
+		opts.Filter = &ChannelParticipantsSearch{}
+	}
+
+	var fetched int32 = 0
+	var participantsList []*Participant
+	var reqLimit, reqOffset int32 = 200, opts.Offset
+	var totalCount int32
+
+	for {
+		reqLimit = 200
+		if opts.Limit > 0 {
+			reqLimit = min(opts.Limit-int32(fetched), 200)
+		}
+
+		participants, err := c.MakeRequest(rootCtx(opts.Ctx), &ChannelsGetParticipantsParams{Channel: &InputChannelObj{ChannelID: chat.ChannelID, AccessHash: chat.AccessHash}, Filter: opts.Filter, Offset: reqOffset, Limit: reqLimit})
+		if err != nil {
+			return nil, 0, err
+		}
+		cParts, ok := participants.(*ChannelsChannelParticipantsObj)
+		if !ok || cParts == nil {
+			return nil, 0, errors.New("could not get participants")
+		}
+		c.Cache.UpdatePeersToCache(cParts.Users, cParts.Chats)
+		for _, p := range cParts.Participants {
+			part, err := c.processParticipant(p)
+			if err != nil {
+				return nil, 0, err
+			}
+			participantsList = append(participantsList, part)
+			fetched++
+			if opts.Limit > 0 && fetched >= opts.Limit {
+				break
+			}
+		}
+
+		if len(cParts.Participants) < int(reqLimit) || (opts.Limit > 0 && fetched >= opts.Limit) {
+			totalCount = cParts.Count
+			break
+		}
+
+		reqOffset += int32(len(cParts.Participants))
+
+		if err := sleepContext(rootCtx(opts.Ctx), time.Duration(opts.SleepThresholdMs)*time.Millisecond); err != nil {
+			return nil, 0, err
+		}
+	}
+	return participantsList, totalCount, nil
+}
+
+// GetChatMembersCount returns the total participant count for the given channel or group
+func (c *Client) GetChatMembersCount(chatID any) (int32, error) {
+	peer, err := c.ResolvePeer(chatID)
+	if err != nil {
+		return 0, err
+	}
+	chat, ok := peer.(*InputPeerChannel)
+	if !ok {
+		return 0, fmt.Errorf("peer is not a channel, but %T", peer)
+	}
+	resp, err := c.MakeRequest(context.Background(), &ChannelsGetParticipantsParams{
+		Channel: &InputChannelObj{ChannelID: chat.ChannelID, AccessHash: chat.AccessHash},
+		Filter:  &ChannelParticipantsSearch{},
+		Limit:   0,
+	})
+	if err != nil {
+		return 0, err
+	}
+	switch r := resp.(type) {
+	case *ChannelsChannelParticipantsObj:
+		return r.Count, nil
+	default:
+		return 0, fmt.Errorf("unexpected response: %T", resp)
+	}
+}
+
+// IterChatMembers emits members until exhausted, canceled, or disconnected.
+// Set ParticipantOptions.Ctx and cancel it if the consumer stops reading early.
+func (c *Client) IterChatMembers(chatID any, Opts ...*ParticipantOptions) (<-chan *Participant, <-chan error) {
+	ch := make(chan *Participant)
+	errCh := make(chan error, 1)
+	opts := *getVariadic(Opts, &ParticipantOptions{Limit: 1, SleepThresholdMs: 20, Filter: &ChannelParticipantsSearch{}})
+	ctx := rootCtx(opts.Ctx)
+	if err := ctx.Err(); err != nil {
+		errCh <- err
+		close(ch)
+		close(errCh)
+		return ch, errCh
+	}
+	peer, err := c.ResolvePeer(chatID)
+	if err != nil {
+		errCh <- err
+		close(ch)
+		close(errCh)
+		return ch, errCh
+	}
+	chat, ok := peer.(*InputPeerChannel)
+	if !ok {
+		errCh <- fmt.Errorf("peer is not a channel, but %T", peer)
+		close(ch)
+		close(errCh)
+		return ch, errCh
+	}
+	if opts.Query != "" {
+		opts.Filter = &ChannelParticipantsSearch{Q: opts.Query}
+	} else if opts.Filter == nil {
+		opts.Filter = &ChannelParticipantsSearch{}
+	}
+	c.backgroundMu.Lock()
+	stopped := c.stopCh
+	c.backgroundMu.Unlock()
+	go func() {
+		defer close(ch)
+		defer close(errCh)
+		wait := func(delay time.Duration) error {
+			timer := time.NewTimer(max(delay, 0))
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-stopped:
+				return context.Canceled
+			case <-timer.C:
+				return nil
+			}
+		}
+		fetched := int32(0)
+		req := &ChannelsGetParticipantsParams{Channel: &InputChannelObj{ChannelID: chat.ChannelID, AccessHash: chat.AccessHash}, Filter: opts.Filter, Offset: opts.Offset}
+		for {
+			select {
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			case <-stopped:
+				errCh <- context.Canceled
+				return
+			default:
+			}
+			req.Limit = 200
+			if opts.Limit > 0 {
+				req.Limit = min(req.Limit, opts.Limit-fetched)
+			}
+			response, err := c.MakeRequest(ctx, req)
+			if err != nil {
+				if ctx.Err() != nil {
+					errCh <- ctx.Err()
+					return
+				}
+				if MatchError(err, "FLOOD_WAIT_") || MatchError(err, "FLOOD_PREMIUM_WAIT_") {
+					if err := wait(time.Duration(GetFloodWait(err)) * time.Second); err != nil {
+						errCh <- err
+						return
+					}
+					continue
+				}
+				if opts.ErrorCallback != nil && opts.ErrorCallback(err, &IterProgressInfo{Fetched: fetched, Limit: opts.Limit, Offset: req.Offset}) {
+					continue
+				}
+				errCh <- err
+				return
+			}
+			batch, ok := response.(*ChannelsChannelParticipantsObj)
+			if !ok || batch == nil {
+				errCh <- fmt.Errorf("unexpected response: %T", response)
+				return
+			}
+			c.Cache.UpdatePeersToCache(batch.Users, batch.Chats)
+			for _, participant := range batch.Participants {
+				part, err := c.processParticipant(participant)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				select {
+				case ch <- part:
+					fetched++
+				case <-ctx.Done():
+					errCh <- ctx.Err()
+					return
+				case <-stopped:
+					errCh <- context.Canceled
+					return
+				}
+				if opts.Limit > 0 && fetched >= opts.Limit {
+					return
+				}
+			}
+			if len(batch.Participants) < int(req.Limit) {
+				return
+			}
+			req.Offset += int32(len(batch.Participants))
+			if err := wait(time.Duration(opts.SleepThresholdMs) * time.Millisecond); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+	return ch, errCh
+}
+
+type AdminOptions struct {
+	IsAdmin bool             `json:"is_admin,omitempty"`
+	Rights  *ChatAdminRights `json:"rights,omitempty"`
+	Rank    string           `json:"rank,omitempty"`
+}
+
+// EditAdmin edits the admin rights of a user in a chat.
+//
+// This function modifies the admin permissions of a user within a chat.
+//
+// Args:
+//   - PeerID: The ID of the chat.
+//   - UserID: The ID of the user whose admin rights are to be modified.
+//   - Opts: Optional arguments for setting the user's admin rights.
+//
+// Returns:
+//   - bool: True if the operation was successful, False otherwise.
+//   - error: An error if the operation fails.
+func (c *Client) EditAdmin(PeerID, UserID any, Opts ...*AdminOptions) (bool, error) {
+	opts := getVariadic(Opts, &AdminOptions{IsAdmin: true, Rights: &ChatAdminRights{}, Rank: "Admin"})
+	peer, err := c.ResolvePeer(PeerID)
+	if err != nil {
+		return false, err
+	}
+	u, err := c.ResolvePeer(UserID)
+	if err != nil {
+		return false, err
+	}
+	user, ok := u.(*InputPeerUser)
+	if !ok {
+		return false, fmt.Errorf("peer is not a user, but %T", u)
+	}
+	switch p := peer.(type) {
+	case *InputPeerChannel:
+		if opts.IsAdmin {
+			_, err := c.ChannelsEditAdmin(&InputChannelObj{ChannelID: p.ChannelID, AccessHash: p.AccessHash}, &InputUserObj{UserID: user.UserID, AccessHash: user.AccessHash}, opts.Rights, opts.Rank)
+			if err != nil {
+				return false, err
+			}
+		} else {
+			_, err := c.ChannelsEditAdmin(&InputChannelObj{ChannelID: p.ChannelID, AccessHash: p.AccessHash}, &InputUserObj{UserID: user.UserID, AccessHash: user.AccessHash}, &ChatAdminRights{}, "")
+			if err != nil {
+				return false, err
+			}
+		}
+	case *InputPeerChat:
+		_, err := c.MessagesEditChatAdmin(p.ChatID, &InputUserObj{UserID: user.UserID, AccessHash: user.AccessHash}, opts.IsAdmin)
+		if err != nil {
+			return false, err
+		}
+	default:
+		return false, fmt.Errorf("peer is not a chat or channel, but %T", peer)
+	}
+	return true, nil
+}
+
+type AdminBuilder struct {
+	client         *Client
+	chatID, userID any
+	isAdmin        bool
+	rights         *ChatAdminRights
+	rank           string
+}
+
+func (c *Client) EditAdminBuilder(chatID, userID any) *AdminBuilder {
+	return &AdminBuilder{client: c, chatID: chatID, userID: userID}
+}
+
+func (b *AdminBuilder) WithRights(rights *ChatAdminRights) *AdminBuilder {
+	b.rights = rights
+	return b
+}
+
+func (b *AdminBuilder) WithRank(rank string) *AdminBuilder {
+	b.rank = rank
+	return b
+}
+
+func (b *AdminBuilder) Promote() (bool, error) {
+	b.isAdmin = true
+	return b.client.EditAdmin(b.chatID, b.userID, &AdminOptions{IsAdmin: true, Rights: b.rights, Rank: b.rank})
+}
+
+func (b *AdminBuilder) Demote() (bool, error) {
+	b.isAdmin = false
+	return b.client.EditAdmin(b.chatID, b.userID, &AdminOptions{IsAdmin: false, Rights: &ChatAdminRights{}, Rank: ""})
+}
+
+func (b *AdminBuilder) Invoke() (bool, error) {
+	return b.client.EditAdmin(b.chatID, b.userID, &AdminOptions{Rights: b.rights, Rank: b.rank})
+}
+
+type BannedOptions struct {
+	Ban      bool              `json:"ban,omitempty"`
+	Unban    bool              `json:"unban,omitempty"`
+	Mute     bool              `json:"mute,omitempty"`
+	Unmute   bool              `json:"unmute,omitempty"`
+	Rights   *ChatBannedRights `json:"rights,omitempty"`
+	Revoke   bool              `json:"revoke,omitempty"`
+	TillDate int32             `json:"till_date,omitempty"`
+}
+
+// EditBanned modifies the ban status of a user in a chat or channel.
+//
+// This function can ban, unban, mute, or unmute a user in a chat or channel.
+//
+// Args:
+//   - PeerID: The ID of the chat or channel.
+//   - UserID: The ID of the user to be banned.
+//   - opts: Optional arguments for banning the user.
+//
+// Returns:
+//   - bool: True if the operation was successful, False otherwise.
+//   - error: An error if the operation fails.
+func (c *Client) EditBanned(PeerID, UserID any, opts ...*BannedOptions) (bool, error) {
+	o := getVariadic(opts, &BannedOptions{Ban: true, Rights: &ChatBannedRights{}})
+	if o.Rights == nil {
+		o.Rights = &ChatBannedRights{}
+	}
+
+	peer, err := c.ResolvePeer(PeerID)
+	if err != nil {
+		return false, err
+	}
+
+	u, err := c.ResolvePeer(UserID)
+	if err != nil {
+		return false, err
+	}
+
+	switch p := peer.(type) {
+	case *InputPeerChannel:
+		return handleChannelBan(c, p, u, o)
+	case *InputPeerChat:
+		return handleChatBan(c, p, u, o)
+	default:
+		return false, fmt.Errorf("peer is not a chat or channel, but %T", peer)
+	}
+}
+
+func handleChannelBan(c *Client, p *InputPeerChannel, u InputPeer, o *BannedOptions) (bool, error) {
+	o.Rights.ViewMessages = o.Ban
+	o.Rights.SendMessages = o.Mute
+	if o.TillDate != 0 {
+		o.Rights.UntilDate = o.TillDate
+	}
+
+	_, err := c.ChannelsEditBanned(&InputChannelObj{ChannelID: p.ChannelID, AccessHash: p.AccessHash}, u, o.Rights)
+	return err == nil, err
+}
+
+func handleChatBan(c *Client, p *InputPeerChat, u InputPeer, o *BannedOptions) (bool, error) {
+	if u, ok := u.(*InputPeerUser); ok {
+		if o.Ban || o.Unban || o.Mute || o.Unmute {
+			_, err := c.MessagesDeleteChatUser(o.Revoke, p.ChatID, &InputUserObj{UserID: u.UserID, AccessHash: u.AccessHash})
+			return err == nil, err
+		} else {
+			_, err := c.MessagesAddChatUser(p.ChatID, &InputUserObj{UserID: u.UserID, AccessHash: u.AccessHash}, 0)
+			return err == nil, err
+		}
+	}
+
+	return false, errors.New("user is not a valid InputPeerUser")
+}
+
+func (c *Client) KickParticipant(PeerID, UserID any) (bool, error) {
+	peer, err := c.ResolvePeer(PeerID)
+	if err != nil {
+		return false, err
+	}
+	u, err := c.ResolvePeer(UserID)
+	if err != nil {
+		return false, err
+	}
+	switch p := peer.(type) {
+	case *InputPeerChannel:
+		_, err := c.EditBanned(p, u, &BannedOptions{Ban: true})
+		if err != nil {
+			return false, err
+		}
+		_, err = c.EditBanned(p, u, &BannedOptions{Unban: true})
+		if err != nil {
+			return false, err
+		}
+	case *InputPeerChat:
+		user, ok := u.(*InputPeerUser)
+		if !ok {
+			return false, fmt.Errorf("peer is not a user, but %T", u)
+		}
+		_, err := c.MessagesDeleteChatUser(false, c.GetPeerID(p), &InputUserObj{UserID: user.UserID, AccessHash: user.AccessHash})
+		if err != nil {
+			return false, err
+		}
+	default:
+		return false, fmt.Errorf("peer is not a chat or channel, but %T", peer)
+	}
+	return true, nil
+}
+
+type BannedBuilder struct {
+	client            *Client
+	chatID, userID    any
+	ban, mute, revoke bool
+	rights            *ChatBannedRights
+	tillDate          int32
+}
+
+func (c *Client) EditBannedBuilder(chatID, userID any) *BannedBuilder {
+	return &BannedBuilder{client: c, chatID: chatID, userID: userID}
+}
+
+func (b *BannedBuilder) WithRights(rights *ChatBannedRights) *BannedBuilder {
+	b.rights = rights
+	return b
+}
+
+func (b *BannedBuilder) Ban(until ...int) (bool, error) {
+	b.ban = true
+	return b.client.EditBanned(b.chatID, b.userID, &BannedOptions{
+		Ban:    true,
+		Rights: b.rights,
+		Revoke: b.revoke,
+		TillDate: func() int32 {
+			if len(until) > 0 {
+				return int32(until[0])
+			}
+			return b.tillDate
+		}(),
+	})
+}
+
+func (b *BannedBuilder) Unban() (bool, error) {
+	b.ban = false
+	return b.client.EditBanned(b.chatID, b.userID, &BannedOptions{
+		Unban:  true,
+		Rights: b.rights,
+		Revoke: b.revoke,
+	})
+}
+func (b *BannedBuilder) Mute() (bool, error) {
+	b.mute = true
+	return b.client.EditBanned(b.chatID, b.userID, &BannedOptions{
+		Mute:     true,
+		Rights:   b.rights,
+		Revoke:   b.revoke,
+		TillDate: b.tillDate,
+	})
+}
+
+func (b *BannedBuilder) Unmute() (bool, error) {
+	b.mute = false
+	return b.client.EditBanned(b.chatID, b.userID, &BannedOptions{
+		Ban:    b.ban,
+		Mute:   b.mute,
+		Revoke: b.revoke,
+	})
+}
+
+func (b *BannedBuilder) Revoke() *BannedBuilder {
+	b.revoke = true
+	return b
+}
+
+func (b *BannedBuilder) TillDate(tillDate int32) *BannedBuilder {
+	b.tillDate = tillDate
+	return b
+}
+
+func (b *BannedBuilder) Invoke() (bool, error) {
+	return b.client.EditBanned(b.chatID, b.userID, &BannedOptions{
+		Revoke:   b.revoke,
+		Rights:   b.rights,
+		TillDate: b.tillDate,
+	})
+}
+
+type TitleOptions struct {
+	LastName string `json:"last_name,omitempty"`
+	About    string `json:"about,omitempty"`
+}
+
+// Edit the title of a chat, channel or self,
+// returns true if successful
+func (c *Client) EditTitle(PeerID any, Title string, Opts ...*TitleOptions) (bool, error) {
+	opts := getVariadic(Opts, &TitleOptions{})
+	peer, err := c.ResolvePeer(PeerID)
+	if err != nil {
+		return false, err
+	}
+	switch p := peer.(type) {
+	case *InputPeerChannel:
+		_, err := c.ChannelsEditTitle(&InputChannelObj{ChannelID: p.ChannelID, AccessHash: p.AccessHash}, Title)
+		if err != nil {
+			return false, err
+		}
+	case *InputPeerChat:
+		_, err := c.MessagesEditChatTitle(p.ChatID, Title)
+		if err != nil {
+			return false, err
+		}
+	case *InputPeerSelf:
+		_, err := c.AccountUpdateProfile(opts.LastName, Title, opts.About)
+		if err != nil {
+			return false, err
+		}
+	default:
+		return false, fmt.Errorf("peer is not a chat or channel or self, but %T", peer)
+	}
+	return true, nil
+}
+
+// GetStats returns the stats of the channel or message
+//
+//	Params:
+//	 - channelID: the channel ID
+//	 - messageID: the message ID
+func (c *Client) GetStats(channel any, messageID ...any) (*StatsBroadcastStats, *StatsMessageStats, error) {
+	peerID, err := c.GetSendableChannel(channel)
+	if err != nil {
+		return nil, nil, err
+	}
+	msgID := getVariadic[any](messageID, int32(0)).(int32)
+	if msgID > 0 {
+		resp, err := c.StatsGetMessageStats(true, peerID, msgID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, resp, nil
+	}
+	resp, err := c.StatsGetBroadcastStats(true, peerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, nil, nil
+}
+
+type InviteLinkOptions struct {
+	LegacyRevokePermanent bool   `json:"legacy_revoke_permanent,omitempty"`
+	Expire                int32  `json:"expire,omitempty"`
+	Limit                 int32  `json:"limit,omitempty"`
+	Title                 string `json:"title,omitempty"`
+	RequestNeeded         bool   `json:"request_needed,omitempty"`
+}
+
+// GetChatInviteLink returns the invite link of a chat
+//
+//	Params:
+//	 - peerID : The ID of the chat
+//	 - LegacyRevoke : If true, the link will be revoked
+//	 - Expire: The time in seconds after which the link will expire
+//	 - Limit: The maximum number of users that can join the chat using the link
+//	 - Title: The title of the link
+//	 - RequestNeeded: If true, join requests will be needed to join the chat
+func (c *Client) GetChatInviteLink(peerID any, LinkOpts ...*InviteLinkOptions) (ExportedChatInvite, error) {
+	LinkOptions := getVariadic(LinkOpts, &InviteLinkOptions{})
+	peer, err := c.ResolvePeer(peerID)
+	if err != nil {
+		return nil, err
+	}
+	link, err := c.MessagesExportChatInvite(&MessagesExportChatInviteParams{
+		Peer:                  peer,
+		LegacyRevokePermanent: LinkOptions.LegacyRevokePermanent,
+		RequestNeeded:         LinkOptions.RequestNeeded,
+		UsageLimit:            LinkOptions.Limit,
+		Title:                 LinkOptions.Title,
+		ExpireDate:            LinkOptions.Expire,
+	})
+	return link, err
+}
+
+type ChannelOptions struct {
+	About        string        `json:"about,omitempty"`
+	NotBroadcast bool          `json:"broadcast,omitempty"`
+	Megagroup    bool          `json:"megagroup,omitempty"`
+	Address      string        `json:"address,omitempty"`
+	ForImport    bool          `json:"for_import,omitempty"`
+	GeoPoint     InputGeoPoint `json:"geo_point,omitempty"`
+}
+
+func (c *Client) CreateChannel(title string, opts ...*ChannelOptions) (*Channel, error) {
+	opt := getVariadic(opts, &ChannelOptions{})
+	resp, err := c.ChannelsCreateChannel(&ChannelsCreateChannelParams{
+		Broadcast: !opt.NotBroadcast && !opt.Megagroup,
+		GeoPoint:  opt.GeoPoint,
+		About:     opt.About,
+		ForImport: opt.ForImport,
+		Address:   opt.Address,
+		Megagroup: opt.Megagroup,
+		Title:     title,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if updates, ok := resp.(*UpdatesObj); ok {
+		c.Cache.UpdatePeersToCache(updates.Users, updates.Chats)
+		for _, chat := range updates.Chats {
+			if ch, ok := chat.(*Channel); ok {
+				return ch, nil
+			}
+		}
+	}
+	return nil, errors.New("empty reply from server")
+}
+
+func (c *Client) DeleteChannel(channel any) (*Updates, error) {
+	peer, err := c.GetSendableChannel(channel)
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := c.ChannelsDeleteChannel(peer)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &u, nil
+}
+
+type JoinRequest struct {
+	User        *UserObj
+	Date        int32
+	ApprovedBy  int64
+	Requested   bool
+	About       string
+	ViaChatlist bool
+}
+
+func (c *Client) GetChatJoinRequests(channelID any, limit int, query ...string) ([]*JoinRequest, error) {
+	var currentOffsetUser InputUser = &InputUserEmpty{}
+	var currentOffsetDate int32 = 0
+	var fetched int = 0
+
+	if limit <= 0 {
+		limit = math.MaxInt32
+	}
+
+	peer, err := c.ResolvePeer(channelID)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []*JoinRequest
+	for fetched < limit {
+		batchLimit := min(limit-fetched, 100)
+		resp, err := c.MessagesGetChatInviteImporters(&MessagesGetChatInviteImportersParams{
+			Requested:  true,
+			Peer:       peer,
+			Q:          getVariadic(query, ""),
+			OffsetDate: currentOffsetDate,
+			OffsetUser: currentOffsetUser,
+			Limit:      int32(batchLimit),
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		if len(resp.Importers) == 0 {
+			break
+		}
+
+		userMap := make(map[int64]*UserObj)
+		for _, u := range resp.Users {
+			if user, ok := u.(*UserObj); ok {
+				userMap[user.ID] = user
+			}
+		}
+
+		for _, importer := range resp.Importers {
+			user := userMap[importer.UserID]
+			if user == nil {
+				user = &UserObj{ID: importer.UserID}
+			}
+			results = append(results, &JoinRequest{
+				User:        user,
+				Date:        importer.Date,
+				ApprovedBy:  importer.ApprovedBy,
+				Requested:   importer.Requested,
+				About:       importer.About,
+				ViaChatlist: importer.ViaChatlist,
+			})
+			fetched++
+		}
+
+		if len(resp.Users) > 0 {
+			if u, ok := resp.Users[len(resp.Users)-1].(*UserObj); ok {
+				currentOffsetUser = &InputUserObj{UserID: u.ID, AccessHash: u.AccessHash}
+			}
+		}
+		currentOffsetDate = resp.Importers[len(resp.Importers)-1].Date
+	}
+	return results, nil
+}
+
+// ApproveJoinRequest approves all pending join requests in a chat
+func (c *Client) ApproveAllJoinRequests(channel any, invite ...string) error {
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.MessagesHideAllChatJoinRequests(true, peer, getVariadic(invite, ""))
+	return err
+}
+
+// TransferChatOwnership transfers the ownership of a chat to another user
+func (c *Client) TransferChatOwnership(chatID any, userID any, password string) error {
+	peer, err := c.GetSendablePeer(chatID)
+	if err != nil {
+		return err
+	}
+
+	user, err := c.GetSendableUser(userID)
+	if err != nil {
+		return err
+	}
+
+	accountPassword, err := c.AccountGetPassword()
+	if err != nil {
+		return err
+	}
+
+	passwordSrp, err := GetInputCheckPassword(password, accountPassword)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.MessagesEditChatCreator(peer, user, passwordSrp)
+	return err
+}
+
+func (c *Client) GetLinkedChannel(channel any) (*Channel, error) {
+	peer, err := c.GetSendableChannel(channel)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.ChannelsGetFullChannel(peer)
+	if err != nil {
+		return nil, err
+	}
+	c.Cache.UpdatePeersToCache(resp.Users, resp.Chats)
+	if fullChat, ok := resp.FullChat.(*ChannelFull); ok {
+		if fullChat.LinkedChatID != 0 {
+			return c.GetChannel(fullChat.LinkedChatID)
+		}
+		return nil, errors.New("channel is not linked")
+	}
+	return nil, errors.New("could not get full channel info")
+}
+
+func (c *Client) ExportInvite(channel any) (ExportedChatInvite, error) {
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.MessagesExportChatInvite(&MessagesExportChatInviteParams{
+		Peer: peer,
+	})
+}
+
+func (c *Client) RevokeInvite(channel any, invite string) error {
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.MessagesEditExportedChatInvite(&MessagesEditExportedChatInviteParams{
+		Peer:    peer,
+		Link:    invite,
+		Revoked: true,
+	})
+	return err
+}
+
+type CreateTopicOptions struct {
+	IconColor   int32
+	IconEmojiID int64
+	SendAs      any
+}
+
+func (c *Client) EnableForum(channel any, tabs bool) error {
+	ch, err := c.GetSendableChannel(channel)
+	if err != nil {
+		return err
+	}
+	_, err = c.ChannelsToggleForum(ch, true, tabs)
+	return err
+}
+
+func (c *Client) DisableForum(channel any) error {
+	ch, err := c.GetSendableChannel(channel)
+	if err != nil {
+		return err
+	}
+	_, err = c.ChannelsToggleForum(ch, false, false)
+	return err
+}
+
+func (c *Client) CreateTopic(channel any, title string, opts ...*CreateTopicOptions) (int32, error) {
+	if title == "" {
+		return 0, errors.New("title is required")
+	}
+	opt := getVariadic(opts, &CreateTopicOptions{})
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return 0, err
+	}
+	params := &MessagesCreateForumTopicParams{
+		Peer:        peer,
+		Title:       title,
+		IconColor:   opt.IconColor,
+		IconEmojiID: opt.IconEmojiID,
+		RandomID:    GenerateRandomLong(),
+	}
+	if opt.SendAs != nil {
+		sa, err := c.ResolvePeer(opt.SendAs)
+		if err != nil {
+			return 0, fmt.Errorf("resolve send_as: %w", err)
+		}
+		params.SendAs = sa
+	}
+	upd, err := c.MessagesCreateForumTopic(params)
+	if err != nil {
+		return 0, err
+	}
+	return extractTopicID(upd), nil
+}
+
+func extractTopicID(upd Updates) int32 {
+	scan := func(updates []Update) int32 {
+		for _, u := range updates {
+			switch v := u.(type) {
+			case *UpdateNewChannelMessage:
+				if m, ok := v.Message.(*MessageService); ok {
+					if _, ok := m.Action.(*MessageActionTopicCreate); ok {
+						return m.ID
+					}
+				}
+			case *UpdateNewMessage:
+				if m, ok := v.Message.(*MessageService); ok {
+					if _, ok := m.Action.(*MessageActionTopicCreate); ok {
+						return m.ID
+					}
+				}
+			}
+		}
+		return 0
+	}
+	switch v := upd.(type) {
+	case *UpdatesObj:
+		return scan(v.Updates)
+	case *UpdateShort:
+		return scan([]Update{v.Update})
+	}
+	return 0
+}
+
+type EditTopicOptions struct {
+	Title       string
+	IconEmojiID int64
+	Closed      *bool
+	Hidden      *bool
+}
+
+func (c *Client) EditTopic(channel any, topicID int32, opts *EditTopicOptions) error {
+	if opts == nil {
+		return errors.New("opts required")
+	}
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return err
+	}
+	params := &MessagesEditForumTopicParams{
+		Peer:        peer,
+		TopicID:     topicID,
+		Title:       opts.Title,
+		IconEmojiID: opts.IconEmojiID,
+	}
+	if opts.Closed != nil {
+		params.Closed = *opts.Closed
+		params.ClosedSet = true
+	}
+	if opts.Hidden != nil {
+		params.Hidden = *opts.Hidden
+		params.HiddenSet = true
+	}
+	_, err = c.MessagesEditForumTopic(params)
+	return err
+}
+
+func (c *Client) RenameTopic(channel any, topicID int32, title string) error {
+	return c.EditTopic(channel, topicID, &EditTopicOptions{Title: title})
+}
+
+func (c *Client) CloseTopic(channel any, topicID int32) error {
+	closed := true
+	return c.EditTopic(channel, topicID, &EditTopicOptions{Closed: &closed})
+}
+
+func (c *Client) ReopenTopic(channel any, topicID int32) error {
+	open := false
+	return c.EditTopic(channel, topicID, &EditTopicOptions{Closed: &open})
+}
+
+func (c *Client) HideTopic(channel any, topicID int32) error {
+	hidden := true
+	return c.EditTopic(channel, topicID, &EditTopicOptions{Hidden: &hidden})
+}
+
+func (c *Client) UnhideTopic(channel any, topicID int32) error {
+	hidden := false
+	return c.EditTopic(channel, topicID, &EditTopicOptions{Hidden: &hidden})
+}
+
+func (c *Client) PinTopic(channel any, topicID int32) error {
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return err
+	}
+	_, err = c.MessagesUpdatePinnedForumTopic(peer, topicID, true)
+	return err
+}
+
+func (c *Client) UnpinTopic(channel any, topicID int32) error {
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return err
+	}
+	_, err = c.MessagesUpdatePinnedForumTopic(peer, topicID, false)
+	return err
+}
+
+func (c *Client) ReorderPinnedTopics(channel any, order []int32, force bool) error {
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return err
+	}
+	_, err = c.MessagesReorderPinnedForumTopics(force, peer, order)
+	return err
+}
+
+func (c *Client) DeleteTopic(channel any, topicID int32) error {
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return err
+	}
+	_, err = c.MessagesDeleteTopicHistory(peer, topicID)
+	return err
+}
+
+type ListTopicsOptions struct {
+	Query       string
+	Limit       int32
+	OffsetID    int32
+	OffsetDate  int32
+	OffsetTopic int32
+}
+
+func (c *Client) ListTopics(channel any, opts ...*ListTopicsOptions) ([]ForumTopic, error) {
+	opt := getVariadic(opts, &ListTopicsOptions{})
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return nil, err
+	}
+	if opt.Limit <= 0 {
+		opt.Limit = 100
+	}
+	resp, err := c.MessagesGetForumTopics(&MessagesGetForumTopicsParams{
+		Peer:        peer,
+		Q:           opt.Query,
+		OffsetDate:  opt.OffsetDate,
+		OffsetID:    opt.OffsetID,
+		OffsetTopic: opt.OffsetTopic,
+		Limit:       opt.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Topics, nil
+}
+
+func (c *Client) GetTopics(channel any, topicIDs ...int32) ([]ForumTopic, error) {
+	if len(topicIDs) == 0 {
+		return nil, errors.New("at least one topic id required")
+	}
+	peer, err := c.ResolvePeer(channel)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.MessagesGetForumTopicsByID(peer, topicIDs)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Topics, nil
+}
+
+func (c *Client) ViewForumAsMessages(channel any, asMessages bool) error {
+	ch, err := c.GetSendableChannel(channel)
+	if err != nil {
+		return err
+	}
+	_, err = c.ChannelsToggleViewForumAsMessages(ch, asMessages)
+	return err
+}

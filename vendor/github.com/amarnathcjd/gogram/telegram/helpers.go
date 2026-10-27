@@ -1,0 +1,1922 @@
+package telegram
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/big"
+	"math/rand/v2"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+
+	ige "github.com/amarnathcjd/gogram/internal/aes_ige"
+	"github.com/amarnathcjd/gogram/internal/encoding/tl"
+	"github.com/amarnathcjd/gogram/internal/session"
+	"github.com/amarnathcjd/gogram/internal/utils"
+	"github.com/amarnathcjd/gogram/telegram/e2e"
+)
+
+// NewInt256 creates a tl.Int256 from the given big-endian bytes.
+func NewInt256(b []byte) *tl.Int256 {
+	return tl.NewInt256(b)
+}
+
+func FileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func doesSessionFileExist(filePath string) bool {
+	_, ol := os.Stat(filePath)
+	return !os.IsNotExist(ol)
+}
+
+func ResolveDC(dc int, test, ipv6 bool) string {
+	return utils.GetDefaultHostIP(dc, test, ipv6)
+}
+
+func joinAbsWorkingDir(filename string) string {
+	if filename == "" {
+		filename = "session.dat"
+	}
+	if filepath.IsAbs(filename) {
+		return filename
+	}
+	workDir, err := os.Getwd()
+	if err != nil {
+		return filename
+	}
+	return filepath.Join(workDir, filename)
+}
+
+func PathIsWritable(path string) bool {
+	file, err := os.OpenFile(path, os.O_WRONLY, 0666)
+	if err != nil {
+		return false
+	}
+	file.Close()
+	return true
+}
+
+func GenRandInt() int64 {
+	return rand.Int64()
+}
+
+func (c *Client) ResolveMultiMedia(m any, attrs *MediaMetadata) ([]*InputSingleMedia, error) {
+	return c.getMultiMedia(m, attrs)
+}
+
+func (c *Client) getMultiMedia(m any, attrs *MediaMetadata) ([]*InputSingleMedia, error) {
+	value := reflect.ValueOf(m)
+	if !value.IsValid() || (value.Kind() == reflect.Pointer && value.IsNil()) {
+		return nil, fmt.Errorf("album contains nil media")
+	}
+	if attrs == nil {
+		attrs = &MediaMetadata{}
+	} else {
+		cloned := *attrs
+		attrs = &cloned
+	}
+	attrs.Inline = true
+
+	var media []*InputSingleMedia
+	var inputMedia []InputMedia
+
+	resolveSlice := func(items []any) error {
+		for _, it := range items {
+			value := reflect.ValueOf(it)
+			if !value.IsValid() || (value.Kind() == reflect.Pointer && value.IsNil()) {
+				return fmt.Errorf("album contains nil media")
+			}
+			mediaObj, err := c.getSendableMedia(it, attrs)
+			if err != nil {
+				return err
+			}
+			inputMedia = append(inputMedia, mediaObj)
+		}
+		return nil
+	}
+
+	switch m := m.(type) {
+	case *InputSingleMedia:
+		copy := *m
+		media = append(media, &copy)
+	case []*InputSingleMedia:
+		media = make([]*InputSingleMedia, len(m))
+		for i, item := range m {
+			if item != nil {
+				copy := *item
+				media[i] = &copy
+			}
+		}
+	case []NewMessage:
+		items := make([]any, 0, len(m))
+		for i := range m {
+			if md := m[i].Media(); md != nil {
+				items = append(items, md)
+			}
+		}
+		if err := resolveSlice(items); err != nil {
+			return nil, err
+		}
+	case []*NewMessage:
+		items := make([]any, 0, len(m))
+		for _, msg := range m {
+			if md := msg.Media(); md != nil {
+				items = append(items, md)
+			}
+		}
+		if err := resolveSlice(items); err != nil {
+			return nil, err
+		}
+	case []InputMedia:
+		items := make([]any, len(m))
+		for i, v := range m {
+			items[i] = v
+		}
+		if err := resolveSlice(items); err != nil {
+			return nil, err
+		}
+	case []InputFile:
+		items := make([]any, len(m))
+		for i, v := range m {
+			items[i] = v
+		}
+		if err := resolveSlice(items); err != nil {
+			return nil, err
+		}
+	case []MessageMedia:
+		items := make([]any, len(m))
+		for i, v := range m {
+			items[i] = v
+		}
+		if err := resolveSlice(items); err != nil {
+			return nil, err
+		}
+	case []Document:
+		items := make([]any, len(m))
+		for i, v := range m {
+			items[i] = v
+		}
+		if err := resolveSlice(items); err != nil {
+			return nil, err
+		}
+	case []Photo:
+		items := make([]any, len(m))
+		for i, v := range m {
+			items[i] = v
+		}
+		if err := resolveSlice(items); err != nil {
+			return nil, err
+		}
+	case []string:
+		signatures := make(map[string]int, len(m))
+		for _, item := range m {
+			if !IsURL(item) && !attrs.SkipHash {
+				signature, err := calculateSha256Hash(item)
+				if err != nil {
+					return nil, err
+				}
+				if sig, ok := signatures[signature]; ok {
+					inputMedia = append(inputMedia, inputMedia[sig])
+					continue
+				}
+				signatures[signature] = len(inputMedia)
+			}
+			mediaObj, err := c.getSendableMedia(item, attrs)
+			if err != nil {
+				return nil, err
+			}
+			inputMedia = append(inputMedia, mediaObj)
+		}
+	case [][]byte:
+		items := make([]any, len(m))
+		for i, v := range m {
+			items[i] = v
+		}
+		if err := resolveSlice(items); err != nil {
+			return nil, err
+		}
+	case string, InputFile, InputMedia, MessageMedia, []byte, Photo, Document:
+		mediaObj, err := c.getSendableMedia(m, attrs)
+		if err != nil {
+			return nil, err
+		}
+		inputMedia = append(inputMedia, mediaObj)
+	default:
+		return nil, fmt.Errorf("unsupported album type: %T", m)
+	}
+	for _, m := range inputMedia {
+		media = append(media, &InputSingleMedia{
+			Media:    m,
+			RandomID: GenRandInt(),
+		})
+	}
+	if len(media) == 0 {
+		return nil, fmt.Errorf("album contains no media")
+	}
+	for i, item := range media {
+		if item == nil || item.Media == nil {
+			return nil, fmt.Errorf("album item %d contains no media", i)
+		}
+		value := reflect.ValueOf(item.Media)
+		if value.Kind() == reflect.Pointer && value.IsNil() {
+			return nil, fmt.Errorf("album item %d contains nil media", i)
+		}
+	}
+	return media, nil
+}
+
+func calculateSha256Hash(localFile string) (string, error) {
+	file, err := os.Open(localFile)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	hash := sha256.New()
+	const maxSize = 50 * 1024 * 200
+
+	if stat.Size() > maxSize {
+		if _, err := io.CopyN(hash, file, maxSize); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%x", hash.Sum(nil)), nil
+	}
+
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+func processUpdates(updates Updates) []Message {
+	var messages []Message
+	for _, update := range UnpackContainer(updates) {
+		var message Message
+		switch u := update.(type) {
+		case *UpdateNewMessage:
+			message = u.Message
+		case *UpdateNewChannelMessage:
+			message = u.Message
+		case *UpdateNewScheduledMessage:
+			message = u.Message
+		case *UpdateEditMessage:
+			message = u.Message
+		case *UpdateEditChannelMessage:
+			message = u.Message
+		case *UpdateBotNewBusinessMessage:
+			message = u.Message
+		case *UpdateBotEditBusinessMessage:
+			message = u.Message
+		}
+		if msg, ok := message.(*MessageObj); ok && msg != nil {
+			copy := *msg
+			messages = append(messages, &copy)
+		}
+	}
+	return messages
+}
+
+func (c *Client) processUpdate(upd Updates) *MessageObj {
+	if upd == nil {
+		return nil
+	}
+	if c.Cache != nil {
+		switch u := upd.(type) {
+		case *UpdatesObj:
+			c.Cache.UpdatePeersToCache(u.Users, u.Chats)
+		case *UpdatesCombined:
+			c.Cache.UpdatePeersToCache(u.Users, u.Chats)
+		}
+	}
+	var mappedID int32
+	for _, update := range UnpackContainer(upd) {
+		if mapping, ok := update.(*UpdateMessageID); ok {
+			mappedID = mapping.ID
+		}
+	}
+	var message *MessageObj
+	for _, candidate := range processUpdates(upd) {
+		message = candidate.(*MessageObj)
+		if message.ID == mappedID {
+			break
+		}
+	}
+	if mappedID != 0 && (message == nil || message.ID != mappedID) {
+		return &MessageObj{ID: mappedID}
+	}
+	if message == nil {
+		return nil
+	}
+	// Short outgoing responses omit the sender or describe the destination.
+	switch upd.(type) {
+	case *UpdateShortSentMessage, *UpdateShortMessage:
+		if message.Out {
+			if me := c.Me(); me != nil {
+				message.FromID = &PeerUser{UserID: me.ID}
+			}
+		}
+	}
+	return message
+}
+
+func (c *Client) GetSendablePeer(PeerID any) (InputPeer, error) {
+	if v := reflect.ValueOf(PeerID); v.Kind() == reflect.Pointer && v.IsNil() {
+		return nil, fmt.Errorf("peer is a nil %T", PeerID)
+	}
+	switch p := PeerID.(type) {
+	case *PeerChat:
+		if p.ChatID == 0 {
+			return nil, fmt.Errorf("invalid chat peer: missing ID")
+		}
+	case *PeerChannel:
+		if p.ChannelID == 0 {
+			return nil, fmt.Errorf("invalid channel peer: missing ID")
+		}
+	}
+	peer, err := c.getSendablePeer(PeerID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch p := peer.(type) {
+	case nil:
+		return nil, fmt.Errorf("could not resolve peer %T", PeerID)
+	case *InputPeerUser:
+		if p == nil || p.UserID == 0 {
+			return nil, fmt.Errorf("invalid user peer: missing ID")
+		}
+	case *InputPeerChat:
+		if p == nil || p.ChatID == 0 {
+			return nil, fmt.Errorf("invalid chat peer: missing ID")
+		}
+	case *InputPeerChannel:
+		if p == nil || p.ChannelID == 0 {
+			return nil, fmt.Errorf("invalid channel peer: missing ID")
+		}
+	default:
+		if v := reflect.ValueOf(peer); v.Kind() == reflect.Pointer && v.IsNil() {
+			return nil, fmt.Errorf("could not resolve peer %T", PeerID)
+		}
+	}
+	return peer, nil
+}
+
+func (c *Client) getSendablePeer(PeerID any) (InputPeer, error) {
+PeerSwitch:
+	switch Peer := PeerID.(type) {
+	case nil:
+		return nil, fmt.Errorf("peer is nil, cannot send nil peer")
+	case *PeerUser:
+		if Peer == nil || Peer.UserID == 0 {
+			return nil, fmt.Errorf("invalid user peer: missing ID")
+		}
+		peerEntity, err := c.GetPeerUser(Peer.UserID)
+		if err != nil {
+			return nil, err
+		}
+		return &InputPeerUser{UserID: peerEntity.UserID, AccessHash: peerEntity.AccessHash}, nil
+	case *PeerChat:
+		return &InputPeerChat{ChatID: Peer.ChatID}, nil
+	case *PeerChannel:
+		peerEntity, err := c.GetPeerChannel(Peer.ChannelID)
+		if err != nil {
+			return nil, err
+		}
+		return &InputPeerChannel{ChannelID: peerEntity.ChannelID, AccessHash: peerEntity.AccessHash}, nil
+	case *InputPeerChat:
+		return Peer, nil
+	case *InputPeerChannel:
+		return Peer, nil
+	case *InputPeerUser:
+		if Peer == nil || Peer.UserID == 0 {
+			return nil, fmt.Errorf("invalid user peer: missing ID")
+		}
+		return Peer, nil
+	case *InputPeer:
+		if Peer == nil {
+			return nil, fmt.Errorf("peer is nil")
+		}
+		return c.GetSendablePeer(*Peer)
+	case *InputUserSelf:
+		return &InputPeerSelf{}, nil
+	case *InputPeerSelf:
+		return Peer, nil
+	case *InputPeerEmpty:
+		return Peer, nil
+	case *InputPeerUserFromMessage:
+		return Peer, nil
+	case *InputPeerChannelFromMessage:
+		return Peer, nil
+	case *InputUserObj:
+		if Peer == nil || Peer.UserID == 0 {
+			return nil, fmt.Errorf("invalid user peer: missing ID")
+		}
+		return &InputPeerUser{UserID: Peer.UserID, AccessHash: Peer.AccessHash}, nil
+	case *InputChannelObj:
+		return &InputPeerChannel{ChannelID: Peer.ChannelID, AccessHash: Peer.AccessHash}, nil
+	case *ChatObj:
+		return &InputPeerChat{ChatID: Peer.ID}, nil
+	case *Channel:
+		return &InputPeerChannel{ChannelID: Peer.ID, AccessHash: Peer.AccessHash}, nil
+	case *UserObj:
+		if Peer == nil || Peer.ID == 0 {
+			return nil, fmt.Errorf("invalid user peer: missing ID; use GetMe to check lookup errors")
+		}
+		return &InputPeerUser{UserID: Peer.ID, AccessHash: Peer.AccessHash}, nil
+	case int64, int32, int:
+		peerEntity, err := c.GetInputPeer(getAnyInt(PeerID))
+		if peerEntity == nil || err != nil {
+			return nil, err
+		}
+		return peerEntity, nil
+	case string:
+		if i, err := strconv.ParseInt(Peer, 10, 64); err == nil {
+			PeerID = i
+			goto PeerSwitch
+		}
+		if Peer == "me" || Peer == "self" {
+			return &InputPeerSelf{}, nil
+		}
+
+		if peerID, accessHash, isChannel, found := c.Cache.LookupUsername(Peer); found {
+			if accessHash == 0 {
+				c.Logger.WithFields(map[string]any{
+					"username": Peer,
+					"peer_id":  peerID,
+				}).Debug("username cache incomplete, refreshing from API")
+			} else {
+				if isChannel {
+					return &InputPeerChannel{ChannelID: peerID, AccessHash: accessHash}, nil
+				}
+				return &InputPeerUser{UserID: peerID, AccessHash: accessHash}, nil
+			}
+		}
+
+		peerEntity, err := c.ResolveUsername(Peer)
+		if err != nil {
+			return nil, err
+		}
+		switch peerEntity := peerEntity.(type) {
+		case *ChatObj:
+			return &InputPeerChat{ChatID: peerEntity.ID}, nil
+		case *Channel:
+			return &InputPeerChannel{ChannelID: peerEntity.ID, AccessHash: peerEntity.AccessHash}, nil
+		case *UserObj:
+			return &InputPeerUser{UserID: peerEntity.ID, AccessHash: peerEntity.AccessHash}, nil
+		case *ChannelForbidden:
+			return &InputPeerChannel{ChannelID: peerEntity.ID, AccessHash: peerEntity.AccessHash}, nil
+		case *ChatForbidden:
+			return &InputPeerChat{ChatID: peerEntity.ID}, nil
+		default:
+			return nil, fmt.Errorf("unknown peer type %T", peerEntity)
+		}
+	case *UserFull:
+		if peerEntity, err := c.GetPeerUser(Peer.ID); err == nil {
+			return &InputPeerUser{UserID: peerEntity.UserID, AccessHash: peerEntity.AccessHash}, nil
+		}
+		return nil, fmt.Errorf("failed to get sendable peer for UserFull, cannot find user in cache")
+	case *ChatFullObj:
+		return &InputPeerChat{ChatID: Peer.ID}, nil
+	case *ChannelFull:
+		if peerEntity, err := c.GetPeerChannel(Peer.ID); err == nil {
+			return &InputPeerChannel{ChannelID: peerEntity.ChannelID, AccessHash: peerEntity.AccessHash}, nil
+		}
+		return nil, fmt.Errorf("failed to get sendable peer for ChannelFull, cannot find channel in cache")
+	case *ChannelForbidden:
+		return &InputPeerChannel{ChannelID: Peer.ID, AccessHash: Peer.AccessHash}, nil
+	case *ChatForbidden:
+		return &InputPeerChat{ChatID: Peer.ID}, nil
+	case *InputUserFromMessage:
+		return &InputPeerUserFromMessage{Peer: Peer.Peer, MsgID: Peer.MsgID, UserID: Peer.UserID}, nil
+	case *InputChannelFromMessage:
+		return &InputPeerChannelFromMessage{Peer: Peer.Peer, MsgID: Peer.MsgID, ChannelID: Peer.ChannelID}, nil
+	default:
+		return nil, fmt.Errorf("failed to get sendable peer, unknown type %s", reflect.TypeOf(PeerID).String())
+	}
+}
+
+// ResolvePeer resolves a peer to a sendable peer, searches the cache if the peer is already resolved
+func (c *Client) ResolvePeer(peerToResolve any) (InputPeer, error) {
+	return c.GetSendablePeer(peerToResolve)
+}
+
+func (c *Client) GetSendableChannel(PeerID any) (InputChannel, error) {
+	rawPeer, err := c.ResolvePeer(PeerID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch rawPeer := rawPeer.(type) {
+	case *InputPeerChannel:
+		return &InputChannelObj{ChannelID: rawPeer.ChannelID, AccessHash: rawPeer.AccessHash}, nil
+	case *InputPeerChannelFromMessage:
+		return &InputChannelFromMessage{Peer: rawPeer.Peer, MsgID: rawPeer.MsgID, ChannelID: rawPeer.ChannelID}, nil
+	case *InputPeerChat, *InputPeerUser:
+		return nil, fmt.Errorf("given peer is not a channel, but %T", rawPeer)
+	default:
+		return nil, fmt.Errorf("failed to get sendable channel, unknown type %T", rawPeer)
+	}
+}
+
+func (c *Client) GetSendableUser(PeerID any) (InputUser, error) {
+	rawPeer, err := c.ResolvePeer(PeerID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch rawPeer := rawPeer.(type) {
+	case *InputPeerSelf:
+		return &InputUserSelf{}, nil
+	case *InputPeerUser:
+		return &InputUserObj{UserID: rawPeer.UserID, AccessHash: rawPeer.AccessHash}, nil
+	case *InputPeerUserFromMessage:
+		return &InputUserFromMessage{Peer: rawPeer.Peer, MsgID: rawPeer.MsgID, UserID: rawPeer.UserID}, nil
+	case *InputPeerChat, *InputPeerChannel:
+		return nil, fmt.Errorf("given peer is not a user, but %T", rawPeer)
+	default:
+		return nil, fmt.Errorf("failed to get sendable user, unknown type %T", rawPeer)
+	}
+}
+
+func (c *Client) GetPeerID(Peer any) int64 {
+	if Peer == nil {
+		return 0
+	}
+	switch Peer := Peer.(type) {
+	case *PeerChat:
+		return Peer.ChatID
+	case *PeerChannel:
+		return Peer.ChannelID
+	case *PeerUser:
+		return Peer.UserID
+	case *InputPeerChat:
+		return Peer.ChatID
+	case *InputPeerChannel:
+		return Peer.ChannelID
+	case *InputPeerUser:
+		return Peer.UserID
+	case *UserObj:
+		return Peer.ID
+	case *ChatObj:
+		return Peer.ID
+	case *Channel:
+		return Peer.ID
+	case *InputUserObj:
+		return Peer.UserID
+	case *InputChannelObj:
+		return Peer.ChannelID
+	case *InputUserFromMessage:
+		return Peer.UserID
+	case *InputChannelFromMessage:
+		return Peer.ChannelID
+	case int64, int32, int:
+		return getAnyInt(Peer)
+	case string:
+		peer, err := c.ResolvePeer(Peer)
+		if err != nil {
+			return 0
+		}
+		return c.GetPeerID(peer)
+	case *InputPeerUserFromMessage:
+		return Peer.UserID
+	case *InputPeerChannelFromMessage:
+		return Peer.ChannelID
+	case *UserFull:
+		return Peer.ID
+	case *ChatFullObj:
+		return Peer.ID
+	case *ChannelFull:
+		return Peer.ID
+	default:
+		return 0
+	}
+}
+
+func (c *Client) GetPeerType(Peer any) string {
+	switch Peer := Peer.(type) {
+	case *PeerUser, *InputPeerUser, *InputUserObj, *InputUserFromMessage:
+		return EntityUser
+	case *PeerChat, *InputPeerChat:
+		return EntityChat
+	case *PeerChannel, *InputPeerChannel, *InputChannelObj, *InputChannelFromMessage:
+		return EntityChannel
+	case int64, int32, int:
+		peerEntity, err := c.GetInputPeer(getAnyInt(Peer))
+		if peerEntity == nil || err != nil {
+			return EntityUnknown
+		}
+		return c.GetPeerType(peerEntity)
+	case string:
+		peerEntity, err := c.ResolvePeer(Peer)
+		if err != nil {
+			return EntityUnknown
+		}
+		return c.GetPeerType(peerEntity)
+	default:
+		return EntityUnknown
+	}
+}
+
+func (c *Client) IsSelf(Peer any) bool {
+	id := c.GetPeerID(Peer)
+	if id == 0 {
+		return false
+	}
+	me := c.Me()
+	return me != nil && id == me.ID
+}
+
+func (c *Client) PeerEquals(a, b any) bool {
+	return c.GetPeerID(a) == c.GetPeerID(b)
+}
+
+func getAnyInt(v any) int64 {
+	switch v := v.(type) {
+	case int64:
+		return v
+	case int32:
+		return int64(v)
+	case int:
+		return int64(v)
+	default:
+		return 0
+	}
+}
+
+func (c *Client) ResolveMedia(mediaFile any, attr *MediaMetadata) (InputMedia, error) {
+	return c.getSendableMedia(mediaFile, attr)
+}
+
+func (c *Client) GetSendableMedia(mediaFile any, attr *MediaMetadata) (InputMedia, error) {
+	return c.getSendableMedia(mediaFile, attr)
+}
+
+func (c *Client) getSendableMedia(mediaFile any, attributes *MediaMetadata) (InputMedia, error) {
+	attr := getValue(attributes, &MediaMetadata{})
+	ttl := attr.TTL
+	spoiler := attr.Spoiler
+	var thumbnail InputFile
+
+	switch thumb := attr.Thumb.(type) {
+	case InputFile, *InputFile:
+		thumbnail = getValueAny(thumb, &InputFileObj{}).(InputFile)
+	case nil:
+
+	default:
+		fi, err := c.UploadFile(thumb)
+		if err != nil {
+			return nil, err
+		}
+		thumbnail = fi
+	}
+
+mediaTypeSwitch:
+	switch media := mediaFile.(type) {
+	case string:
+		if IsURL(media) {
+			if _, isImage := MimeTypes.MIME(media); isImage && !attr.ForceDocument {
+				photoExt := &InputMediaPhotoExternal{URL: media, TtlSeconds: ttl, Spoiler: spoiler}
+				if attr.Inline {
+					return c.uploadToSelf(photoExt)
+				}
+
+				return photoExt, nil
+			}
+
+			documentExt := &InputMediaDocumentExternal{URL: media, TtlSeconds: ttl, Spoiler: spoiler, VideoCover: attr.VideoCover, VideoTimestamp: attr.VideoTimestamp}
+			if attr.Inline {
+				return c.uploadToSelf(documentExt)
+			}
+
+			return documentExt, nil
+		} else {
+			if _, err := os.Stat(media); err == nil {
+				uploadOpts := attr.Upload
+				if uploadOpts == nil {
+					uploadOpts = &UploadOptions{}
+				}
+
+				mediaFile, err = c.UploadFile(media, uploadOpts)
+				if err != nil {
+					return nil, err
+				}
+				attr.FileAbsPath = media
+
+				goto mediaTypeSwitch
+			} else {
+				return nil, err
+			}
+		}
+	case InputMedia:
+		return media, nil
+	case *InputMedia:
+		return *media, nil
+	case Document:
+		switch media := media.(type) {
+		case *DocumentObj:
+			return &InputMediaDocument{ID: &InputDocumentObj{ID: media.ID, AccessHash: media.AccessHash, FileReference: media.FileReference}, TtlSeconds: ttl, Spoiler: spoiler, VideoCover: attr.VideoCover, VideoTimestamp: attr.VideoTimestamp, Query: attr.Query}, nil
+		case *DocumentEmpty:
+			return &InputMediaDocument{ID: &InputDocumentEmpty{}, TtlSeconds: ttl, Spoiler: spoiler}, nil
+		}
+	case Photo:
+		switch media := media.(type) {
+		case *PhotoObj:
+			return &InputMediaPhoto{ID: &InputPhotoObj{ID: media.ID, AccessHash: media.AccessHash, FileReference: media.FileReference}, TtlSeconds: ttl, Spoiler: spoiler, LivePhoto: attr.LivePhoto, Video: attr.Video}, nil
+		case *PhotoEmpty:
+			return &InputMediaPhoto{ID: &InputPhotoEmpty{}, TtlSeconds: ttl, Spoiler: spoiler}, nil
+		}
+	case MessageMedia:
+		switch media := media.(type) {
+		case *MessageMediaPhoto:
+			photo, ok := media.Photo.(*PhotoObj)
+			if !ok {
+				return &InputMediaPhoto{ID: &InputPhotoEmpty{}, TtlSeconds: ttl, Spoiler: spoiler}, nil
+			}
+			return &InputMediaPhoto{ID: &InputPhotoObj{ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference}, TtlSeconds: ttl, Spoiler: spoiler, LivePhoto: attr.LivePhoto, Video: attr.Video}, nil
+		case *MessageMediaDocument:
+			doc, ok := media.Document.(*DocumentObj)
+			if !ok {
+				return &InputMediaDocument{ID: &InputDocumentEmpty{}, TtlSeconds: ttl, Spoiler: spoiler}, nil
+			}
+			return &InputMediaDocument{ID: &InputDocumentObj{ID: doc.ID, AccessHash: doc.AccessHash, FileReference: doc.FileReference}, TtlSeconds: ttl, Spoiler: spoiler, VideoCover: attr.VideoCover, VideoTimestamp: attr.VideoTimestamp, Query: attr.Query}, nil
+		case *MessageMediaGeo:
+			geo, ok := media.Geo.(*GeoPointObj)
+			if !ok {
+				return nil, fmt.Errorf("geo point is empty")
+			}
+			return &InputMediaGeoPoint{GeoPoint: &InputGeoPointObj{Lat: geo.Lat, Long: geo.Long}}, nil
+		case *MessageMediaGame:
+			return &InputMediaGame{ID: &InputGameID{ID: media.Game.ID, AccessHash: media.Game.AccessHash}}, nil
+		case *MessageMediaContact:
+			return &InputMediaContact{FirstName: media.FirstName, LastName: media.LastName, PhoneNumber: media.PhoneNumber, Vcard: media.Vcard}, nil
+		case *MessageMediaDice:
+			return &InputMediaDice{Emoticon: media.Emoticon}, nil
+		case *MessageMediaPoll:
+			return convertPoll(media), nil
+		case *MessageMediaVenue:
+			geo, ok := media.Geo.(*GeoPointObj)
+			if !ok {
+				return nil, fmt.Errorf("venue geo point is empty")
+			}
+			return &InputMediaVenue{GeoPoint: &InputGeoPointObj{Lat: geo.Lat, Long: geo.Long}, Title: media.Title, Address: media.Address, Provider: media.Provider, VenueID: media.VenueID, VenueType: media.VenueType}, nil
+		case *MessageMediaWebPage:
+			switch wp := media.Webpage.(type) {
+			case *WebPageObj:
+				return &InputMediaWebPage{URL: wp.URL, ForceLargeMedia: media.ForceLargeMedia, ForceSmallMedia: media.ForceSmallMedia}, nil
+			case *WebPageEmpty, *WebPageNotModified, *WebPagePending:
+				return &InputMediaWebPage{URL: "", ForceLargeMedia: media.ForceLargeMedia, ForceSmallMedia: media.ForceSmallMedia}, nil
+			}
+		case *MessageMediaToDo:
+			return &InputMediaTodo{Todo: media.Todo}, nil
+		case *MessageMediaStory:
+			inputPeer, err := c.ResolvePeer(media.Peer)
+			if err != nil {
+				return nil, err
+			}
+			return &InputMediaStory{Peer: inputPeer, ID: media.ID}, nil
+		case *MessageMediaPaidMedia:
+			var medias []InputMedia
+			for _, em := range media.ExtendedMedia {
+				obj, ok := em.(*MessageExtendedMediaObj)
+				if !ok {
+					continue
+				}
+				mediaObj, err := c.getSendableMedia(obj.Media, attr)
+				if err != nil {
+					return nil, err
+				}
+				medias = append(medias, mediaObj)
+			}
+			return &InputMediaPaidMedia{StarsAmount: media.StarsAmount, ExtendedMedia: medias}, nil
+		case *MessageMediaUnsupported:
+			return nil, fmt.Errorf("unsupported media type, maybe update the library to support it")
+		default:
+			return nil, fmt.Errorf("unknown media type: %s", reflect.TypeOf(media).String())
+		}
+	case InputFile, *InputFile:
+		var (
+			IsPhoto   bool
+			mimeType  string
+			fileName  string
+			mediaFile InputFile
+		)
+		switch media := media.(type) {
+		case *InputFileObj:
+			mimeType, IsPhoto = MimeTypes.MIME(getValue(attr.FileName, media.Name))
+			fileName = getValue(attr.FileName, media.Name)
+			mediaFile = media
+		case *InputFileBig:
+			mimeType, IsPhoto = MimeTypes.MIME(getValue(attr.FileName, media.Name))
+			fileName = getValue(attr.FileName, media.Name)
+			mediaFile = media
+		}
+
+		if attr.MimeType != "" {
+			mimeType = attr.MimeType
+		}
+
+		uploadedPhoto := &InputMediaUploadedPhoto{File: mediaFile, TtlSeconds: ttl, Spoiler: spoiler, LivePhoto: attr.LivePhoto, Video: attr.Video, Stickers: attr.Stickers}
+		if IsPhoto && !attr.ForceDocument {
+			if attr.Inline {
+				return c.uploadToSelf(uploadedPhoto)
+			}
+
+			return uploadedPhoto, nil
+		} else {
+			mediaAttributes := getValueSlice(attr.Attributes, []DocumentAttribute{&DocumentAttributeFilename{FileName: fileName}})
+			attributedFileName := ""
+			mediaAttributes, dur, err := GatherMediaMetadata(getValue(attr.FileAbsPath, fileName), mediaAttributes)
+			if err != nil {
+				c.Log.WithError(err).Debug("gathering media metadata")
+			}
+
+			for _, at := range mediaAttributes {
+				if fn, ok := at.(*DocumentAttributeFilename); ok {
+					attributedFileName = fn.FileName
+					break
+				}
+			}
+
+			if thumbnail == nil && !attr.DisableThumb && MimeTypes.IsStreamable(mimeType) {
+				thumbFile, err := c.gatherVideoThumb(getValue(attr.FileAbsPath, fileName), dur)
+				if err != nil {
+					c.Log.WithError(err).Debug("gathering video thumb")
+				} else {
+					thumbnail = thumbFile
+				}
+			}
+
+			if attributedFileName == "" && fileName != "" {
+				mediaAttributes = append(mediaAttributes, &DocumentAttributeFilename{FileName: fileName})
+			}
+
+			uploadedDoc := &InputMediaUploadedDocument{File: mediaFile, MimeType: mimeType, Attributes: mediaAttributes, Thumb: getValueAny(thumbnail, &InputFileObj{}).(InputFile), TtlSeconds: ttl, Spoiler: spoiler, ForceFile: attr.ForceDocument, NosoundVideo: attr.NoSoundVideo, VideoCover: attr.VideoCover, VideoTimestamp: attr.VideoTimestamp, Stickers: attr.Stickers}
+			if attr.Inline {
+				return c.uploadToSelf(uploadedDoc)
+			}
+
+			return uploadedDoc, nil
+		}
+	case []byte, *io.Reader, *bytes.Buffer, *os.File:
+		var uopts *UploadOptions
+		if attr.Upload != nil {
+			uopts = attr.Upload
+			if attr.FileName != "" && uopts.FileName == "" {
+				uopts.FileName = attr.FileName
+			}
+		} else {
+			uopts = &UploadOptions{}
+			if attr.FileName != "" {
+				uopts.FileName = attr.FileName
+			}
+		}
+		var err error
+		mediaFile, err = c.UploadFile(media, uopts)
+		if err != nil {
+			return nil, err
+		}
+		goto mediaTypeSwitch
+	case nil:
+		return nil, fmt.Errorf("media file is empty")
+	}
+	return nil, fmt.Errorf("unknown media type: %s", reflect.TypeOf(mediaFile).String())
+}
+
+func (c *Client) uploadToSelf(mediaFile InputMedia) (InputMedia, error) {
+	cacheKey := c.getMediaCacheKey(mediaFile)
+
+	if cacheKey != "" {
+		if cached, ok := c.Cache.GetCachedMedia(cacheKey); ok {
+			media, err := ResolveBotFileID(cached.FileID)
+			if err == nil {
+				switch m := media.(type) {
+				case *MessageMediaPhoto:
+					if photo, ok := m.Photo.(*PhotoObj); ok {
+						return &InputMediaPhoto{ID: &InputPhotoObj{
+							ID:            photo.ID,
+							AccessHash:    photo.AccessHash,
+							FileReference: photo.FileReference,
+						}}, nil
+					}
+				case *MessageMediaDocument:
+					if doc, ok := m.Document.(*DocumentObj); ok {
+						return &InputMediaDocument{ID: &InputDocumentObj{
+							ID:            doc.ID,
+							AccessHash:    doc.AccessHash,
+							FileReference: doc.FileReference,
+						}}, nil
+					}
+				}
+			}
+		}
+	}
+
+	upl, err := c.MessagesUploadMedia("", &InputPeerSelf{}, mediaFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var result InputMedia
+	var fileID string
+
+	switch upl := upl.(type) {
+	case *MessageMediaPhoto:
+		switch photo := upl.Photo.(type) {
+		case *PhotoObj:
+			result = &InputMediaPhoto{ID: &InputPhotoObj{ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference}}
+			fileID = PackBotFileID(photo)
+		case *PhotoEmpty:
+			return &InputMediaPhoto{ID: &InputPhotoEmpty{}}, nil
+		}
+	case *MessageMediaDocument:
+		switch doc := upl.Document.(type) {
+		case *DocumentObj:
+			result = &InputMediaDocument{ID: &InputDocumentObj{ID: doc.ID, AccessHash: doc.AccessHash, FileReference: doc.FileReference}}
+			fileID = PackBotFileID(doc)
+		case *DocumentEmpty:
+			return &InputMediaDocument{ID: &InputDocumentEmpty{}}, nil
+		}
+	}
+
+	if result == nil {
+		return nil, fmt.Errorf("unable to upload media to self, unknown media type %s", reflect.TypeOf(upl).String())
+	}
+
+	if cacheKey != "" && fileID != "" {
+		c.Cache.SetCachedMedia(cacheKey, &CachedMedia{FileID: fileID})
+	}
+
+	return result, nil
+}
+
+func (c *Client) getMediaCacheKey(media InputMedia) string {
+	switch m := media.(type) {
+	case *InputMediaPhotoExternal:
+		return "photo_url:" + m.URL
+	case *InputMediaDocumentExternal:
+		return "doc_url:" + m.URL
+	case *InputMediaUploadedPhoto:
+		switch file := m.File.(type) {
+		case *InputFileObj:
+			if file.Name == "" {
+				return ""
+			}
+			return fmt.Sprintf("photo_upload:%d:%s", file.ID, file.Name)
+		case *InputFileBig:
+			if file.Name == "" {
+				return ""
+			}
+			return fmt.Sprintf("photo_upload:%d:%s", file.ID, file.Name)
+		}
+	case *InputMediaUploadedDocument:
+		switch file := m.File.(type) {
+		case *InputFileObj:
+			if file.Name == "" {
+				return ""
+			}
+			return fmt.Sprintf("doc_upload:%d:%s", file.ID, file.Name)
+		case *InputFileBig:
+			if file.Name == "" {
+				return ""
+			}
+			return fmt.Sprintf("doc_upload:%d:%s", file.ID, file.Name)
+		}
+	}
+	return ""
+}
+
+func E2EAttrs(in []DocumentAttribute) []e2e.DocumentAttribute {
+	out := make([]e2e.DocumentAttribute, 0, len(in))
+	for _, a := range in {
+		switch v := a.(type) {
+		case *DocumentAttributeFilename:
+			out = append(out, &e2e.DocumentAttributeFilename{FileName: v.FileName})
+		case *DocumentAttributeImageSize:
+			out = append(out, &e2e.DocumentAttributeImageSize{W: v.W, H: v.H})
+		case *DocumentAttributeAnimated:
+			out = append(out, &e2e.DocumentAttributeAnimated{})
+		case *DocumentAttributeSticker:
+			var set e2e.InputStickerSet = &e2e.InputStickerSetEmpty{}
+			if s, ok := v.Stickerset.(*InputStickerSetShortName); ok {
+				set = &e2e.InputStickerSetShortName{ShortName: s.ShortName}
+			}
+			out = append(out, &e2e.DocumentAttributeSticker{Alt: v.Alt, Stickerset: set})
+		case *DocumentAttributeVideo:
+			out = append(out, &e2e.DocumentAttributeVideo{
+				RoundMessage: v.RoundMessage,
+				Duration:     int32(v.Duration),
+				W:            v.W,
+				H:            v.H,
+			})
+		case *DocumentAttributeAudio:
+			out = append(out, &e2e.DocumentAttributeAudio{
+				Voice:     v.Voice,
+				Duration:  v.Duration,
+				Title:     v.Title,
+				Performer: v.Performer,
+				Waveform:  v.Waveform,
+			})
+		}
+	}
+	return out
+}
+
+func convertPoll(poll *MessageMediaPoll) *InputMediaPoll {
+	newPoll := &InputMediaPoll{
+		Poll:             poll.Poll,
+		Solution:         poll.Results.Solution,
+		SolutionEntities: poll.Results.SolutionEntities,
+	}
+
+	var correctAnswers []int32
+	for _, answer := range poll.Results.Results {
+		if answer.Correct {
+			var option int32
+			for _, b := range answer.Option {
+				option = (option << 8) | int32(b)
+			}
+			correctAnswers = append(correctAnswers, option)
+		}
+	}
+
+	newPoll.CorrectAnswers = correctAnswers
+	return newPoll
+}
+
+func GatherMediaMetadata(path string, attrs []DocumentAttribute) ([]DocumentAttribute, int64, error) {
+	var dur float64
+
+	if !IsFfmpegInstalled() {
+		ext := strings.ToLower(filepath.Ext(path))
+
+		if MimeTypes.IsStreamableFile(path) {
+			var width, height int64
+
+			switch ext {
+			case ".mp4", ".m4v", ".mov":
+				if info, err := utils.ParseMP4(path); err == nil {
+					dur = float64(info.Duration) / 1000.0
+					width = int64(info.Width)
+					height = int64(info.Height)
+				}
+			case ".mkv", ".webm":
+				var info *utils.MKVInfo
+				var err error
+				if ext == ".webm" {
+					info, err = utils.ParseWebM(path)
+				} else {
+					info, err = utils.ParseMKV(path)
+				}
+				if err == nil {
+					dur = info.Duration
+					width = int64(info.Width)
+					height = int64(info.Height)
+				}
+			}
+
+			if dur > 0 || width > 0 || height > 0 {
+				for _, attr := range attrs {
+					if att, ok := attr.(*DocumentAttributeVideo); ok {
+						att.W = getValue(att.W, int32(width))
+						att.H = getValue(att.H, int32(height))
+						att.Duration = getValue(att.Duration, dur)
+						return attrs, int64(getValue(att.Duration, float64(dur))), nil
+					}
+				}
+
+				attrs = append(attrs, &DocumentAttributeVideo{
+					RoundMessage:      false,
+					SupportsStreaming: true,
+					W:                 int32(width),
+					H:                 int32(height),
+					Duration:          dur,
+				})
+			}
+		}
+
+		if MimeTypes.IsAudioFile(path) {
+			var performer, title string
+			var audioDur int64
+
+			switch ext {
+			case ".mp3":
+				if info, err := utils.ParseMP3(path); err == nil {
+					audioDur = info.Duration
+					title = strings.Replace(filepath.Base(path), ext, "", 1)
+					performer = "Unknown"
+				}
+			case ".m4a":
+				if info, err := utils.ParseM4A(path); err == nil {
+					audioDur = info.Duration
+					title = strings.Replace(filepath.Base(path), ext, "", 1)
+					performer = "Unknown"
+				}
+			case ".wav":
+				if info, err := utils.ParseWAV(path); err == nil {
+					audioDur = info.Duration
+					title = strings.Replace(filepath.Base(path), ext, "", 1)
+					performer = "Unknown"
+				}
+			case ".flac":
+				if info, err := utils.ParseFLAC(path); err == nil {
+					audioDur = info.Duration
+					title = strings.Replace(filepath.Base(path), ext, "", 1)
+					performer = "Unknown"
+				}
+			}
+
+			if audioDur > 0 {
+				dur = float64(audioDur) / 1000.0
+
+				for _, attr := range attrs {
+					if att, ok := attr.(*DocumentAttributeAudio); ok {
+						att.Performer = getValue(att.Performer, performer)
+						att.Title = getValue(att.Title, title)
+						att.Duration = getValue(att.Duration, int32(dur))
+						return attrs, int64(getValue(att.Duration, int32(dur))), nil
+					}
+				}
+
+				attrs = append(attrs, &DocumentAttributeAudio{
+					Voice:     false,
+					Performer: performer,
+					Title:     title,
+					Duration:  int32(dur),
+				})
+			}
+		}
+
+		return attrs, int64(dur), nil
+	}
+
+	if MimeTypes.IsStreamableFile(path) {
+		var (
+			width  int64
+			height int64
+		)
+
+		cmd := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration:stream=width:stream=height", "-of", "default=noprint_wrappers=1:nokey=1", path)
+		out, err := cmd.Output()
+
+		if err != nil {
+			return attrs, 0, fmt.Errorf("gathering video metadata: %w", err)
+		}
+
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if len(lines) > 0 {
+			dur, _ = strconv.ParseFloat(strings.TrimSpace(lines[len(lines)-1]), 64)
+		}
+
+		for i, line := range lines {
+			if i == len(lines)-1 {
+				break
+			}
+			line = strings.TrimSpace(line)
+			if w, err := strconv.ParseInt(line, 10, 32); err == nil {
+				if width == 0 {
+					width = w
+				} else if height == 0 {
+					height = w
+					break
+				}
+			}
+		}
+
+		for _, attr := range attrs {
+			if att, ok := attr.(*DocumentAttributeVideo); ok {
+				att.W = getValue(att.W, int32(width))
+				att.H = getValue(att.H, int32(height))
+				att.Duration = getValue(att.Duration, dur)
+				return attrs, int64(getValue(att.Duration, float64(dur))), nil
+			}
+		}
+
+		attrs = append(attrs, &DocumentAttributeVideo{
+			RoundMessage:      false,
+			SupportsStreaming: true,
+			W:                 int32(width),
+			H:                 int32(height),
+			Duration:          dur,
+		})
+	}
+
+	if filepath.Ext(path) == ".gif" {
+		attrs = append(attrs, &DocumentAttributeAnimated{})
+	}
+
+	if MimeTypes.IsAudioFile(path) {
+		var (
+			performer string
+			title     string
+		)
+
+		cmd := exec.Command("ffprobe", "-v", "error", "-show_entries", "format_tags=artist,title", "-of", "json", path)
+		out, err := cmd.Output()
+
+		cmd_duration := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path)
+		out_duration, err_duration := cmd_duration.Output()
+
+		if err == nil {
+			type ProbeMeta struct {
+				Format struct {
+					Tags struct {
+						Title  string `json:"title"`
+						Artist string `json:"artist"`
+					} `json:"tags"`
+				} `json:"format"`
+			}
+
+			var meta ProbeMeta
+			if err := json.Unmarshal(out, &meta); err == nil {
+				performer = meta.Format.Tags.Artist
+				title = meta.Format.Tags.Title
+			}
+
+			if performer == "" {
+				performer = "Unknown"
+			}
+
+			if title == "" {
+				title = strings.Replace(filepath.Base(path), filepath.Ext(path), "", 1)
+			}
+		}
+
+		if err_duration == nil {
+			dur, _ = strconv.ParseFloat(strings.TrimSpace(string(out_duration)), 64)
+		}
+
+		for _, attr := range attrs {
+			if att, ok := attr.(*DocumentAttributeAudio); ok {
+				att.Performer = getValue(att.Performer, performer)
+				att.Title = getValue(att.Title, title)
+				att.Duration = getValue(att.Duration, int32(dur))
+				if att.Voice {
+					wave, err := GenerateWaveformWithFFmpeg(path)
+					if err == nil {
+						att.Waveform = wave
+					}
+				}
+				return attrs, int64(getValue(att.Duration, int32(dur))), nil
+			}
+		}
+
+		attrs = append(attrs, &DocumentAttributeAudio{
+			Voice:     false,
+			Performer: performer,
+			Title:     title,
+			Duration:  int32(dur),
+		})
+	}
+
+	return attrs, int64(dur), nil
+}
+
+func GenerateWaveformWithFFmpeg(filename string) ([]byte, error) {
+	cmd := exec.Command("ffmpeg",
+		"-i", filename,
+		"-f", "s16le",
+		"-ac", "1",
+		"-ar", "16000",
+		"-",
+	)
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+
+	samples := make([]int16, out.Len()/2)
+	if err := binary.Read(&out, binary.LittleEndian, &samples); err != nil {
+		return nil, err
+	}
+
+	waveform := generateWaveformData(samples, 100)
+	return packWaveform(waveform), nil
+}
+
+func generateWaveformData(samples []int16, bars int) []byte {
+	if len(samples) == 0 || bars <= 0 {
+		return make([]byte, max(bars, 0))
+	}
+
+	samplesPerBar := max(len(samples)/bars, 1)
+	waveform := make([]byte, bars)
+
+	for i := range bars {
+		start := i * samplesPerBar
+		end := min(start+samplesPerBar, len(samples))
+
+		if start >= len(samples) {
+			break
+		}
+
+		maxAmplitude := int16(0)
+		for j := start; j < end; j++ {
+			abs := samples[j]
+			if abs < 0 {
+				abs = -abs
+			}
+			if abs > maxAmplitude {
+				maxAmplitude = abs
+			}
+		}
+
+		normalized := min(int(float64(maxAmplitude)/32768.0*31.0), 31)
+		waveform[i] = byte(normalized)
+	}
+
+	return waveform
+}
+
+func packWaveform(waveform []byte) []byte {
+	bitPos := 0
+	bytePos := 0
+	result := make([]byte, (len(waveform)*5+7)/8)
+
+	for _, val := range waveform {
+		val &= 0x1F
+
+		for bitsLeft := 5; bitsLeft > 0; {
+			bitsInByte := min(8-(bitPos%8), bitsLeft)
+
+			result[bytePos] |= byte((val >> (bitsLeft - bitsInByte)) << (8 - (bitPos % 8) - bitsInByte))
+
+			bitPos += bitsInByte
+			bitsLeft -= bitsInByte
+
+			if bitPos%8 == 0 {
+				bytePos++
+			}
+		}
+	}
+
+	return result
+}
+
+func (c *Client) gatherVideoThumb(path string, duration int64) (InputFile, error) {
+	if duration == 0 {
+		duration = 2
+	}
+
+	thumbPath := path + ".png"
+	defer os.Remove(thumbPath)
+
+	if MimeTypes.IsAudioFile(path) {
+		cmd := exec.Command("ffmpeg", "-i", path, "-vf", "scale=200:100:force_original_aspect_ratio=increase,thumbnail", "-frames:v", "1", thumbPath)
+		if _, err := cmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("gathering audio thumb: %w", err)
+		}
+		return c.UploadFile(thumbPath)
+	}
+
+	getPosition := func(duration int64) int64 {
+		if duration <= 10 {
+			return (duration / 2) + 1
+		}
+		limit := int(duration) / 2
+		if limit <= 0 {
+			limit = 1
+		}
+		return int64(rand.IntN(limit) + 1)
+	}
+
+	cmd := exec.Command("ffmpeg", "-ss", strconv.FormatInt(getPosition(duration), 10), "-i", path, "-vframes", "1", thumbPath)
+	if _, err := cmd.Output(); err != nil {
+		return nil, fmt.Errorf("gathering video thumb: %w", err)
+	}
+
+	return c.UploadFile(thumbPath)
+}
+
+// ResolveUsername resolves a username to a user or chat Peer
+func (c *Client) ResolveUsername(username string, ref ...string) (any, error) {
+	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	var referer = getVariadic(ref, "")
+
+	resp, err := c.ContactsResolveUsername(username, referer)
+	if err != nil {
+		return nil, fmt.Errorf("resolving username: %w", err)
+	}
+	c.Cache.UpdatePeersToCache(resp.Users, resp.Chats)
+	if len(resp.Users) != 0 {
+		switch User := resp.Users[0].(type) {
+		case *UserObj:
+			return User, nil
+		case *UserEmpty:
+			return User, nil
+		default:
+			return nil, fmt.Errorf("got wrong response: %s", reflect.TypeOf(resp).String())
+		}
+	} else if len(resp.Chats) != 0 {
+		switch Peer := resp.Chats[0].(type) {
+		case *ChatObj:
+			return Peer, nil
+		case *Channel:
+			return Peer, nil
+		case *ChannelForbidden:
+			return Peer, nil
+		case *ChatForbidden:
+			return Peer, nil
+		default:
+			return nil, fmt.Errorf("got wrong response: %s", reflect.TypeOf(resp).String())
+		}
+	} else {
+		return nil, fmt.Errorf("no user or chat has username %s", username)
+	}
+}
+
+func PackMessages(c *Client, messages []Message) []*NewMessage {
+	var (
+		packedMessages []*NewMessage
+	)
+
+	for _, message := range messages {
+		packedMessages = append(packedMessages, packMessage(c, message))
+	}
+
+	return packedMessages
+}
+
+func packMessage(c *Client, message Message) *NewMessage {
+	var (
+		m = &NewMessage{}
+	)
+	switch message := message.(type) {
+	case *MessageObj:
+		m.ID = message.ID
+		m.OriginalUpdate = message
+		m.Message = message
+		m.Client = c
+	case *MessageService:
+		m.ID = message.ID
+		m.OriginalUpdate = message
+		m.Client = c
+		m.Message = &MessageObj{
+			Out: message.Out, Mentioned: message.Mentioned, MediaUnread: message.MediaUnread, Silent: message.Silent, ID: message.ID, FromID: message.FromID, PeerID: message.PeerID, Date: message.Date, Message: "", Post: message.Post, FromScheduled: false, ReplyTo: message.ReplyTo, FwdFrom: nil, ViaBotID: 0, Legacy: false, EditHide: false, GroupedID: 0, ReplyMarkup: nil,
+		}
+		m.Action = message.Action
+	case *MessageEmpty:
+		m.ID = message.ID
+		m.OriginalUpdate = message
+		m.Client = c
+		m.Message = &MessageObj{ID: message.ID, PeerID: message.PeerID, FromID: &PeerUser{}}
+		m.Action = &MessageActionEmpty{}
+	default:
+		return nil
+	}
+
+	// Set the chat and channel information
+	m.Chat = c.getChat(m.Message.PeerID)
+	m.Channel = c.getChannel(m.Message.PeerID)
+
+	if m.Channel != nil && m.Channel.Min {
+		if cached, err := c.GetChannel(m.Channel.ID); err == nil && cached != nil && !cached.Min {
+			m.Channel = cached
+		} else if actualChannel, err := c.ChannelsGetChannels([]InputChannel{&InputChannelObj{ChannelID: m.Channel.ID, AccessHash: m.Channel.AccessHash}}); err == nil {
+			switch actualChannels := actualChannel.(type) {
+			case *MessagesChatsObj:
+				if len(actualChannels.Chats) > 0 {
+					if channelActual, ok := actualChannels.Chats[0].(*Channel); ok {
+						c.Cache.UpdateChannel(channelActual)
+						m.Channel = channelActual
+					}
+				}
+			case *MessagesChatsSlice:
+				if len(actualChannels.Chats) > 0 {
+					if channelActual, ok := actualChannels.Chats[0].(*Channel); ok {
+						c.Cache.UpdateChannel(channelActual)
+						m.Channel = channelActual
+					}
+				}
+			}
+		}
+	} else if m.Channel != nil && !m.Channel.Min {
+		c.Cache.UpdateChannel(m.Channel)
+	}
+
+	if m.Message.Out {
+		if me := c.Me(); me != nil {
+			m.Sender = me
+		} else if m.Message.FromID != nil {
+			m.Sender = c.getSender(m.Message.FromID)
+		}
+	} else if _, empty := message.(*MessageEmpty); !empty {
+		if m.Message.FromID != nil {
+			m.Sender = c.getSender(m.Message.FromID)
+			if m.Sender != nil && m.Sender.Min {
+				if actualUser, err := c.UsersGetUsers([]InputUser{&InputUserFromMessage{
+					Peer:   c.getInputPeer(m.Message.PeerID),
+					MsgID:  m.ID,
+					UserID: m.Sender.ID,
+				}}); err == nil && len(actualUser) > 0 {
+					if userActual, ok := actualUser[0].(*UserObj); ok {
+						c.Cache.UpdateUser(userActual)
+						m.Sender = userActual
+					}
+				}
+			} else if m.Sender != nil && !m.Sender.Min {
+				c.Cache.UpdateUser(m.Sender)
+			}
+		} else {
+			m.Sender = c.getSender(m.Message.PeerID)
+		}
+	}
+
+	if (m.Channel != nil && m.Sender != nil) && (m.Sender.ID == m.Channel.ID) || (m.Message.FromID != nil && c.GetPeerType(m.Message.FromID) == EntityChannel) {
+		m.SenderChat = c.getChannel(m.Message.FromID)
+	} else {
+		m.SenderChat = &Channel{}
+	}
+
+	if m.Chat == nil && m.Sender != nil {
+		m.Chat = &ChatObj{ID: m.Sender.ID, Title: m.Sender.FirstName} // private user/bot chat
+	}
+
+	m.Peer = c.getInputPeer(m.Message.PeerID)
+	if m.IsMedia() {
+		FileID := PackBotFileID(m.Media())
+		m.File = &CustomFile{
+			FileID: FileID,
+			Name:   GetFileName(m.Media()),
+			Size:   GetFileSize(m.Media()),
+			Ext:    GetFileExt(m.Media()),
+		}
+	}
+	return m
+}
+
+func packStoryToMessage(c *Client, story *StoryItemObj) *NewMessage {
+	var (
+		m = &NewMessage{}
+	)
+	m.ID = story.ID
+	m.OriginalUpdate = &MessageObj{
+		ID:         story.ID,
+		PeerID:     story.FromID,
+		FromID:     story.FromID,
+		Out:        story.Out,
+		Date:       story.Date,
+		Entities:   story.Entities,
+		Message:    story.Caption,
+		Media:      story.Media,
+		Noforwards: story.Noforwards,
+	}
+
+	m.Client = c
+	m.Message = m.OriginalUpdate.(*MessageObj)
+	return m
+}
+
+func packDeleteMessage(c *Client, delete Update) *DeleteMessage {
+	var deleteMessage *DeleteMessage = &DeleteMessage{}
+	switch d := delete.(type) {
+	case *UpdateDeleteMessages:
+		deleteMessage.Messages = d.Messages
+		deleteMessage.ChannelID = 0
+	case *UpdateDeleteChannelMessages:
+		deleteMessage.Messages = d.Messages
+		deleteMessage.ChannelID = d.ChannelID
+	}
+
+	deleteMessage.Client = c
+	return deleteMessage
+}
+
+func packBotChatJoinRequest(c *Client, update *UpdateBotChatInviteRequester) *JoinRequestUpdate {
+	var (
+		jr = &JoinRequestUpdate{}
+	)
+	jr.Client = c
+	jr.BotOriginalUpdate = update
+	jr.Channel = c.getChannel(update.Peer)
+	jr.Chat = c.getChat(update.Peer)
+	if user, err := c.GetUser(update.UserID); err == nil {
+		jr.Users = append(jr.Users, user)
+	} else {
+		c.Log.WithError(err).Debug("getting user %d for bot chat join request", update.UserID)
+	}
+	jr.PendingCount = 1
+	return jr
+}
+
+func packJoinRequest(c *Client, update *UpdatePendingJoinRequests) *JoinRequestUpdate {
+	var (
+		jr = &JoinRequestUpdate{}
+	)
+	jr.Client = c
+	jr.OriginalUpdate = update
+	jr.Channel, _ = c.GetChannel(c.GetPeerID(update.Peer))
+
+	for _, userID := range update.RecentRequesters {
+		if user, err := c.GetUser(userID); err == nil {
+			jr.Users = append(jr.Users, user)
+		} else {
+			c.Log.WithError(err).Debug("getting user %d for join request", userID)
+		}
+	}
+
+	jr.PendingCount = update.RequestsPending
+	return jr
+}
+
+func packInlineQuery(c *Client, query *UpdateBotInlineQuery) *InlineQuery {
+	var (
+		iq = &InlineQuery{}
+	)
+	iq.QueryID = query.QueryID
+	iq.Query = query.Query
+	iq.Offset = query.Offset
+	iq.Client = c
+	iq.Sender, _ = c.GetUser(query.UserID)
+	iq.SenderID = query.UserID
+	iq.OriginalUpdate = query
+	return iq
+}
+
+func packGuestChatQuery(c *Client, query *UpdateBotGuestChatQuery) *GuestChatQuery {
+	g := &GuestChatQuery{
+		OriginalUpdate: query,
+		QueryID:        query.QueryID,
+		Client:         c,
+		Message:        packMessage(c, query.Message),
+	}
+	if len(query.ReferenceMessages) > 0 {
+		g.ReferenceMessages = make([]*NewMessage, 0, len(query.ReferenceMessages))
+		for _, m := range query.ReferenceMessages {
+			g.ReferenceMessages = append(g.ReferenceMessages, packMessage(c, m))
+		}
+	}
+	return g
+}
+
+func packInlineSend(c *Client, query *UpdateBotInlineSend) *InlineSend {
+	var (
+		is = &InlineSend{}
+	)
+
+	is.ID = query.ID
+	is.MsgID = query.MsgID
+	is.Client = c
+	is.Sender, _ = c.GetUser(query.UserID)
+	is.SenderID = query.UserID
+	is.OriginalUpdate = query
+
+	return is
+}
+
+func packCallbackQuery(c *Client, query *UpdateBotCallbackQuery) *CallbackQuery {
+	var (
+		cq = &CallbackQuery{}
+	)
+	cq.QueryID = query.QueryID
+	cq.Data = query.Data
+	cq.Client = c
+	cq.Sender, _ = c.GetUser(query.UserID)
+	cq.Chat = c.getChat(query.Peer)
+	cq.Channel = c.getChannel(query.Peer)
+	cq.OriginalUpdate = query
+	cq.Peer = query.Peer
+	cq.MessageID = query.MsgID
+	cq.SenderID = query.UserID
+	if cq.Channel != nil {
+		cq.ChatID = cq.Channel.ID
+	} else if cq.Chat != nil {
+		cq.ChatID = cq.Chat.ID
+	} else {
+		cq.ChatID = c.GetPeerID(query.Peer)
+	}
+	return cq
+}
+
+func packInlineCallbackQuery(c *Client, query *UpdateInlineBotCallbackQuery) *InlineCallbackQuery {
+	var (
+		cq = &InlineCallbackQuery{}
+	)
+	cq.QueryID = query.QueryID
+	cq.Data = query.Data
+	cq.Client = c
+	cq.Sender, _ = c.GetUser(query.UserID)
+	cq.OriginalUpdate = query
+	cq.Data = query.Data
+	cq.GameShortName = query.GameShortName
+	cq.MsgID = query.MsgID
+	cq.SenderID = query.UserID
+	return cq
+}
+
+func packChannelParticipant(c *Client, update *UpdateChannelParticipant) *ParticipantUpdate {
+	var (
+		pu = &ParticipantUpdate{}
+	)
+	pu.Client = c
+	pu.OriginalUpdate = update
+	pu.Channel = c.getChannel(&PeerChannel{ChannelID: update.ChannelID})
+	pu.User, _ = c.GetUser(update.UserID)
+	pu.Actor, _ = c.GetUser(update.ActorID)
+	pu.Old = update.PrevParticipant
+	pu.New = update.NewParticipant
+	pu.Date = update.Date
+	pu.Invite = update.Invite
+	return pu
+}
+
+func (c *Client) getSender(FromID Peer) *UserObj {
+	if FromID == nil {
+		return &UserObj{}
+	}
+	switch FromID := FromID.(type) {
+	case *PeerUser:
+		u, err := c.GetUser(FromID.UserID)
+		if err == nil {
+			return u
+		}
+	case *PeerChat:
+		u, err := c.GetChat(FromID.ChatID)
+		if err == nil {
+			return &UserObj{ID: FromID.ChatID, FirstName: u.Title, LastName: "", Username: "", Phone: "", AccessHash: 0, Photo: nil, Status: nil, Bot: false, Verified: false, Restricted: false}
+		}
+	case *PeerChannel:
+		u, err := c.GetChannel(FromID.ChannelID)
+		if err == nil {
+			return &UserObj{ID: FromID.ChannelID, AccessHash: u.AccessHash, Username: u.Username, FirstName: u.Title, LastName: "", Phone: "", Bot: false, Verified: false, LangCode: ""}
+		}
+	}
+	return &UserObj{}
+}
+
+func (c *Client) getChat(PeerID Peer) *ChatObj {
+	switch PeerID := PeerID.(type) {
+	case *PeerChat:
+		chat, err := c.GetChat(PeerID.ChatID)
+		if err == nil {
+			return chat
+		}
+	}
+	return nil
+}
+
+func (c *Client) getChannel(PeerID Peer) *Channel {
+	switch PeerID := PeerID.(type) {
+	case *PeerChannel:
+		channel, err := c.GetChannel(PeerID.ChannelID)
+		if err == nil {
+			return channel
+		}
+	}
+	return nil
+}
+
+func (c *Client) getInputPeer(PeerID Peer) InputPeer {
+	if PeerID == nil {
+		return nil
+	}
+	switch PeerID := PeerID.(type) {
+	case *PeerUser:
+		u, err := c.GetUser(PeerID.UserID)
+		if err == nil {
+			return &InputPeerUser{UserID: PeerID.UserID, AccessHash: u.AccessHash}
+		}
+	case *PeerChat:
+		return &InputPeerChat{ChatID: PeerID.ChatID}
+	case *PeerChannel:
+		u, err := c.GetChannel(PeerID.ChannelID)
+		if err == nil {
+			return &InputPeerChannel{ChannelID: PeerID.ChannelID, AccessHash: u.AccessHash}
+		}
+	}
+	return nil
+}
+
+func (c *Client) getPeer(PeerID InputPeer) Peer {
+	if PeerID == nil {
+		return nil
+	}
+	switch PeerID := PeerID.(type) {
+	case *InputPeerSelf:
+		if me := c.Me(); me != nil && me.ID != 0 {
+			return &PeerUser{UserID: me.ID}
+		}
+	case *InputPeerUser:
+		return &PeerUser{UserID: PeerID.UserID}
+	case *InputPeerUserFromMessage:
+		return &PeerUser{UserID: PeerID.UserID}
+	case *InputPeerChat:
+		return &PeerChat{ChatID: PeerID.ChatID}
+	case *InputPeerChannel:
+		return &PeerChannel{ChannelID: PeerID.ChannelID}
+	case *InputPeerChannelFromMessage:
+		return &PeerChannel{ChannelID: PeerID.ChannelID}
+	}
+	return nil
+}
+
+func GetInputCheckPassword(password string, accountPassword *AccountPassword) (InputCheckPasswordSRP, error) {
+	alg := accountPassword.CurrentAlgo
+	current, ok := alg.(*PasswordKdfAlgoSHA256SHA256Pbkdf2Hmacsha512Iter100000SHA256ModPow)
+
+	if !ok {
+		return nil, fmt.Errorf("unsupported password algorithm: %s", reflect.TypeOf(alg).String())
+	}
+
+	mp := &ige.ModPow{
+		Salt1: current.Salt1,
+		Salt2: current.Salt2,
+		G:     current.G,
+		P:     current.P,
+	}
+
+	res, err := GetInputCheckPasswordAlgo(password, accountPassword.SRPB, mp)
+	if err != nil {
+		return nil, fmt.Errorf("processing password: %w", err)
+	}
+
+	if res == nil {
+		return &InputCheckPasswordEmpty{}, nil
+	}
+
+	return &InputCheckPasswordSRPObj{
+		SRPID: accountPassword.SRPID,
+		A:     res.GA,
+		M1:    res.M1,
+	}, nil
+}
+
+// GetInputCheckPassword returns the input check password for the given password and salt.
+// all the internal functions are in internal/ige, send pr if you want to use them directly
+// https://core.telegram.org/api/srp#checking-the-password-with-srp
+func GetInputCheckPasswordAlgo(password string, srpB []byte, mp *ige.ModPow) (*ige.SrpAnswer, error) {
+	return ige.GetInputCheckPassword(password, srpB, mp, ige.RandomBytes(256))
+}
+
+func ComputeDigest(algo *PasswordKdfAlgoSHA256SHA256Pbkdf2Hmacsha512Iter100000SHA256ModPow, password string) []byte {
+	hash := ige.PasswordHash2([]byte(password), algo.Salt1, algo.Salt2)
+	value := ige.BigExp(big.NewInt(int64(algo.G)), ige.BytesToBig(hash), ige.BytesToBig(algo.P))
+	return ige.Pad256(value.Bytes())
+}
+
+type Session struct {
+	Key      []byte `json:"key,omitempty"`      // AUTH_KEY
+	Hash     []byte `json:"hash,omitempty"`     // AUTH_KEY_HASH (SHA1 of AUTH_KEY)
+	Salt     int64  `json:"salt,omitempty"`     // SERVER_SALT
+	Hostname string `json:"hostname,omitempty"` // HOSTNAME (IP address of the DC)
+	AppID    int32  `json:"app_id,omitempty"`   // APP_ID
+}
+
+func (s *Session) Encode() string {
+	if len(s.Hash) == 0 {
+		s.Hash = utils.Sha1Byte(s.Key)[12:20]
+	}
+	return session.NewStringSession(s.Key, s.Hash, 0, s.Hostname, s.AppID).Encode()
+}
+
+func (s *Session) Decode(sessionString string) error {
+	sess := session.NewEmptyStringSession()
+	if err := sess.Decode(sessionString); err != nil {
+		return err
+	}
+
+	s.Key = sess.AuthKey
+	s.Hash = sess.AuthKeyHash
+	s.Hostname = sess.IpAddr
+	s.AppID = sess.AppID
+	return nil
+}
+
+type RpcError struct {
+	Code        int32
+	Message     string
+	Description string
+}
+
+func (r *RpcError) Error() string {
+	return fmt.Sprintf("%s (%d)", r.Message, r.Code)
+}
+
+func (c *Client) Stringify(object any) string {
+	return MarshalWithTypeName(object, true)
+}
+
+func (c *Client) JSON(object any, noindent ...bool) string {
+	indent := true
+	if len(noindent) > 0 {
+		indent = !noindent[0]
+	}
+	return MarshalWithTypeName(object, indent)
+}
