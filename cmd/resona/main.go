@@ -45,6 +45,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer app.Close()
 	server := &http.Server{
 		Addr: c.Addr, Handler: app.Handler(), ErrorLog: slog.NewLogLogger(app.Logger().Handler(), slog.LevelError), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10,

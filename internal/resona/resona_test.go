@@ -43,6 +43,7 @@ func testServer(t *testing.T) *Server {
 	if err := s.auth.setup("a-test-password-123"); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { s.Close() })
 	return s
 }
 
@@ -327,8 +328,9 @@ func TestStoreAtomicityAndRecovery(t *testing.T) {
 		t.Fatal("failed disk write changed in-memory library")
 	}
 	s.path = original
-	os.WriteFile(s.path, []byte("{broken"), 0600)
-	if _, err := OpenStore(dir); err == nil {
+	corrupt := t.TempDir()
+	os.WriteFile(filepath.Join(corrupt, "library.sqlite"), []byte("{broken"), 0600)
+	if _, err := OpenStore(corrupt); err == nil {
 		t.Fatal("corrupt library silently replaced")
 	}
 }

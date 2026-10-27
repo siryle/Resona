@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -160,9 +159,12 @@ func TestCloudDownloadHTTPRequiresSavedOptIn(t *testing.T) {
 		if w.Code != 200 || s.cloud.summary().Settings.DownloadHTTP != enabled || len(s.cloud.links) != 0 || s.cloud.downloadPath != "" {
 			t.Fatal("mode change did not invalidate links and learned endpoint", w.Code, w.Body.String())
 		}
-		data, err := os.ReadFile(s.store.path)
-		var saved libraryState
-		if err != nil || json.Unmarshal(data, &saved) != nil || saved.Cloud.Settings.DownloadHTTP != enabled {
+		saved, err := OpenStore(s.config.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer saved.Close()
+		if saved.state.Cloud.Settings.DownloadHTTP != enabled {
 			t.Fatal("mode was not persisted", err)
 		}
 	}

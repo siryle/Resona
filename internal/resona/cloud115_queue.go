@@ -74,12 +74,7 @@ func (c *Cloud115) sameItem(item CloudItem) bool {
 }
 
 func (c *Cloud115) dequeue(id string) error {
-	return c.server.store.updateCloud(func(st *libraryState) error {
-		if len(st.Cloud.ProbeQueue) > 0 && st.Cloud.ProbeQueue[0] == id {
-			st.Cloud.ProbeQueue = st.Cloud.ProbeQueue[1:]
-		}
-		return nil
-	})
+	return c.server.store.dequeueProbe(id)
 }
 
 func (c *Cloud115) probeWorker(ctx context.Context) {
@@ -87,7 +82,7 @@ func (c *Cloud115) probeWorker(ctx context.Context) {
 	var err error
 	for {
 		c.mu.Lock()
-		state := c.snapshot()
+		state := c.probeState()
 		if err != nil || ctx.Err() != nil || !state.Settings.Enabled || state.Cookie == "" || len(state.ProbeQueue) == 0 {
 			if c.probeStopping {
 				c.mu.Unlock()
@@ -138,7 +133,7 @@ func (c *Cloud115) probeNext(ctx context.Context, id string) error {
 		c.dataMu.Unlock()
 		return err
 	}
-	state := c.snapshot()
+	state := c.probeState()
 	item, ok := state.Items[id]
 	if !ok || item.Account != state.Account || item.State == "missing" || item.State == "skipped" || item.State == "ready" {
 		// Ready/skipped can be durable results from a crash just before dequeue.

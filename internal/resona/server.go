@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +39,12 @@ func NewServer(ctx context.Context, c Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	ready := false
+	defer func() {
+		if !ready {
+			store.Close()
+		}
+	}()
 	auth, err := NewAuth(c)
 	if err != nil {
 		return nil, err
@@ -63,8 +68,11 @@ func NewServer(ctx context.Context, c Config) (*Server, error) {
 	if err := s.cloud.pruneMissingSTRMs(); err != nil {
 		return nil, err
 	}
+	ready = true
 	return s, nil
 }
+
+func (s *Server) Close() error { return s.store.Close() }
 
 func (s *Server) Schedule() {
 	s.plugins.Start()
@@ -356,18 +364,17 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) system(w http.ResponseWriter, r *http.Request) {
-	tracks := s.libraryTracks(r)
+	where, args := trackFilter(url.Values{"library": {r.URL.Query().Get("library")}})
+	var count, artists, albums int
 	var bytes int64
 	var duration float64
-	artists, albums := map[string]bool{}, map[string]bool{}
-	for _, t := range tracks {
-		bytes += t.Size
-		duration += t.Duration
-		artists[t.Artist] = true
-		albums[albumID(t)] = true
+	if err := s.store.db.QueryRowContext(r.Context(), "SELECT count(*),count(DISTINCT artist),count(DISTINCT album_id),coalesce(sum(size),0),coalesce(sum(duration),0) FROM tracks WHERE "+where, args...).Scan(&count, &artists, &albums, &bytes, &duration); err != nil {
+		s.logger.Error("query library statistics", "error", err)
+		apiError(w, 500, "无法读取音乐库统计")
+		return
 	}
 	jsonResponse(w, 200, map[string]any{
-		"version": root.Version(), "tracks": len(tracks), "albums": len(albums), "artists": len(artists),
+		"version": root.Version(), "tracks": count, "albums": albums, "artists": artists,
 		"bytes": bytes, "duration": duration, "scrape_enabled": s.config.Scrape,
 		"scan_interval": s.scanSchedule().description(),
 		"inbox_path":    s.config.InboxDir, "library_path": s.config.LibraryDir,
@@ -375,40 +382,16 @@ func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) tracks(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	search := strings.ToLower(strings.TrimSpace(query.Get("search")))
-	all := s.libraryTracks(r)
-	out := make([]Track, 0, len(all))
-	for _, t := range all {
-		if search != "" && !strings.Contains(strings.ToLower(t.Title+" "+t.Artist+" "+t.Album), search) {
-			continue
-		}
-		if query.Get("favorite") == "true" && !t.Favorite {
-			continue
-		}
-		if a := query.Get("album"); a != "" && albumID(t) != a {
-			continue
-		}
-		if a := query.Get("artist"); a != "" && t.Artist != a && t.AlbumArtist != a {
-			continue
-		}
-		out = append(out, t)
+	out, total, offset, limit, err := s.store.queryTracks(r.Context(), r.URL.Query())
+	if err != nil {
+		s.logger.Error("query tracks", "error", err)
+		apiError(w, 500, "无法读取音乐库")
+		return
 	}
-	if query.Get("album") != "" {
-		sort.SliceStable(out, func(i, j int) bool {
-			if out[i].Disc != out[j].Disc {
-				return out[i].Disc < out[j].Disc
-			}
-			return out[i].Number < out[j].Number
-		})
-	}
-	offset := parsePositive(query.Get("offset"), 0)
-	limit := min(parsePositive(query.Get("limit"), 100), 500)
-	start := min(offset, len(out))
-	for i := start; i < min(start+limit, len(out)); i++ {
+	for i := range out {
 		out[i] = s.trackWithLRC(out[i])
 	}
-	jsonResponse(w, 200, map[string]any{"items": out[start:min(start+limit, len(out))], "total": len(out), "offset": start, "limit": limit})
+	jsonResponse(w, 200, map[string]any{"items": out, "total": total, "offset": offset, "limit": limit})
 }
 
 func (s *Server) trackWithLRC(t Track) Track {
@@ -447,7 +430,7 @@ func (s *Server) favorite(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, "favorite is required")
 		return
 	}
-	err := s.store.update(func(st *libraryState) error {
+	err := s.store.updateEntry(r.PathValue("id"), func(st *libraryState) error {
 		t, ok := st.Tracks[r.PathValue("id")]
 		if !ok {
 			return os.ErrNotExist
@@ -575,53 +558,21 @@ func albumID(t Track) string {
 }
 
 func (s *Server) albums(w http.ResponseWriter, r *http.Request) {
-	out := []Album{}
-	index := map[string]int{}
-	for _, t := range s.libraryTracks(r) {
-		id := albumID(t)
-		i, ok := index[id]
-		if !ok {
-			i = len(out)
-			index[id] = i
-			out = append(out, Album{ID: id, Title: t.Album, Artist: t.AlbumArtist, Year: t.Year, Artwork: t.Artwork})
-		}
-		if out[i].Artwork == "" {
-			out[i].Artwork = t.Artwork
-		}
-		out[i].Tracks++
-		out[i].Duration += t.Duration
+	out, err := s.store.queryAlbums(r.Context(), url.Values{"library": {r.URL.Query().Get("library")}})
+	if err != nil {
+		s.logger.Error("query albums", "error", err)
+		apiError(w, 500, "无法读取专辑")
+		return
 	}
 	jsonResponse(w, 200, map[string]any{"items": out})
 }
 
 func (s *Server) artists(w http.ResponseWriter, r *http.Request) {
-	type artist struct {
-		Name   string `json:"name"`
-		Tracks int    `json:"tracks"`
+	out, err := s.store.queryArtists(r.Context(), url.Values{"library": {r.URL.Query().Get("library")}})
+	if err != nil {
+		s.logger.Error("query artists", "error", err)
+		apiError(w, 500, "无法读取艺术家")
+		return
 	}
-	counts := map[string]int{}
-	for _, t := range s.libraryTracks(r) {
-		counts[t.Artist]++
-	}
-	out := []artist{}
-	for name, count := range counts {
-		out = append(out, artist{Name: name, Tracks: count})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	jsonResponse(w, 200, map[string]any{"items": out})
-}
-
-func (s *Server) libraryTracks(r *http.Request) []Track {
-	tracks := s.store.Tracks()
-	scope := r.URL.Query().Get("library")
-	if scope == "" || scope == "all" {
-		return tracks
-	}
-	out := make([]Track, 0, len(tracks))
-	for _, t := range tracks {
-		if t.Library == scope {
-			out = append(out, t)
-		}
-	}
-	return out
 }

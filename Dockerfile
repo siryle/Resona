@@ -14,6 +14,7 @@ RUN apk add --no-cache ca-certificates ffmpeg tzdata && \
     mkdir -p /data /music/inbox /music/library && chown -R resona:resona /data /music && chmod -R 777 /music
 COPY --from=build /out/resona /usr/local/bin/resona
 COPY LICENSE THIRD_PARTY.md /usr/share/licenses/resona/
+COPY docs/licenses/sqlite.txt /usr/share/licenses/resona/SQLITE-LICENSES.txt
 COPY vendor/github.com/amarnathcjd/gogram/LICENSE /usr/share/licenses/gogram/LICENSE
 COPY vendor/github.com/skip2/go-qrcode/LICENSE /usr/share/licenses/go-qrcode/LICENSE
 ENV LISTEN_ADDR=:8080 DATA_PATH=/data INBOX_PATH=/music/inbox LIBRARY_PATH=/music/library

@@ -530,7 +530,12 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 				reportItem(fmt.Errorf("%s: %w", entry.Name(), err))
 				return nil
 			}
-			if existing, found := s.store.importedTrack(id); found {
+			existing, found, err := s.store.importedTrack(id)
+			if err != nil {
+				reportItem(err)
+				return nil
+			}
+			if found {
 				detail.TrackID = existing.ID
 				describe(existing)
 				if _, err := os.Stat(existing.Path); err == nil && (existing.ID != id || !j.Rescrape || seen[id]) {
@@ -583,7 +588,10 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 			}
 			describe(t)
 			if !j.IndexOnly {
-				if duplicate, ok := s.store.duplicateTrack(t); ok {
+				if duplicate, ok, err := s.store.duplicateTrack(t); err != nil {
+					reportItem(err)
+					return nil
+				} else if ok {
 					j.Skipped++
 					detail.TrackID, detail.State, detail.Message = duplicate.ID, "skipped", "同一音乐库已有同名同歌手歌曲，保留来源文件"
 					return nil
@@ -622,7 +630,7 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 			if t.Artwork == "" && s.config.Scrape && !j.IndexOnly {
 				t.Artwork = s.onlineArtwork(ctx, t)
 			}
-			err = s.store.update(func(st *libraryState) error {
+			err = s.store.updateEntry(id, func(st *libraryState) error {
 				var lyrics *SavedLyrics
 				var previousIDs []string
 				if old, ok := st.Tracks[id]; ok {

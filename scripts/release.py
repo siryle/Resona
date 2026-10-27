@@ -61,6 +61,8 @@ def verify_server(path, arch):
     with tarfile.open(path, "r:gz") as archive:
         if json.load(archive.extractfile("VERSION.json")) != version():
             raise ValueError("Bundled server version mismatch")
+        if archive.extractfile("SQLITE-LICENSES.txt").read() != (ROOT / "docs/licenses/sqlite.txt").read_bytes():
+            raise ValueError("Bundled SQLite notices differ from source")
         binary = archive.extractfile("resona").read()
     if binary[:4] != b"\x7fELF" or struct.unpack_from("<H", binary, 18)[0] != {"amd64": 62, "arm64": 183}[arch]:
         raise ValueError("Server executable architecture mismatch")

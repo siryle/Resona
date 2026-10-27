@@ -147,12 +147,7 @@ func (p *Plugins) runBot(ctx context.Context, settings PluginSettings) {
 				break
 			}
 			next := update.ID + 1
-			if err := p.server.store.update(func(st *libraryState) error {
-				if st.Plugins.Music.Token == token {
-					st.Plugins.Offset = next
-				}
-				return nil
-			}); err != nil {
+			if err := p.server.store.savePluginOffset(token, next); err != nil {
 				p.setStatus("musicsaverbot", "error", "无法保存接收进度，将重试")
 				pausePlugin(ctx, 5*time.Second)
 				break

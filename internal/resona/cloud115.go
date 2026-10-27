@@ -168,6 +168,21 @@ func (c *Cloud115) snapshot() CloudState {
 	return value
 }
 
+func (c *Cloud115) probeState() CloudState {
+	c.server.store.mu.RLock()
+	defer c.server.store.mu.RUnlock()
+	state := c.server.store.state.Cloud
+	// Published queue slices are immutable; only copy the item the worker needs.
+	state.Items = map[string]CloudItem{}
+	if len(state.ProbeQueue) > 0 {
+		id := state.ProbeQueue[0]
+		if item, ok := c.server.store.state.Cloud.Items[id]; ok {
+			state.Items[id] = item
+		}
+	}
+	return state
+}
+
 func (c *Cloud115) raw(ctx context.Context, method, endpoint string, form url.Values, cookie, ua string, out any) error {
 	var body io.Reader
 	if method == http.MethodGet {
@@ -704,7 +719,7 @@ func (c *Cloud115) generateSTRMs(ctx context.Context) error {
 }
 
 func (c *Cloud115) setItemState(id, state, message string) error {
-	return c.server.store.updateCloud(func(st *libraryState) error {
+	return c.server.store.updateEntry(id, func(st *libraryState) error {
 		item := st.Cloud.Items[id]
 		item.State, item.Error = state, message
 		st.Cloud.Items[id] = item
@@ -732,8 +747,10 @@ func (c *Cloud115) publish(item CloudItem, t Track) error {
 			t.MetadataLocked = true
 		}
 	}
-	if _, duplicate := c.server.store.duplicateTrack(t); duplicate {
-		return c.server.store.updateCloud(func(st *libraryState) error {
+	if _, duplicate, err := c.server.store.duplicateTrack(t); err != nil {
+		return err
+	} else if duplicate {
+		return c.server.store.updateEntry(t.ID, func(st *libraryState) error {
 			current := st.Cloud.Items[t.ID]
 			current.State, current.Error = "skipped", "同一音乐库已有同名同歌手歌曲，保留远端文件"
 			st.Cloud.Items[t.ID] = current
@@ -749,7 +766,7 @@ func (c *Cloud115) publish(item CloudItem, t Track) error {
 	if err != nil {
 		return c.setItemState(t.ID, "failed", "无法整理 STRM，原索引已保留")
 	}
-	err = c.server.store.updateCloud(func(st *libraryState) error {
+	err = c.server.store.updateEntry(t.ID, func(st *libraryState) error {
 		embedded, _ := makeLyrics(t.TagLyrics, "embedded")
 		remote := item.RemoteFile
 		lyrics := old.Lyrics

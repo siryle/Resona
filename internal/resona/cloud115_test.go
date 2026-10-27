@@ -303,7 +303,7 @@ func TestCloudCookieQRCodeLogin(t *testing.T) {
 	if err != nil || !strings.Contains(reopened.state.Cloud.Cookie, "KID=new-private-kid") {
 		t.Fatal("Cookie did not survive reopening", err)
 	}
-	info, err := os.Stat(filepath.Join(s.config.DataDir, "library.json"))
+	info, err := os.Stat(s.store.path)
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("credentials are not stored privately")
 	}
@@ -534,7 +534,7 @@ func TestCloudOpenAPIMigrationPreservesLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(s.config.DataDir, "library.json")
-	data, _ := os.ReadFile(path)
+	data, _ := json.Marshal(s.store.state)
 	var legacy map[string]any
 	if err := json.Unmarshal(data, &legacy); err != nil {
 		t.Fatal(err)
@@ -544,6 +544,12 @@ func TestCloudOpenAPIMigrationPreservesLibrary(t *testing.T) {
 	cloud["access_token"], cloud["refresh_token"] = "legacy-private-access", "legacy-private-refresh"
 	cloud["settings"].(map[string]any)["client_id"] = "123"
 	data, _ = json.Marshal(legacy)
+	if err := s.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(s.store.path); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -551,11 +557,14 @@ func TestCloudOpenAPIMigrationPreservesLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer store.Close()
 	track, ok := store.Track(id)
 	if !ok || !track.Unavailable || !track.Favorite || store.state.Cloud.Items[id].State != "ready" || store.state.Cloud.Account != "42" || store.state.Cloud.Cookie != "" {
 		t.Fatal("migration lost indexed music or reused Open API credentials")
 	}
-	data, _ = os.ReadFile(path)
+	if err := store.db.QueryRow("SELECT data FROM settings WHERE key='cloud'").Scan(&data); err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(string(data), "legacy-private") || strings.Contains(string(data), "client_id") {
 		t.Fatal("legacy credentials were not removed")
 	}

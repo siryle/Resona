@@ -278,7 +278,7 @@ func (s *Scanner) fillMissingLyrics(ctx context.Context, t Track, source string)
 		if fetchErr != nil {
 			return t, fetchErr
 		}
-		err = s.store.update(func(st *libraryState) error {
+		err = s.store.updateEntry(t.ID, func(st *libraryState) error {
 			current, ok := st.Tracks[t.ID]
 			if !ok || lyricsIdentity(current.Track) != lyricsIdentity(t) {
 				return errTrackChanged

@@ -97,6 +97,23 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+## SQLite storage
+
+The server uses the unmodified, CGo-free SQLite driver `modernc.org/sqlite`
+v1.61.0 (BSD-3-Clause):
+
+- Source: https://gitlab.com/cznic/sqlite
+- SQLite: https://sqlite.org (public domain)
+- The driver and its required Go dependencies are pinned in `go.mod` and
+  `go.sum`, with source and licenses under `vendor/`.
+- Complete driver and transitive third-party notices are reproduced in
+  `docs/licenses/sqlite.txt` from the driver's `LICENSE` and
+  `LICENSE-3RD-PARTY.md`. Server archives include this file as
+  `SQLITE-LICENSES.txt`; Docker includes it under
+  `/usr/share/licenses/resona/`.
+- No C compiler, shared SQLite library, or separate database service is
+  required. Audio and artwork remain filesystem resources.
+
 ## Android / Windows client
 
 The shared client in `clients/resona` uses unmodified Flutter packages, pinned

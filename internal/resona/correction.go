@@ -102,7 +102,11 @@ func (s *Server) correctMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	corrected := current
 	body.apply(&corrected)
-	if _, ok := s.store.duplicateTrack(corrected); ok {
+	if _, ok, err := s.store.duplicateTrack(corrected); err != nil {
+		s.logger.Error("check duplicate track", "error", err)
+		apiError(w, 500, "无法检查重复歌曲")
+		return
+	} else if ok {
 		apiError(w, 409, "同一音乐库已有同名同歌手歌曲，已跳过整理")
 		return
 	}
@@ -112,7 +116,7 @@ func (s *Server) correctMetadata(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 500, "无法移动到更正后的目录，原文件和标签已保留")
 		return
 	}
-	err = s.store.update(func(st *libraryState) error {
+	err = s.store.updateEntry(current.ID, func(st *libraryState) error {
 		t, ok := st.Tracks[r.PathValue("id")]
 		if !ok {
 			return os.ErrNotExist

@@ -4,7 +4,10 @@
 dist
 artifacts
 ios
-docs
+docs/*
+!docs/licenses/
+docs/licenses/*
+!docs/licenses/sqlite.txt
 data
 music
 .env

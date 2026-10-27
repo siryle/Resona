@@ -22,7 +22,8 @@ for arch in ("amd64", "arm64"):
     with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as compressed:
         with tarfile.open(fileobj=compressed, mode="w") as archive:
             for name, path, mode in [("resona", binary, 0o755), ("VERSION.json", ROOT / "VERSION.json", 0o644),
-                                     ("LICENSE", ROOT / "LICENSE", 0o644), ("THIRD_PARTY.md", ROOT / "THIRD_PARTY.md", 0o644)]:
+                                     ("LICENSE", ROOT / "LICENSE", 0o644), ("THIRD_PARTY.md", ROOT / "THIRD_PARTY.md", 0o644),
+                                     ("SQLITE-LICENSES.txt", ROOT / "docs/licenses/sqlite.txt", 0o644)]:
                 data = path.read_bytes()
                 info = tarfile.TarInfo(name)
                 info.size, info.mode, info.mtime = len(data), mode, 0

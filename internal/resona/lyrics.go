@@ -220,7 +220,7 @@ func (s *Scanner) cacheEmbeddedLyrics(ctx context.Context, t Track) (*SavedLyric
 		return nil, os.ErrNotExist
 	}
 	embedded, _ := makeLyrics(metadata.TagLyrics, "embedded")
-	if err := s.store.update(func(st *libraryState) error {
+	if err := s.store.updateEntry(t.ID, func(st *libraryState) error {
 		current, ok := st.Tracks[t.ID]
 		if !ok || current.File != t.Path {
 			return errTrackChanged
@@ -287,7 +287,7 @@ func (s *Server) scrapeLyrics(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 502, "歌词服务暂时不可用，请稍后重试")
 		return
 	}
-	err = s.store.update(func(st *libraryState) error {
+	err = s.store.updateEntry(t.ID, func(st *libraryState) error {
 		current, ok := st.Tracks[t.ID]
 		if !ok {
 			return os.ErrNotExist

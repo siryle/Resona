@@ -1,6 +1,7 @@
 package resona
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,25 +98,21 @@ type Store struct {
 	writeMu sync.Mutex
 	path    string
 	state   libraryState
+	db      *sql.DB
+	file    os.FileInfo
 }
 
-// shortcut: atomic JSON rewrites suit personal libraries; migrate to an indexed database for large or busy installations.
 func OpenStore(dir string) (*Store, error) {
-	s := &Store{path: filepath.Join(dir, "library.json"), state: libraryState{Tracks: map[string]DiskTrack{}, Jobs: []Job{}}}
-	f, err := os.Open(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
+	s, err := openDatabase(dir)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	if err = json.NewDecoder(f).Decode(&s.state); err != nil {
-		return nil, fmt.Errorf("read library (refusing to replace corrupt data): %w", err)
-	}
-	if s.state.Tracks == nil {
-		s.state.Tracks = map[string]DiskTrack{}
-	}
+	ready := false
+	defer func() {
+		if !ready {
+			s.Close()
+		}
+	}()
 	for id, track := range s.state.Tracks {
 		if track.Remote != nil {
 			continue
@@ -132,9 +129,13 @@ func OpenStore(dir string) (*Store, error) {
 			return nil, err
 		}
 	}
-	for i := range s.state.Jobs {
-		j := &s.state.Jobs[i]
+	recovered := cloneLibrary(s.state)
+	changed := false
+	for i := range recovered.Jobs {
+		j := &recovered.Jobs[i]
 		if j.State == "running" {
+			changed = true
+			j.Items = append([]JobItem{}, j.Items...)
 			j.State, j.Phase, j.EndedAt = "interrupted", "服务重启，请重新扫描", time.Now().UTC()
 			for k := range j.Items {
 				if j.Items[k].State == "processing" {
@@ -144,21 +145,26 @@ func OpenStore(dir string) (*Store, error) {
 		}
 	}
 	// Old Open API credentials cannot be reused as Cookies; preserve the index for re-login.
-	if s.state.Cloud.Account != "" && s.state.Cloud.Cookie == "" {
-		if err := s.update(func(st *libraryState) error {
-			for id, track := range st.Tracks {
-				if track.Remote != nil {
-					track.Unavailable = true
-					st.Tracks[id] = track
-				}
+	if recovered.Cloud.Account != "" && recovered.Cloud.Cookie == "" {
+		for id, track := range recovered.Tracks {
+			if track.Remote != nil {
+				changed = changed || !track.Unavailable
+				track.Unavailable = true
+				recovered.Tracks[id] = track
 			}
-			return nil
-		}); err != nil {
-			return nil, fmt.Errorf("migrate 115 login: %w", err)
 		}
 	}
+	if changed {
+		if err := s.persist(s.state, recovered); err != nil {
+			return nil, fmt.Errorf("recover library: %w", err)
+		}
+		s.state = recovered
+	}
+	ready = true
 	return s, nil
 }
+
+func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) update(fn func(*libraryState) error) error {
 	return s.updateWithRollback(fn, nil)
@@ -174,7 +180,7 @@ func (s *Store) updateCloud(fn func(*libraryState) error) error {
 	if err := fn(&next); err != nil {
 		return err
 	}
-	if err := atomicJSON(s.path, next); err != nil {
+	if err := s.persist(s.state, next); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -198,7 +204,7 @@ func (s *Store) updateWithRollback(fn func(*libraryState) error, rollback func()
 	if err := fn(&next); err != nil {
 		return err
 	}
-	if err := atomicJSON(s.path, next); err != nil {
+	if err := s.persist(s.state, next); err != nil {
 		return err
 	}
 	s.state = next
@@ -271,30 +277,17 @@ func (s *Store) Track(id string) (Track, bool) {
 }
 
 // Compare identified titles and performers within a source library; album and encoding do not distinguish songs.
-func (s *Store) duplicateTrack(t Track) (Track, bool) {
-	key := func(value string) string { return strings.ToLower(strings.Join(strings.Fields(value), " ")) }
-	title, artist := key(t.Title), key(t.Artist)
+func (s *Store) duplicateTrack(t Track) (Track, bool, error) {
+	title, artist := trackKey(t.Title), trackKey(t.Artist)
 	if title == "" || artist == "" || artist == "unknown artist" {
-		return Track{}, false
+		return Track{}, false, nil
 	}
 	library := t.Library
 	if library == "" {
 		library = "local"
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, disk := range s.state.Tracks {
-		existingLibrary := "local"
-		if disk.Remote != nil {
-			existingLibrary = "cloud"
-		}
-		existing := disk.Track
-		if existing.ID != t.ID && existingLibrary == library && !existing.Unavailable && existing.MetadataSource != "filename" &&
-			key(existing.Title) == title && key(existing.Artist) == artist {
-			return existing, true
-		}
-	}
-	return Track{}, false
+	return s.findTrack(`SELECT data FROM tracks WHERE library=? AND title_key=? AND artist_key=?
+AND id<>? AND unavailable=0 AND metadata_source<>'filename' ORDER BY id LIMIT 1`, library, title, artist, t.ID)
 }
 
 func publicTrack(d DiskTrack) Track {
@@ -321,22 +314,12 @@ func publicTrack(d DiskTrack) Track {
 }
 
 // Retagging changes the content hash; remember original imports so scans do not duplicate them.
-func (s *Store) importedTrack(id string) (Track, bool) {
+func (s *Store) importedTrack(id string) (Track, bool, error) {
 	if t, ok := s.Track(id); ok {
-		return t, true
+		return t, true, nil
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, d := range s.state.Tracks {
-		for _, previous := range d.PreviousIDs {
-			if previous == id {
-				t := publicTrack(d)
-				t.Path = d.File
-				return t, true
-			}
-		}
-	}
-	return Track{}, false
+	return s.findTrack(`SELECT tracks.data FROM track_aliases JOIN tracks ON tracks.id=track_aliases.track_id
+WHERE previous_id=? ORDER BY tracks.id LIMIT 1`, id)
 }
 
 func (s *Store) Jobs(details ...bool) []Job {
@@ -426,17 +409,29 @@ func (s *Store) deleteJobs(ids []string, all bool) (int, int, error) {
 func (s *Store) putJob(j Job) error {
 	j.Items = append([]JobItem{}, j.Items...)
 	j.Errors = append([]string{}, j.Errors...)
-	return s.update(func(st *libraryState) error {
-		for i := range st.Jobs {
-			if st.Jobs[i].ID == j.ID {
-				st.Jobs[i] = j
-				return nil
-			}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := append([]Job{}, s.state.Jobs...)
+	found := false
+	for i := range next {
+		if next[i].ID == j.ID {
+			next[i], found = j, true
+			break
 		}
-		st.Jobs = append([]Job{j}, st.Jobs...)
-		if len(st.Jobs) > 30 {
-			st.Jobs = st.Jobs[:30]
+	}
+	if !found {
+		next = append([]Job{j}, next...)
+		if len(next) > 30 {
+			next = next[:30]
 		}
-		return nil
+	}
+	err := s.transaction(func(tx *sql.Tx) error {
+		return saveJobs(tx, s.state.Jobs, next)
 	})
+	if err == nil {
+		s.state.Jobs = next
+	}
+	return err
 }

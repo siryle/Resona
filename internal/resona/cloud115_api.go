@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -34,7 +33,7 @@ func (c *Cloud115) status(w http.ResponseWriter, r *http.Request) {
 	if err := c.pruneMissingSTRMs(); err != nil {
 		c.server.logger.Warn("清理已删除的 STRM 索引失败", "error", err)
 	}
-	settings := c.snapshot()
+	settings := c.summary()
 	schedule := settings.Settings.syncSchedule()
 	settings.Settings.SyncSchedule = &schedule
 	c.mu.Lock()
@@ -42,36 +41,27 @@ func (c *Cloud115) status(w http.ResponseWriter, r *http.Request) {
 	syncStopping, probeStopping := c.syncStopping, c.probeStopping
 	syncBusy, probeBusy, current, probeMessage := c.busy, c.probeBusy, c.probeCurrent, c.probeMessage
 	c.mu.Unlock()
-	queued := make(map[string]bool, len(settings.ProbeQueue))
-	for _, id := range settings.ProbeQueue {
-		queued[id] = true
-	}
-	waiting := len(queued)
-	if queued[current] {
+	c.server.store.mu.RLock()
+	queue := c.server.store.state.Cloud.ProbeQueue
+	waiting := len(queue)
+	if waiting > 0 && queue[0] == current {
 		waiting--
 	}
-	items, counts := []CloudItem{}, map[string]int{}
-	for _, item := range settings.Items {
-		if item.Account != settings.Account {
-			continue
-		}
-		counts[item.State]++
-		item.Queued = queued[item.TrackID]
-		if state := r.URL.Query().Get("state"); state == "" || state == item.State {
-			items = append(items, item)
-		}
+	c.server.store.mu.RUnlock()
+	items, counts, total, offset, limit, err := c.server.store.queryCloudItems(r.Context(), settings.Account, r.URL.Query())
+	if err != nil {
+		c.server.logger.Error("query 115 items", "error", err)
+		apiError(w, 500, "无法读取网盘索引")
+		return
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Path < items[j].Path })
-	offset := min(parsePositive(r.URL.Query().Get("offset"), 0), len(items))
-	limit := min(parsePositive(r.URL.Query().Get("limit"), 100), 500)
 	jsonResponse(w, 200, map[string]any{
 		"settings": settings.Settings, "connected": settings.Cookie != "", "account": settings.Account,
 		"account_name": settings.AccountName, "last_sync": settings.LastSync,
 		"timezone": time.Now().Format("MST -07:00"),
 		"busy":     busy, "message": message, "sync_busy": syncBusy,
 		"sync_stopping": syncStopping, "probe_stopping": probeStopping,
-		"probe_busy": probeBusy, "probe_current": current, "probe_queued": waiting, "probe_message": probeMessage, "counts": counts, "total": len(items), "offset": offset,
-		"items": items[offset:min(offset+limit, len(items))],
+		"probe_busy": probeBusy, "probe_current": current, "probe_queued": waiting, "probe_message": probeMessage, "counts": counts, "total": total, "offset": offset,
+		"items": items, "limit": limit,
 	})
 }
 
