@@ -45,6 +45,7 @@ void main() {
   final hash = sha256.convert(audio).toString();
   late Track track;
   int downloads = 0;
+  late List<int> servedAudio;
   setUp(() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     directory = await Directory.systemTemp.createTemp('resona-cache-test-');
@@ -57,6 +58,7 @@ void main() {
     cache = PlaybackCache(directory, session);
     await cache.load();
     downloads = 0;
+    servedAudio = audio;
     track = Track({
       'id': hash,
       'title': 'Song',
@@ -78,7 +80,7 @@ void main() {
           request.response.headers.set('accept-ranges', 'bytes');
           request.response.add(audio.sublist(10, 20));
         } else {
-          request.response.add(audio);
+          request.response.add(servedAudio);
         }
       } else if (request.uri.path.endsWith('/lyrics')) {
         request.response.write('[00:01]Hello');
@@ -154,6 +156,66 @@ void main() {
       );
     },
   );
+
+  test('truncated caches are rejected on disk and repaired by save', () async {
+    for (final length in [0, 123]) {
+      await cache.save(api, track);
+      await cache.audio(track).writeAsBytes(audio.take(length).toList());
+      expect(cache.contains(track), false);
+      final reopened = PlaybackCache(directory, session);
+      await reopened.load();
+      expect(reopened.tracks, isEmpty);
+      await reopened.save(api, track);
+      expect(reopened.contains(track), true);
+      expect(await reopened.audio(track).readAsBytes(), audio);
+    }
+  });
+
+  test('content revision replaces audio without losing a manual pin', () async {
+    await cache.save(api, track);
+    await cache.pin(track);
+    final bytes = List<int>.from(audio.reversed);
+    final revised = Track({
+      ...track.json,
+      'content_hash': sha256.convert(bytes).toString(),
+    });
+    expect(cache.contains(revised), false);
+    await expectLater(cache.save(api, revised), throwsA(isA<APIException>()));
+    expect(cache.contains(track), true);
+    expect(cache.downloads, {track.id});
+    servedAudio = bytes;
+    await cache.save(api, revised);
+    expect(cache.contains(revised), true);
+    expect(cache.contains(track), false);
+    expect(await cache.audio(revised).readAsBytes(), bytes);
+    final reopened = PlaybackCache(directory, session);
+    await reopened.load();
+    expect(reopened.contains(revised), true);
+    expect(reopened.downloads, {track.id});
+    await reopened.clear();
+    expect(reopened.contains(revised), true);
+  });
+
+  test('legacy cache migration verifies hashes before publishing', () async {
+    await cache.save(api, track);
+    await cache.pin(track);
+    final metadata = File(
+      cache.audio(track).path.replaceFirst('.flac', '.json'),
+    );
+    final legacy = Map<String, dynamic>.from(
+      jsonDecode(await metadata.readAsString()) as Map,
+    )..remove('_cache_bytes');
+    await metadata.writeAsString(jsonEncode(legacy));
+    final reopened = PlaybackCache(directory, session);
+    await reopened.load();
+    expect(reopened.contains(track), true);
+    expect(reopened.downloads, {track.id});
+    await metadata.writeAsString(jsonEncode(legacy));
+    await cache.audio(track).writeAsBytes([1, 2, 3]);
+    final broken = PlaybackCache(directory, session);
+    await broken.load();
+    expect(broken.tracks, isEmpty);
+  });
 
   test(
     'redirect cannot leak a Resona credential to an unrelated origin',

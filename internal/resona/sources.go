@@ -626,9 +626,6 @@ func (s *Scanner) enrich(ctx context.Context, t *Track, source string) error {
 	if t.Artist == "" {
 		return errNoMetadata
 	}
-	if source == "musicbrainz" {
-		return s.scraper.Enrich(ctx, t)
-	}
 	ids := []string{source}
 	if source == "auto" {
 		ids = s.store.SourceSettings().metadataOrder()

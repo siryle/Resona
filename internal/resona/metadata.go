@@ -174,21 +174,6 @@ func normalize(s string) string {
 	}, s)
 }
 
-func exactRecording(t Track, r recording) bool {
-	if r.Score < 95 || normalize(t.Title) != normalize(r.Title) || t.Artist == "" {
-		return false
-	}
-	if r.Length <= 0 || t.Duration <= 0 || abs(t.Duration-float64(r.Length)/1000) > 5 {
-		return false
-	}
-	for _, c := range r.Credit {
-		if normalize(t.Artist) == normalize(c.Name) || normalize(t.Artist) == normalize(c.Artist.Name) {
-			return true
-		}
-	}
-	return false
-}
-
 func abs(v float64) float64 {
 	if v < 0 {
 		return -v
@@ -198,52 +183,6 @@ func abs(v float64) float64 {
 
 func luceneQuote(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
-}
-
-// Enrich fills missing tags only; ambiguous matches keep the original metadata.
-func (s *Scraper) Enrich(ctx context.Context, t *Track) error {
-	if t.Artist == "" || (t.Album != "" && t.Year != "" && t.MBID != "" && t.ReleaseID != "") {
-		if t.MBID != "" {
-			t.MetadataSource = "musicbrainz"
-		}
-		return nil
-	}
-	recordings, err := s.search(ctx, t.Title, t.Artist)
-	if err != nil {
-		return err
-	}
-	sort.SliceStable(recordings, func(i, j int) bool {
-		a, b := recordings[i], recordings[j]
-		am, bm := exactRecording(*t, a), exactRecording(*t, b)
-		if am != bm {
-			return am
-		}
-		return abs(float64(a.Length)/1000-t.Duration) < abs(float64(b.Length)/1000-t.Duration)
-	})
-	for _, r := range recordings {
-		if !exactRecording(*t, r) {
-			continue
-		}
-		t.MetadataSource = "musicbrainz"
-		if t.MBID == "" {
-			t.MBID = r.ID
-		}
-		for _, release := range r.Releases {
-			if release.Status != "Official" || (t.Album != "" && normalize(t.Album) != normalize(release.Title)) {
-				continue
-			}
-			if t.Album == "" {
-				t.Album = release.Title
-			}
-			t.ReleaseID = release.ID
-			if t.Year == "" && len(release.Date) >= 4 {
-				t.Year = release.Date[:4]
-			}
-			return nil
-		}
-		return nil
-	}
-	return errNoMetadata
 }
 
 func (s *Scraper) search(ctx context.Context, title, artist string) ([]recording, error) {

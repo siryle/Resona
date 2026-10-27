@@ -342,15 +342,15 @@ func TestMetadataMatching(t *testing.T) {
 		} `json:"artist"`
 	}{Name: "Artist"})
 	track := Track{Title: "Hello", Artist: "Artist", Duration: 200}
-	if !exactRecording(track, r) {
+	if !candidateMatches(track, recordingCandidates([]recording{r})[0], 5) {
 		t.Fatal("exact recording did not match")
 	}
 	track.Artist = "Someone Else"
-	if exactRecording(track, r) {
+	if candidateMatches(track, recordingCandidates([]recording{r})[0], 5) {
 		t.Fatal("wrong artist matched")
 	}
 	track.Artist, track.Duration = "Artist", 250
-	if exactRecording(track, r) {
+	if candidateMatches(track, recordingCandidates([]recording{r})[0], 5) {
 		t.Fatal("wrong duration matched")
 	}
 	if within("/music", "/music-other/song.mp3") || !within("/music", "/music/album/song.mp3") ||
@@ -370,9 +370,11 @@ func TestScraperPreservesLocalMetadata(t *testing.T) {
 		io.WriteString(w, `{"recordings":[{"id":"recording","title":"Hello","score":100,"length":200000,"artist-credit":[{"name":"Artist","artist":{"name":"Artist"}}],"releases":[{"id":"release","title":"Online Album","date":"2020-01-01","status":"Official"}]}]}`)
 	}))
 	defer fixture.Close()
-	scraper := Scraper{Client: fixture.Client(), Endpoint: fixture.URL}
+	server := testServer(t)
+	scraper := &Scraper{Client: fixture.Client(), Endpoint: fixture.URL}
+	server.scanner.scraper = scraper
 	track := Track{Title: "Hello", Artist: "Artist", Duration: 200}
-	if err := scraper.Enrich(context.Background(), &track); err != nil {
+	if err := server.scanner.enrich(context.Background(), &track, "musicbrainz"); err != nil {
 		t.Fatal(err)
 	}
 	if track.Album != "Online Album" || track.Year != "2020" || !strings.Contains(received, `artist:"Artist"`) {
@@ -380,8 +382,8 @@ func TestScraperPreservesLocalMetadata(t *testing.T) {
 	}
 	scraper.last = time.Time{}
 	track.Album, track.Year = "Local Album", "1999"
-	if err := scraper.Enrich(context.Background(), &track); err != nil {
-		t.Fatal(err)
+	if err := server.scanner.enrich(context.Background(), &track, "musicbrainz"); !errors.Is(err, errNoMetadata) {
+		t.Fatalf("mismatched album accepted: %v", err)
 	}
 	if track.Album != "Local Album" || track.Year != "1999" {
 		t.Fatal("scraper overwrote existing tags")

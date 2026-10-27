@@ -43,6 +43,7 @@ void main() {
       'title': 'Offline Song',
       'format': 'mp3',
       '_downloaded': true,
+      'size': 3,
       'duration': 120,
     });
     await cache.audio(track).writeAsBytes([1, 2, 3]);
@@ -127,6 +128,51 @@ void main() {
       stopped.dispose();
     },
   );
+
+  test('enqueue prepares paused playback without opening the engine', () async {
+    await prepare('http://127.0.0.1:1');
+    final engine = RecordingPlayer();
+    final c = PlaybackController(root, engine);
+    await c.initialize();
+    final song = c.tracks.single;
+    c.enqueue(song);
+    c.enqueue(song);
+    expect(c.queue.length, 1);
+    expect(c.current?.id, song.id);
+    expect(c.duration, const Duration(seconds: 120));
+    expect(c.playing, false);
+    expect(engine.opened, isEmpty);
+    await c.toggle();
+    expect(engine.opened.length, 1);
+    c.position = const Duration(seconds: 19);
+    c.playing = true;
+    c.enqueue(Track({'id': 'next-song'}));
+    expect(c.position, const Duration(seconds: 19));
+    expect(c.current?.id, song.id);
+    expect(c.playing, true);
+    expect(engine.opened.length, 1);
+    await c.savePlaybackState();
+    c.dispose();
+    final restored = MusicController(supportDirectory: root);
+    await restored.initialize();
+    expect(restored.queue.map((t) => t.id), [song.id, 'next-song']);
+    expect(restored.current?.id, song.id);
+    expect(restored.playing, false);
+    restored.dispose();
+  });
+
+  test('offline bulk play uses the complete filtered local list', () async {
+    await prepare('http://127.0.0.1:1');
+    final engine = RecordingPlayer();
+    final c = PlaybackController(root, engine);
+    await c.initialize();
+    await c.playAll(shuffled: true);
+    expect(c.queue.map((t) => t.id), ['local-song']);
+    expect(c.shuffle, true);
+    expect(engine.opened.length, 1);
+    await c.savePlaybackState();
+    c.dispose();
+  });
 
   test('expired credentials preserve the restored playback queue', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

@@ -107,31 +107,6 @@ func (w *strmWriter) write(ctx context.Context, item CloudItem, path string) (bo
 	if err := w.root.Rename(temporary, name); err != nil {
 		return false, err
 	}
-	folder, err := w.root.Open(dir)
-	if err != nil {
-		return false, err
-	}
-	entries, readErr := folder.ReadDir(-1)
-	err = errors.Join(readErr, folder.Close())
-	if err != nil {
-		return false, err
-	}
-	for _, entry := range entries {
-		old := filepath.Join(dir, entry.Name())
-		if filepath.Ext(old) != ".strm" || old == name || !entry.Type().IsRegular() {
-			continue
-		}
-		oldLRC := strings.TrimSuffix(old, ".strm") + ".lrc"
-		newLRC := strings.TrimSuffix(name, ".strm") + ".lrc"
-		if _, err := w.root.Lstat(oldLRC); err == nil {
-			if err := w.root.Rename(oldLRC, newLRC); err != nil {
-				return false, err
-			}
-		}
-		if err := w.root.Remove(old); err != nil {
-			return false, err
-		}
-	}
 	return false, nil
 }
 

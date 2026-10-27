@@ -36,6 +36,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       artist = '';
   String? error;
   bool loading = false,
+      queueLoading = false,
       busy = false,
       offline = true,
       playing = false,
@@ -332,15 +333,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         final data = await api!.json(
           'GET',
           'tracks',
-          query: {
-            'library': library,
-            'limit': '100',
-            'offset': more ? '${tracks.length}' : '0',
-            if (search.isNotEmpty) 'search': search,
-            if (section == '喜欢') 'favorite': 'true',
-            if (album.isNotEmpty) 'album': album,
-            if (artist.isNotEmpty) 'artist': artist,
-          },
+          query: {..._trackQuery, 'offset': more ? '${tracks.length}' : '0'},
         );
         if (request != _request) return;
         tracks = [
@@ -368,6 +361,75 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         loading = false;
         notifyListeners();
       }
+    }
+  }
+
+  Map<String, String> get _trackQuery => {
+    'library': library,
+    'limit': '100',
+    if (search.isNotEmpty) 'search': search,
+    if (section == '喜欢') 'favorite': 'true',
+    if (album.isNotEmpty) 'album': album,
+    if (artist.isNotEmpty) 'artist': artist,
+  };
+
+  Future<void> playAll({bool shuffled = false}) async {
+    if (busy || loading || queueLoading || tracks.isEmpty) return;
+    final activeAPI = api;
+    final request = _request, playRequest = _playRequest;
+    final selectedSection = section, wasOffline = offline;
+    final query = _trackQuery;
+    bool isCurrent() =>
+        !_disposed &&
+        api == activeAPI &&
+        request == _request &&
+        playRequest == _playRequest &&
+        selectedSection == section &&
+        wasOffline == offline &&
+        jsonEncode(query) == jsonEncode(_trackQuery);
+    queueLoading = true;
+    error = null;
+    notifyListeners();
+    try {
+      final all = <Track>[];
+      if (offline || section == '缓存') {
+        all.addAll(tracks);
+      } else {
+        var offset = 0;
+        while (true) {
+          final data = await activeAPI!.json(
+            'GET',
+            'tracks',
+            query: {...query, 'offset': '$offset'},
+          );
+          if (!isCurrent()) return;
+          final page = (data['items'] as List)
+              .map((e) => Track(Map<String, dynamic>.from(e as Map)))
+              .toList();
+          final count = data['total'] as int;
+          if (page.isEmpty && offset < count) {
+            throw const APIException('歌曲列表不完整，请刷新后重试。');
+          }
+          all.addAll(page);
+          offset += page.length;
+          if (offset >= count) break;
+        }
+      }
+      if (!isCurrent() || busy || all.isEmpty) return;
+      final seen = <String>{};
+      queue = all.where((track) => seen.add(track.id)).toList();
+      shuffle = shuffled;
+      await play(
+        queue[shuffled ? Random().nextInt(queue.length) : 0],
+        replaceQueue: false,
+      );
+    } catch (e) {
+      if (isCurrent()) {
+        error = e is APIException ? e.message : '无法加载完整播放队列，请重试。';
+      }
+    } finally {
+      queueLoading = false;
+      notifyListeners();
     }
   }
 
@@ -581,7 +643,15 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void enqueue(Track track) {
-    queue.add(track);
+    if (!queue.any((item) => item.id == track.id)) queue.add(track);
+    if (current == null) {
+      current = queue.first;
+      position = Duration.zero;
+      duration = Duration(milliseconds: (current!.duration * 1000).round());
+      lyricText = '';
+      playing = false;
+      _needsPlaybackOpen = true;
+    }
     unawaited(savePlaybackState());
     notifyListeners();
   }

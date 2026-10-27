@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
@@ -48,6 +49,7 @@ class ResonaApp extends StatelessWidget {
   const ResonaApp({super.key, required this.controller});
   ThemeData theme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
+    final windows = defaultTargetPlatform == TargetPlatform.windows;
     final scheme =
         ColorScheme.fromSeed(
           seedColor: const Color(0xffbe5532),
@@ -74,6 +76,74 @@ class ResonaApp extends StatelessWidget {
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
+      fontFamily: windows ? 'Microsoft YaHei UI' : null,
+      fontFamilyFallback: windows
+          ? const ['Microsoft YaHei', 'Segoe UI']
+          : null,
+      textTheme: windows
+          ? const TextTheme(
+              headlineLarge: TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.w500,
+                height: 1.3,
+                letterSpacing: 0,
+              ),
+              headlineMedium: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w500,
+                height: 1.3,
+                letterSpacing: 0,
+              ),
+              headlineSmall: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w500,
+                height: 1.35,
+                letterSpacing: 0,
+              ),
+              titleLarge: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w500,
+                height: 1.4,
+                letterSpacing: 0,
+              ),
+              titleMedium: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                height: 1.45,
+                letterSpacing: 0,
+              ),
+              titleSmall: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+                height: 1.45,
+                letterSpacing: 0,
+              ),
+              bodyLarge: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w400,
+                height: 1.5,
+                letterSpacing: 0,
+              ),
+              bodyMedium: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w400,
+                height: 1.5,
+                letterSpacing: 0,
+              ),
+              bodySmall: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
+                height: 1.45,
+                letterSpacing: 0,
+              ),
+              labelLarge: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                height: 1.4,
+                letterSpacing: 0,
+              ),
+            )
+          : null,
       scaffoldBackgroundColor: scheme.surface,
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surface,
@@ -552,127 +622,126 @@ class _MusicPageState extends State<MusicPage> {
             if (value != null) c.switchLibrary(value);
           },
   );
-  Widget settings(BuildContext context) => Align(
-    alignment: Alignment.topCenter,
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 780),
-      child: ListView(
-        padding: const EdgeInsets.all(24),
-        children: [
-          brand(context),
-          const SizedBox(height: 28),
-          settingsGroup('服务器', [
-            if (c.session != null) ...[
-              SelectableText(c.session!.server.toString()),
-              Text('账号 · ${c.session!.username}'),
-            ],
-            Text(c.offline ? '离线，本机音乐可播放' : '已连接'),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                FilledButton(
-                  onPressed: c.busy
-                      ? null
-                      : () async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => AnimatedBuilder(
-                                animation: c,
-                                builder: (_, _) => LoginPage(controller: c),
-                              ),
-                            ),
-                          );
-                        },
-                  child: Text(c.authenticated ? '切换服务器' : '连接服务器'),
-                ),
-                if (c.authenticated)
-                  OutlinedButton(
-                    onPressed: c.busy ? null : () => c.reconnect(),
-                    child: const Text('重新连接与刷新'),
-                  ),
-                if (c.authenticated)
-                  TextButton(
-                    onPressed: c.busy ? null : () => c.logout(),
-                    child: const Text('退出登录'),
-                  ),
-              ],
-            ),
-            if (c.authenticated)
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('离线聆听'),
-                subtitle: const Text('只读取本机音频，不请求服务器'),
-                value: c.offline,
-                onChanged: c.busy
-                    ? null
-                    : (value) {
-                        if (!value) {
-                          unawaited(c.reconnect());
-                        } else {
-                          c.offline = true;
-                          c.notifyListeners();
-                        }
-                      },
-              ),
-          ]),
-          settingsGroup('离线音乐', [
-            Text('本机下载 · ${c.cache?.downloads.length ?? 0} 首'),
-            const Text('通过歌曲右侧菜单下载音频、封面和歌词。退出登录后仍可从「已下载」播放和删除。'),
-          ]),
-          settingsGroup('播放缓存', [
-            Text(
-              '占用空间 · ${((c.cache?.size ?? 0) / (1 << 20)).toStringAsFixed(1)} MiB',
-            ),
-            const Text('播放时自动缓存完整歌曲，再次播放优先读取本机。清理缓存会保留手动下载的音乐。'),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton(
-                onPressed: c.busy || c.cache == null
+  Widget settings(BuildContext context) => LayoutBuilder(
+    builder: (context, bounds) => ListView(
+      padding: EdgeInsets.symmetric(
+        horizontal: ((bounds.maxWidth - 732) / 2).clamp(24.0, double.infinity),
+        vertical: 24,
+      ),
+      children: [
+        brand(context),
+        const SizedBox(height: 28),
+        settingsGroup('服务器', [
+          if (c.session != null) ...[
+            SelectableText(c.session!.server.toString()),
+            Text('账号 · ${c.session!.username}'),
+          ],
+          Text(c.offline ? '离线，本机音乐可播放' : '已连接'),
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              FilledButton(
+                onPressed: c.busy
                     ? null
                     : () async {
-                        final confirm = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('清理本机播放缓存？'),
-                            content: const Text(
-                              '当前播放将停止，自动缓存的音频与歌词会被删除。手动下载和服务器文件保持不变。',
+                        await Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => AnimatedBuilder(
+                              animation: c,
+                              builder: (_, _) => LoginPage(controller: c),
                             ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: const Text('取消'),
-                              ),
-                              FilledButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                child: const Text('清理缓存'),
-                              ),
-                            ],
                           ),
                         );
-                        if (confirm == true) await c.clearCache();
                       },
-                child: const Text('清理缓存'),
+                child: Text(c.authenticated ? '切换服务器' : '连接服务器'),
               ),
-            ),
-          ]),
-          settingsGroup('关于 Resona', [
-            const Text('让每一份热爱，产生共鸣。'),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                onPressed: () => showLicensePage(
-                  context: context,
-                  applicationName: 'Resona',
-                  applicationLegalese: 'GPL-3.0. 源代码随项目发布标签提供。',
+              if (c.authenticated)
+                OutlinedButton(
+                  onPressed: c.busy ? null : () => c.reconnect(),
+                  child: const Text('重新连接与刷新'),
                 ),
-                child: const Text('开源许可'),
-              ),
+              if (c.authenticated)
+                TextButton(
+                  onPressed: c.busy ? null : () => c.logout(),
+                  child: const Text('退出登录'),
+                ),
+            ],
+          ),
+          if (c.authenticated)
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('离线聆听'),
+              subtitle: const Text('只读取本机音频，不请求服务器'),
+              value: c.offline,
+              onChanged: c.busy
+                  ? null
+                  : (value) {
+                      if (!value) {
+                        unawaited(c.reconnect());
+                      } else {
+                        c.offline = true;
+                        c.notifyListeners();
+                      }
+                    },
             ),
-            if (desktop) const Text('Ctrl + Space 播放或暂停'),
-          ]),
-        ],
-      ),
+        ]),
+        settingsGroup('离线音乐', [
+          Text('本机下载 · ${c.cache?.downloads.length ?? 0} 首'),
+          const Text('通过歌曲右侧菜单下载音频、封面和歌词。退出登录后仍可从「已下载」播放和删除。'),
+        ]),
+        settingsGroup('播放缓存', [
+          Text(
+            '占用空间 · ${((c.cache?.size ?? 0) / (1 << 20)).toStringAsFixed(1)} MiB',
+          ),
+          const Text('播放时自动缓存完整歌曲，再次播放优先读取本机。清理缓存会保留手动下载的音乐。'),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton(
+              onPressed: c.busy || c.cache == null
+                  ? null
+                  : () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('清理本机播放缓存？'),
+                          content: const Text(
+                            '当前播放将停止，自动缓存的音频与歌词会被删除。手动下载和服务器文件保持不变。',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('取消'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('清理缓存'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) await c.clearCache();
+                    },
+              child: const Text('清理缓存'),
+            ),
+          ),
+        ]),
+        settingsGroup('关于 Resona', [
+          const Text('让每一份热爱，产生共鸣。'),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => showLicensePage(
+                context: context,
+                applicationName: 'Resona',
+                applicationLegalese: 'GPL-3.0. 源代码随项目发布标签提供。',
+              ),
+              child: const Text('开源许可'),
+            ),
+          ),
+          if (desktop) const Text('Ctrl + Space 播放或暂停'),
+        ]),
+      ],
     ),
   );
   Widget settingsGroup(String title, List<Widget> children) => Padding(
@@ -811,18 +880,16 @@ class _MusicPageState extends State<MusicPage> {
                     runSpacing: 8,
                     children: [
                       FilledButton.icon(
-                        onPressed: () {
-                          c.setShuffle(false);
-                          unawaited(c.play(c.tracks.first));
-                        },
+                        onPressed: c.busy || c.loading || c.queueLoading
+                            ? null
+                            : () => unawaited(c.playAll()),
                         icon: const Icon(Icons.play_arrow),
                         label: const Text('全部播放'),
                       ),
                       OutlinedButton.icon(
-                        onPressed: () {
-                          c.setShuffle(true);
-                          unawaited(c.play(c.tracks.first));
-                        },
+                        onPressed: c.busy || c.loading || c.queueLoading
+                            ? null
+                            : () => unawaited(c.playAll(shuffled: true)),
                         icon: const Icon(Icons.shuffle),
                         label: const Text('随机播放'),
                       ),
@@ -1007,6 +1074,13 @@ class _MusicPageState extends State<MusicPage> {
                   const SizedBox(height: 4),
                   Text(
                     '${track.artist}${track.hasLyrics ? ' · 歌词' : ''}${c.cache?.downloads.contains(track.id) == true ? ' · 已下载' : ''}',
+                    style: desktop
+                        ? Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
+                          )
+                        : null,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -1019,6 +1093,9 @@ class _MusicPageState extends State<MusicPage> {
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: Text(
                     track.album,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),

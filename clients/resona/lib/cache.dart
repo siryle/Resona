@@ -21,13 +21,30 @@ class PlaybackCache {
   File _metadata(Track track) => File('${root.path}/${_key(track)}.json');
   File lyrics(Track track) => File('${root.path}/${_key(track)}.lrc');
   File cover(Track track) => File('${root.path}/${_key(track)}.jpg');
-  bool contains(Track track) =>
-      tracks.containsKey(track.id) && audio(track).existsSync();
+  bool contains(Track track) {
+    final snapshot = tracks[track.id];
+    if (snapshot == null ||
+        snapshot.format != track.format ||
+        snapshot.json['hash_algorithm'] != track.json['hash_algorithm'] ||
+        (snapshot.json['content_hash'] ?? '').toString().toLowerCase() !=
+            (track.json['content_hash'] ?? '').toString().toLowerCase()) {
+      return false;
+    }
+    try {
+      final expected = snapshot.json['_cache_bytes'] as int? ?? 0;
+      return expected > 0 && audio(track).lengthSync() == expected;
+    } on FileSystemException {
+      return false;
+    }
+  }
+
   int get size => root.existsSync()
       ? root.listSync().whereType<File>().fold(0, (n, f) => n + f.lengthSync())
       : 0;
 
   Future<void> load() async {
+    tracks.clear();
+    downloads.clear();
     await root.create(recursive: true);
     await for (final file in root.list()) {
       if (file is! File) continue;
@@ -37,24 +54,52 @@ class PlaybackCache {
       }
       if (!file.path.endsWith('.json')) continue;
       try {
-        final track = Track(
+        var track = Track(
           Map<String, dynamic>.from(
             jsonDecode(await file.readAsString()) as Map,
           ),
         );
-        if (await audio(track).exists()) {
-          tracks[track.id] = track;
-          if (track.json['_downloaded'] == true) downloads.add(track.id);
+        final length = await audio(track).length();
+        if (length <= 0) continue;
+        if (track.json['_cache_bytes'] == null) {
+          // Migrate old caches only when their size or digest proves completeness.
+          final expected = track.json['content_hash'] as String? ?? '';
+          if (expected.isNotEmpty) {
+            final hash = switch (track.json['hash_algorithm']) {
+              'sha256' => sha256,
+              'sha1' => sha1,
+              _ => null,
+            };
+            if (hash == null ||
+                (await hash.bind(audio(track).openRead()).first).toString() !=
+                    expected.toLowerCase()) {
+              continue;
+            }
+          } else if (track.json['size'] != length) {
+            continue;
+          }
+          track = Track({...track.json, '_cache_bytes': length});
+          final partial = File('${file.path}.part');
+          await partial.writeAsString(jsonEncode(track.json), flush: true);
+          await partial.rename(file.path);
         }
+        if (track.json['_cache_bytes'] != length) continue;
+        tracks[track.id] = track;
+        if (track.json['_downloaded'] == true) downloads.add(track.id);
       } catch (_) {
         /* Ignore incomplete cache metadata; never affect the server. */
       }
     }
   }
 
-  Future<void> save(ResonaAPI api, Track track) {
-    if (_clearing || contains(track)) return Future.value();
-    return _pending.putIfAbsent(
+  Future<void> save(ResonaAPI api, Track track) async {
+    if (_clearing || contains(track)) return;
+    final pending = _pending[track.id];
+    if (pending != null) {
+      await pending;
+      if (_clearing || contains(track)) return;
+    }
+    await _pending.putIfAbsent(
       track.id,
       () => _download(api, track).whenComplete(() {
         _pending.remove(track.id);
@@ -64,7 +109,11 @@ class PlaybackCache {
 
   Future<void> pin(Track track) async {
     if (!contains(track) || _clearing) throw const APIException('歌曲尚未完成下载');
-    final snapshot = Track({...track.json, '_downloaded': true});
+    final snapshot = Track({
+      ...track.json,
+      '_cache_bytes': tracks[track.id]!.json['_cache_bytes'],
+      '_downloaded': true,
+    });
     final partial = File('${_metadata(track).path}.part');
     await partial.writeAsString(jsonEncode(snapshot.json), flush: true);
     await partial.rename(_metadata(track).path);
@@ -134,12 +183,20 @@ class PlaybackCache {
         }
       }
       if (_clearing) return;
+      final snapshot = Track({
+        ...track.json,
+        '_cache_bytes': count,
+        if (downloads.contains(track.id)) '_downloaded': true,
+      });
+      final metadata = File('${_metadata(track).path}.part');
+      await metadata.writeAsString(jsonEncode(snapshot.json), flush: true);
       await partial.rename(audio(track).path);
       // Metadata is the commit marker; interrupted downloads are never offered offline.
-      final metadata = File('${_metadata(track).path}.part');
-      await metadata.writeAsString(jsonEncode(track.json), flush: true);
       await metadata.rename(_metadata(track).path);
-      tracks[track.id] = track;
+      tracks[track.id] = snapshot;
+      for (final sidecar in [lyrics(track), cover(track)]) {
+        if (await sidecar.exists()) await sidecar.delete();
+      }
       try {
         await lyrics(track).writeAsString(await api.lyrics(track));
       } catch (_) {
