@@ -208,10 +208,25 @@ def verify_docker(path):
         raise ValueError("Docker image source commit mismatch")
 
 
+def verify_windows(path):
+    verify_checksum(path)
+    data = path.read_bytes()
+    if len(data) < 0x80 or data[:2] != b"MZ":
+        raise ValueError("Windows package must be an installer executable")
+    offset = struct.unpack_from("<I", data, 0x3C)[0]
+    if offset <= 0 or offset + 6 > len(data) or data[offset:offset + 4] != b"PE\0\0":
+        raise ValueError("Windows installer PE header is invalid")
+    if struct.unpack_from("<H", data, offset + 4)[0] != 0x8664:
+        raise ValueError("Windows installer must be x64")
+    quad = f'{version()["version"]}.{version()["build"]}'.encode("utf-16le")
+    if quad not in data:
+        raise ValueError("Windows installer version differs from VERSION.json")
+
+
 def verify_all(directory, image_reference=False):
     ipa = directory / f"Resona-iOS-{stem()}-unsigned.ipa"
     macos = directory / f"Resona-macOS-{stem()}-universal.dmg"
-    windows = directory / f"Resona-Windows-{stem()}-x64.zip"
+    windows = directory / f"Resona-Windows-{stem()}-x64.exe"
     android = list(directory.glob(f"Resona-Android-{stem()}*.apk"))
     if len(android) != 1 or android[0].name not in (
         f"Resona-Android-{stem()}.apk", f"Resona-Android-{stem()}-preview.apk"
@@ -226,9 +241,7 @@ def verify_all(directory, image_reference=False):
         verify_checksum(path)
     verify_ipa(ipa)
     verify_macos(macos)
-    with zipfile.ZipFile(windows) as archive:
-        if json.loads(archive.read("Resona/VERSION.json")) != version():
-            raise ValueError("Windows package version differs from VERSION.json")
+    verify_windows(windows)
     for path, arch in zip(servers, ("amd64", "arm64")):
         verify_server(path, arch)
     for path in docker:
@@ -247,7 +260,7 @@ def publish(api, commit, files):
                     "- iOS 17+: unsigned arm64 IPA; re-sign before installation.\n"
                     "- macOS 14+: universal DMG, ad-hoc signed, not notarized.\n"
                     "- Android 7+: APK; a preview uses a development certificate.\n"
-                    "- Windows 10/11: x64 ZIP; extract the complete package.\n"
+                    "- Windows 10/11 x64: installer upgrades an existing installation.\n"
                     "- Linux server archives and Docker load archives: amd64 and arm64.\n"
                     f"- Docker: `ghcr.io/{api.repository.lower()}:v{stem()}`; "
                     "the exact registry digest is in the Docker images.txt attachment.\n"
