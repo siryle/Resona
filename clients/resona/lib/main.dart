@@ -456,6 +456,7 @@ class _MusicPageState extends State<MusicPage> {
   Timer? debounce;
   final search = TextEditingController();
   int tab = 0;
+  bool listening = false;
   MusicController get c => widget.controller;
   bool get desktop => Theme.of(context).platform == TargetPlatform.windows;
   @override
@@ -468,7 +469,10 @@ class _MusicPageState extends State<MusicPage> {
   void navigate(int index) {
     debounce?.cancel();
     search.clear();
-    setState(() => tab = index);
+    setState(() {
+      tab = index;
+      listening = false;
+    });
     c.navigate(
       desktop
           ? ['歌曲', '专辑', '艺术家', '喜欢', '缓存'][index]
@@ -477,8 +481,19 @@ class _MusicPageState extends State<MusicPage> {
   }
 
   void settingsPage() {
-    setState(() => tab = desktop ? -1 : 4);
+    setState(() {
+      tab = desktop ? -1 : 4;
+      listening = false;
+    });
     c.navigate('设置');
+  }
+
+  bool get listeningNow => desktop && listening && c.current != null;
+
+  void toggleListening() {
+    final expand = !listeningNow;
+    if (expand && c.section == '设置') navigate(0);
+    setState(() => listening = expand);
   }
 
   String get title => c.collectionTitle.isNotEmpty
@@ -490,14 +505,21 @@ class _MusicPageState extends State<MusicPage> {
       : destinations[tab];
   @override
   Widget build(BuildContext context) => PopScope(
-    canPop: c.album.isEmpty && c.artist.isEmpty,
+    canPop: !listeningNow && c.album.isEmpty && c.artist.isEmpty,
     onPopInvokedWithResult: (popped, _) {
-      if (!popped) c.navigate(c.section);
+      if (!popped) {
+        if (listeningNow) {
+          setState(() => listening = false);
+        } else {
+          c.navigate(c.section);
+        }
+      }
     },
     child: Shortcuts(
       shortcuts: const {
         SingleActivator(LogicalKeyboardKey.space, control: true):
             ActivateIntent(),
+        SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
       },
       child: Actions(
         actions: {
@@ -507,88 +529,111 @@ class _MusicPageState extends State<MusicPage> {
               return null;
             },
           ),
-        },
-        child: AdaptiveShell(
-          index: tab,
-          onDestination: navigate,
-          desktop: desktop,
-          sidebarFooter: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                c.offline ? '离线音乐空间' : '已连接音乐服务器',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '${c.cache?.downloads.length ?? 0} 首已下载 · 随时聆听',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
+          DismissIntent: CallbackAction<DismissIntent>(
+            onInvoke: (_) {
+              if (listeningNow) setState(() => listening = false);
+              return null;
+            },
           ),
-          player: desktop
-              ? DesktopPlayer(controller: c)
-              : c.current == null
-              ? null
-              : Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: MiniPlayer(controller: c),
-                  ),
+        },
+        child: Focus(
+          autofocus: true,
+          child: AdaptiveShell(
+            index: tab,
+            onDestination: navigate,
+            desktop: desktop,
+            sidebarFooter: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  c.offline ? '离线音乐空间' : '已连接音乐服务器',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
-          child: Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.fromLTRB(desktop ? 28 : 20, 16, 12, 8),
-                child: Row(
-                  children: [
-                    if (c.album.isNotEmpty || c.artist.isNotEmpty)
-                      IconButton(
-                        tooltip: '返回列表',
-                        onPressed: () => c.navigate(c.section),
-                        icon: const Icon(Icons.arrow_back),
-                      ),
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleLarge,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                const SizedBox(height: 8),
+                Text(
+                  '${c.cache?.downloads.length ?? 0} 首已下载 · 随时聆听',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+            player: desktop
+                ? DesktopPlayer(
+                    controller: c,
+                    expanded: listeningNow,
+                    onExpand: toggleListening,
+                  )
+                : c.current == null
+                ? null
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: MiniPlayer(controller: c),
                     ),
-                    if (desktop && c.section != '设置')
-                      SizedBox(width: 255, child: searchField()),
-                    if (c.section != '设置')
-                      IconButton(
-                        tooltip: '刷新音乐库',
-                        onPressed: c.loading ? null : () => c.load(),
-                        icon: const Icon(Icons.refresh),
-                      ),
-                    if (desktop)
-                      IconButton(
-                        tooltip: '设置与服务器登录',
-                        onPressed: settingsPage,
-                        icon: const Icon(Icons.settings_outlined),
-                      ),
-                  ],
-                ),
-              ),
-              if (c.error != null)
+                  ),
+            child: Column(
+              children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: ErrorNotice(
-                    text: c.error!,
-                    dismiss: () {
-                      c.error = null;
-                      c.notifyListeners();
-                    },
+                  padding: EdgeInsets.fromLTRB(desktop ? 28 : 20, 16, 12, 8),
+                  child: Row(
+                    children: [
+                      if (listeningNow)
+                        IconButton(
+                          tooltip: '收起播放页',
+                          onPressed: toggleListening,
+                          icon: const Icon(Icons.expand_more),
+                        )
+                      else if (c.album.isNotEmpty || c.artist.isNotEmpty)
+                        IconButton(
+                          tooltip: '返回列表',
+                          onPressed: () => c.navigate(c.section),
+                          icon: const Icon(Icons.arrow_back),
+                        ),
+                      Expanded(
+                        child: Text(
+                          listeningNow ? '正在播放' : title,
+                          style: Theme.of(context).textTheme.titleLarge,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (desktop && c.section != '设置')
+                        SizedBox(width: 255, child: searchField()),
+                      if (c.section != '设置')
+                        IconButton(
+                          tooltip: '刷新音乐库',
+                          onPressed: c.loading ? null : () => c.load(),
+                          icon: const Icon(Icons.refresh),
+                        ),
+                      if (desktop)
+                        IconButton(
+                          tooltip: '设置与服务器登录',
+                          onPressed: settingsPage,
+                          icon: const Icon(Icons.settings_outlined),
+                        ),
+                    ],
                   ),
                 ),
-              if (c.loading) const LinearProgressIndicator(minHeight: 2),
-              Expanded(
-                child: c.section == '设置' ? settings(context) : library(context),
-              ),
-            ],
+                if (c.error != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: ErrorNotice(
+                      text: c.error!,
+                      dismiss: () {
+                        c.error = null;
+                        c.notifyListeners();
+                      },
+                    ),
+                  ),
+                if (c.loading) const LinearProgressIndicator(minHeight: 2),
+                Expanded(
+                  child: listeningNow
+                      ? DesktopListening(controller: c)
+                      : c.section == '设置'
+                      ? settings(context)
+                      : library(context),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -602,6 +647,7 @@ class _MusicPageState extends State<MusicPage> {
       isDense: true,
     ),
     onChanged: (value) {
+      if (listening) setState(() => listening = false);
       debounce?.cancel();
       debounce = Timer(const Duration(milliseconds: 350), () {
         c.search = value;
@@ -1147,9 +1193,169 @@ class _MusicPageState extends State<MusicPage> {
   );
 }
 
+class DesktopListening extends StatelessWidget {
+  final MusicController controller;
+  const DesktopListening({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = controller, track = c.current!;
+    final theme = Theme.of(context), scheme = theme.colorScheme;
+    final rate = track.json['sample_rate'];
+    final metadata = [
+      track.format.toUpperCase(),
+      if (rate is num && rate > 0) '${rate / 1000} kHz',
+    ].join(' · ');
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [scheme.secondaryContainer, scheme.surface],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, bounds) {
+          final wide = bounds.maxWidth >= 620;
+          final padding = wide ? 40.0 : 20.0;
+          final poster = LayoutBuilder(
+            builder: (context, area) {
+              final side = (wide ? area.maxHeight - 180 : 110.0).clamp(
+                80.0,
+                (area.maxWidth - 24).clamp(80.0, 350.0),
+              );
+              final record = Semantics(
+                label: '${track.album} 专辑封面',
+                image: true,
+                child: Container(
+                  width: side,
+                  height: side,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [Color(0xff333333), Color(0xff101010)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x38000000),
+                        blurRadius: 18,
+                        offset: Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      for (var i = 0; i < 12; i++)
+                        Container(
+                          margin: EdgeInsets.all(8 + i * 4),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0x0cffffff)),
+                          ),
+                        ),
+                      ClipOval(
+                        child: Cover(
+                          controller: c,
+                          track: track,
+                          size: side * .72,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+              final information = Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    track.title,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    '${track.artist} · ${track.album}',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    metadata,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              );
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: area.maxHeight),
+                  child: wide
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            record,
+                            const SizedBox(height: 22),
+                            information,
+                          ],
+                        )
+                      : Row(
+                          children: [
+                            record,
+                            const SizedBox(width: 24),
+                            Expanded(child: information),
+                          ],
+                        ),
+                ),
+              );
+            },
+          );
+          final lyrics = LyricView(
+            key: ValueKey(track.id),
+            text: c.lyricText,
+            position: c.position,
+            seek: c.seek,
+            desktop: true,
+          );
+          return Padding(
+            padding: EdgeInsets.all(padding),
+            child: wide
+                ? Row(
+                    children: [
+                      Expanded(child: poster),
+                      const SizedBox(width: 40),
+                      Expanded(child: lyrics),
+                    ],
+                  )
+                : Column(
+                    children: [
+                      Expanded(child: poster),
+                      const SizedBox(height: 20),
+                      Expanded(child: lyrics),
+                    ],
+                  ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class DesktopPlayer extends StatelessWidget {
   final MusicController controller;
-  const DesktopPlayer({super.key, required this.controller});
+  final bool expanded;
+  final VoidCallback onExpand;
+  const DesktopPlayer({
+    super.key,
+    required this.controller,
+    required this.onExpand,
+    this.expanded = false,
+  });
   @override
   Widget build(BuildContext context) {
     final c = controller, track = c.current;
@@ -1160,34 +1366,55 @@ class DesktopPlayer extends StatelessWidget {
         child: Row(
           children: [
             SizedBox(
-              width: 210,
+              width: MediaQuery.sizeOf(context).width < 1000 ? 140 : 210,
               child: track == null
                   ? const Text('选一首，此刻想听的歌')
-                  : InkWell(
-                      onTap: () => showPlayer(context, c),
-                      child: Row(
-                        children: [
-                          Cover(controller: c, track: track, size: 48),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                  : Tooltip(
+                      message: expanded ? '收起播放页' : '展开海报与歌词',
+                      child: InkWell(
+                        onTap: onExpand,
+                        child: Row(
+                          children: [
+                            Stack(
+                              alignment: Alignment.bottomCenter,
                               children: [
-                                Text(
-                                  track.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  track.artist,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                Cover(controller: c, track: track, size: 48),
+                                Icon(
+                                  expanded
+                                      ? Icons.expand_more
+                                      : Icons.expand_less,
+                                  size: 16,
+                                  color: Colors.white,
+                                  shadows: const [
+                                    Shadow(
+                                      color: Colors.black54,
+                                      blurRadius: 3,
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    track.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    track.artist,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
             ),
@@ -1640,25 +1867,125 @@ List<LyricLine> parseLyrics(String text) {
       .toList();
 }
 
-class LyricView extends StatelessWidget {
+class LyricView extends StatefulWidget {
   final String text;
   final Duration position;
   final ValueChanged<double> seek;
+  final bool desktop;
   const LyricView({
     super.key,
     required this.text,
     required this.position,
     required this.seek,
+    this.desktop = false,
   });
   @override
+  State<LyricView> createState() => _LyricViewState();
+}
+
+class _LyricViewState extends State<LyricView> {
+  List<LyricLine> lines = [];
+  List<GlobalKey> keys = [];
+  int shown = -2;
+
+  @override
+  void initState() {
+    super.initState();
+    readLyrics();
+  }
+
+  void readLyrics() {
+    lines = parseLyrics(widget.text);
+    keys = List.generate(lines.length, (_) => GlobalKey());
+    shown = -2;
+  }
+
+  @override
+  void didUpdateWidget(LyricView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) readLyrics();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final lines = parseLyrics(text);
-    if (lines.isEmpty) return const Center(child: Text('暂无歌词'));
+    final scheme = Theme.of(context).colorScheme;
+    if (lines.isEmpty) {
+      return Center(
+        child: Text(
+          widget.desktop ? '纯粹聆听，也是共鸣。\n暂无歌词' : '暂无歌词',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            color: scheme.onSurfaceVariant,
+            height: 1.6,
+          ),
+        ),
+      );
+    }
     final active = lines.lastIndexWhere(
       (line) =>
           line.seconds != null &&
-          line.seconds! <= position.inMilliseconds / 1000,
+          line.seconds! <= widget.position.inMilliseconds / 1000,
     );
+    if (widget.desktop) {
+      if (active != shown) {
+        shown = active;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || active < 0 || active >= keys.length) return;
+          final target = keys[active].currentContext;
+          if (target == null) return;
+          Scrollable.ensureVisible(
+            target,
+            alignment: .5,
+            duration: MediaQuery.disableAnimationsOf(context)
+                ? Duration.zero
+                : const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+          );
+        });
+      }
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(vertical: 80),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var i = 0; i < lines.length; i++)
+              Padding(
+                key: keys[i],
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    foregroundColor: active == i
+                        ? scheme.onSurface
+                        : scheme.onSurfaceVariant,
+                    disabledForegroundColor: scheme.onSurfaceVariant,
+                    textStyle: TextStyle(
+                      fontFamily: Theme.of(
+                        context,
+                      ).textTheme.bodyLarge?.fontFamily,
+                      fontFamilyFallback: Theme.of(
+                        context,
+                      ).textTheme.bodyLarge?.fontFamilyFallback,
+                      fontSize: 22,
+                      height: 1.5,
+                      fontWeight: active == i
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                    ),
+                  ),
+                  onPressed: lines[i].seconds == null
+                      ? null
+                      : () => widget.seek(
+                          lines[i].seconds!.clamp(0, double.infinity),
+                        ),
+                  child: Text(lines[i].text),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
     return ListView.builder(
       itemCount: lines.length,
       itemBuilder: (context, i) => ListTile(
@@ -1672,7 +1999,7 @@ class LyricView extends StatelessWidget {
         ),
         onTap: lines[i].seconds == null
             ? null
-            : () => seek(lines[i].seconds!.clamp(0, double.infinity)),
+            : () => widget.seek(lines[i].seconds!.clamp(0, double.infinity)),
       ),
     );
   }

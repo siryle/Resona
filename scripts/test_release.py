@@ -185,6 +185,32 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(api.writes[0][2]["target_commitish"], "commit")
         self.assertFalse(api.release["draft"])
 
+    def test_windows_requires_an_x64_installer_with_the_release_version(self):
+        quad = f'{release.version()["version"]}.{release.version()["build"]}'.encode('utf-16le')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'Resona-Windows-test-x64.exe'
+            header = bytearray(128)
+            header[:2] = b'MZ'
+            header[0x3C:0x40] = struct.pack('<I', 128)
+            valid = bytes(header) + b'PE\0\0' + struct.pack('<H', 0x8664) + quad
+            for binary in (
+                valid,
+                b'',
+                b'MZ',
+                valid[:0x3C] + struct.pack('<I', 0xFFFFFFF0) + valid[0x40:],
+                valid[:128] + b'bad!' + valid[132:],
+                valid[:132] + struct.pack('<H', 0x14C) + quad,
+                valid[:134] + b'missing-version',
+            ):
+                path.write_bytes(binary)
+                path.with_suffix('.exe.sha256').write_text(
+                    hashlib.sha256(binary).hexdigest() + '  ' + path.name)
+                if binary == valid:
+                    release.verify_windows(path)
+                else:
+                    with self.assertRaises(ValueError):
+                        release.verify_windows(path)
+
     def test_checksum_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "test.ipa"

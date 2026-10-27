@@ -9,6 +9,9 @@ The existing Swift clients remain the iOS / macOS implementation.
   structure, with a mini-player above the phone tab bar and a navigation rail on
   tablets. Windows follows the macOS sidebar, search header and persistent
   playback footer. Supports resizing, rotation, text scaling and light / dark themes.
+- Windows opens playback details within the main workspace: a record and album
+  information beside synchronized, clickable lyrics, with the sidebar and
+  playback footer still available. Narrow windows stack artwork above lyrics.
 - Launch directly into music, with server connection in Settings. Tokenless
   account identity restores local audio after logout; expired credentials or an
   unreachable server never block access to cached music.
@@ -37,7 +40,11 @@ The existing Swift clients remain the iOS / macOS implementation.
 Use Flutter **3.47.8** stable, JDK 17 and Android SDK for Android, or Visual Studio
 with the Desktop development with C++ workload for Windows. Android requires
 Android 7.0 / API 24 or newer. Windows requires Windows 10 / 11 x64 and the
-Microsoft Visual C++ 2015–2022 x64 runtime. Extract the entire ZIP, not just the EXE.
+Microsoft Visual C++ runtime, which is included in the installer. Run the EXE
+installer to install or upgrade Resona in its existing location. Login, downloads
+and playback state remain in the user's application data directory. Previously
+extracted ZIP copies are not registered installations; install once with the EXE
+and remove the extracted program files when no longer needed.
 See the official [Android setup](https://docs.flutter.dev/platform-integration/android/setup)
 and [Windows setup](https://docs.flutter.dev/platform-integration/windows/setup).
 
@@ -53,6 +60,14 @@ python3 scripts/build-clients.py android
 # On Windows:
 python scripts/build-clients.py windows
 ```
+
+Windows packaging also requires Inno Setup **6.7.1** or newer. The installer has
+a stable application ID, a Start menu entry, an optional desktop shortcut and an
+uninstaller. It reuses the previous installation directory, supports same-version
+repair and rejects downgrades. Its wizard uses the compiler's bundled English
+messages. On disposable GitHub Actions runners, packaging tests an older
+registered fixture followed by an upgrade without a directory argument, verifies
+installed files, tests repair and downgrade rejection, and uninstalls the app.
 
 `VERSION.json` is the only release version source. The script passes its version
 and build to Flutter, verifies the APK manifest / EXE version and writes versioned

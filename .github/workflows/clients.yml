@@ -136,7 +136,9 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
-      - name: Test, Build and Verify Windows Package
+      - name: Install Inno Setup
+        run: choco install innosetup --version=6.7.1 --no-progress -y --limit-output
+      - name: Test, Build and Verify Windows Installer and Upgrade
         run: python scripts/build-clients.py windows
       - uses: actions/upload-artifact@v7.0.2
         with:
