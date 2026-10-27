@@ -7,6 +7,11 @@ struct LyricLine: Identifiable, Equatable {
 }
 
 enum Lyrics {
+    static func playbackLines(_ lines: [LyricLine], at position: Double) -> [LyricLine] {
+        guard let index = lines.lastIndex(where: { $0.time <= position }) else { return [] }
+        return Array(lines[index...].prefix(2))
+    }
+
     static func parse(_ text: String) -> [LyricLine] {
         let pattern = #"\[(\d+):(\d{2})(?:[\.:](\d{1,3}))?\]"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }

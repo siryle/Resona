@@ -13,6 +13,14 @@ struct LyricsTests {
         assert(Lyrics.parse("plain text without timestamps").isEmpty)
         assert(Lyrics.parse("[offset:-2000]\n[00:01]test")[0].time == 0)
         assert(Lyrics.parse("[00:02.5]x")[0].time == 2.5)
-        print("Lyrics parser tests passed")
+        assert(Lyrics.playbackLines([], at: 10).isEmpty)
+        assert(Lyrics.playbackLines(lines, at: 0).isEmpty)
+        assert(Lyrics.playbackLines(lines, at: lines[0].time) == Array(lines[0...1]))
+        assert(Lyrics.playbackLines(lines, at: 2) == Array(lines[0...1]))
+        assert(Lyrics.playbackLines(lines, at: lines[1].time) == Array(lines[1...2]))
+        assert(Lyrics.playbackLines(lines, at: lines[2].time) == [lines[2]])
+        assert(Lyrics.playbackLines(lines, at: 100) == [lines[2]])
+        assert(Lyrics.playbackLines(lines, at: 1.5) == Array(lines[0...1]), "Seeking backward must restore the active line")
+        print("Lyrics parser and playback excerpt tests passed")
     }
 }

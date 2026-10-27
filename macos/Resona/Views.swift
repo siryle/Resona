@@ -23,6 +23,7 @@ struct DesktopView: View {
     @State private var album: Album?
     @State private var artist: String?
     @State private var showQueue = false
+    @State private var showLibraryMenu = false
 
     private var tracks: [Track] {
         let source = section == .downloads ? library.libraryDownloads : library.tracks
@@ -50,7 +51,7 @@ struct DesktopView: View {
                     if showQueue { queue.frame(width: 290).transition(.move(edge: .trailing)) }
                 }
                 Divider()
-                playerBar
+                DesktopPlaybackBar(showingSettings: $showingSettings, showQueue: $showQueue)
             }.background(Theme.paper)
         }.foregroundStyle(Theme.ink)
         .alert("Resona", isPresented: Binding(get: { library.error != nil || player.error != nil }, set: { if !$0 { library.error = nil; player.error = nil } })) {
@@ -67,13 +68,44 @@ struct DesktopView: View {
                 Text("Resona.").font(.system(size: 26, weight: .semibold, design: .rounded))
             }.padding(.top, 44).padding(.horizontal, 10)
             Text("你的音乐空间").font(.caption).foregroundStyle(Theme.muted).padding(.horizontal, 12)
-            Picker("音乐库", selection: Binding(get: { library.libraryScope }, set: { scope in
-                album = nil; artist = nil; query = ""
-                Task { await library.selectLibrary(scope) }
-            })) {
-                Text("本地音乐库").tag("local")
-                Text("网盘音乐库").tag("cloud")
-            }.labelsHidden().padding(.horizontal, 10)
+            Button { showLibraryMenu.toggle() } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: library.libraryScope == "local" ? "internaldrive" : "cloud")
+                        .frame(width: 24, height: 20, alignment: .center)
+                    Text(library.libraryScope == "local" ? "本地音乐库" : "网盘音乐库")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium))
+                }
+                .font(.system(size: 14))
+                .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .leading)
+                .padding(.horizontal, 14)
+                .contentShape(Rectangle())
+                .foregroundStyle(Theme.accent)
+            }.buttonStyle(.plain).help("切换音乐库")
+                .accessibilityLabel("音乐库")
+                .accessibilityValue(library.libraryScope == "local" ? "本地音乐库" : "网盘音乐库")
+            .popover(isPresented: $showLibraryMenu, arrowEdge: .trailing) {
+                VStack(spacing: 4) {
+                    ForEach(["local", "cloud"], id: \.self) { scope in
+                        Button {
+                            showLibraryMenu = false
+                            guard scope != library.libraryScope else { return }
+                            album = nil; artist = nil; query = ""
+                            Task { await library.selectLibrary(scope) }
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: scope == "local" ? "internaldrive" : "cloud")
+                                    .frame(width: 24, height: 20)
+                                Text(scope == "local" ? "本地音乐库" : "网盘音乐库")
+                                Spacer(minLength: 8)
+                                if library.libraryScope == scope { Image(systemName: "checkmark") }
+                            }.font(.system(size: 14)).padding(.horizontal, 12).frame(height: 40)
+                                .background(library.libraryScope == scope ? Theme.sage : .clear, in: RoundedRectangle(cornerRadius: 7))
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }
+                }.padding(8).frame(width: 220).foregroundStyle(Theme.ink)
+            }
             VStack(spacing: 6) {
                 ForEach(Section.allCases, id: \.self) { item in
                     Button {
@@ -108,7 +140,8 @@ struct DesktopView: View {
             } else if !showingSettings && (album != nil || artist != nil) {
                 Button { album = nil; artist = nil } label: { Image(systemName: "chevron.left") }.help("返回")
             }
-            Text(player.expanded ? "正在播放" : title).font(.headline)
+            Text(player.expanded ? "正在播放" : title)
+                .font(.system(size: 24, weight: .semibold)).lineLimit(1)
             Spacer()
             if library.busy { ProgressView().controlSize(.small) }
             if !showingSettings { HStack {
@@ -129,7 +162,6 @@ struct DesktopView: View {
                     if let album { Artwork(path: album.artwork).frame(width: 130, height: 130) }
                     VStack(alignment: .leading, spacing: 12) {
                         Text("YOUR PERSONAL MUSIC UNIVERSE").font(.system(size: 9, weight: .medium)).tracking(3).foregroundStyle(Theme.muted)
-                        Text(title).font(.system(size: 34, weight: .medium, design: .serif))
                         Text(library.offline ? "已下载的旋律，始终在身边。连接服务器请前往设置。" : "让每一份热爱，产生共鸣。")
                             .font(.callout).foregroundStyle(Theme.muted)
                     }
@@ -161,9 +193,9 @@ struct DesktopView: View {
                     }
                 } else {
                     HStack(spacing: 18) {
-                        Button { playAll() } label: { Label("全部播放", systemImage: "play.fill") }.buttonStyle(.borderedProminent)
-                        Button { player.append(tracks, session: library.session) } label: { Label("加入播放列表", systemImage: "text.badge.plus") }
-                        Button { playAll(shuffle: true) } label: { Label("随机播放", systemImage: "shuffle") }
+                        libraryAction("全部播放", symbol: "play.fill", primary: true) { playAll() }
+                        libraryAction("加入播放列表", symbol: "text.badge.plus") { player.append(tracks, session: library.session) }
+                        libraryAction("随机播放", symbol: "shuffle") { playAll(shuffle: true) }
                         Spacer()
                         Text("\(tracks.count) 首").font(.caption).foregroundStyle(Theme.muted)
                     }.disabled(tracks.isEmpty)
@@ -180,6 +212,23 @@ struct DesktopView: View {
                 }
             }.padding(30)
         }
+    }
+
+    private func libraryAction(_ title: String, symbol: String, primary: Bool = false,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 14, weight: .medium))
+                .padding(.horizontal, 20).frame(minWidth: 128, minHeight: 40)
+                .foregroundStyle(primary ? Color.white : Theme.ink)
+                .background(primary ? Theme.accent : .white.opacity(0.7),
+                            in: RoundedRectangle(cornerRadius: 9))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9)
+                        .strokeBorder(primary ? .clear : Theme.ink.opacity(0.14))
+                }
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).opacity(tracks.isEmpty ? 0.45 : 1)
     }
 
     private func playAll(shuffle: Bool = false) {
@@ -242,56 +291,6 @@ struct DesktopView: View {
                 }.onAppear { proxy.scrollTo(player.current?.id, anchor: .center) }
             }
         }.padding(18).background(.regularMaterial)
-    }
-
-    private var playerBar: some View {
-        HStack(spacing: 22) {
-            if let track = player.current {
-                let favorite = library.tracks.first(where: { $0.id == track.id }) ?? track
-                Button { showingSettings = false; player.expanded.toggle() } label: {
-                    HStack(spacing: 12) {
-                        Artwork(path: track.artwork).frame(width: 50, height: 50)
-                            .overlay(alignment: .bottom) { Image(systemName: player.expanded ? "chevron.down" : "chevron.up").font(.caption.bold()).foregroundStyle(.white).shadow(radius: 3) }
-                        VStack(alignment: .leading, spacing: 5) { Text(track.title).font(.headline).lineLimit(1); Text(track.artist).font(.caption).foregroundStyle(Theme.muted).lineLimit(1) }
-                    }.frame(width: 210, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain).help("展开海报与歌词")
-                Button {
-                    Task {
-                        if let updated = await library.favorite(favorite), player.current?.id == updated.id {
-                            player.current = updated
-                        }
-                    }
-                } label: {
-                    Image(systemName: favorite.favorite ? "heart.fill" : "heart")
-                        .foregroundStyle(favorite.favorite ? Theme.accent : Theme.muted)
-                }
-                .buttonStyle(.borderless)
-                .disabled(library.offline || library.session == nil)
-                .help(favorite.favorite ? "取消喜欢" : "喜欢")
-                .accessibilityLabel(favorite.favorite ? "取消喜欢" : "喜欢")
-            } else {
-                Label("选一首，此刻想听的歌", systemImage: "opticaldisc").font(.caption).foregroundStyle(Theme.muted).frame(width: 210)
-            }
-            VStack(spacing: 10) {
-                HStack(spacing: 25) {
-                    Button { player.cycleMode() } label: { Image(systemName: player.mode.symbol).foregroundStyle(player.mode == .sequential ? Theme.muted : Theme.accent) }.help(player.mode.title + "，点击切换").accessibilityLabel(player.mode.title)
-                    Button { player.previous() } label: { Image(systemName: "backward.end.fill") }.help("上一首")
-                    Button { player.toggle() } label: { Image(systemName: player.playing ? "pause.fill" : "play.fill").frame(width: 34, height: 34).background(Theme.ink, in: Circle()).foregroundStyle(Theme.paper) }.help(player.playing ? "暂停" : "播放")
-                    Button { player.next() } label: { Image(systemName: "forward.end.fill") }.help("下一首")
-                }.buttonStyle(.plain)
-                HStack(spacing: 8) {
-                    Text(clock(player.position))
-                    Slider(value: Binding(get: { min(player.position, max(1, player.duration)) }, set: { player.seek($0) }), in: 0...max(1, player.duration)).controlSize(.mini).accessibilityLabel("播放进度")
-                    Text(clock(player.duration))
-                }.font(.system(size: 9).monospacedDigit()).foregroundStyle(Theme.muted)
-            }.disabled(player.current == nil)
-            HStack(spacing: 10) {
-                Image(systemName: "speaker.wave.2").font(.caption)
-                Slider(value: $player.volume, in: 0...1).frame(width: 65).controlSize(.mini).accessibilityLabel("音量")
-                Button { withAnimation(.easeInOut(duration: 0.2)) { showQueue.toggle() } } label: { Image(systemName: "list.bullet") }
-                    .buttonStyle(.plain).foregroundStyle(showQueue ? Theme.accent : Theme.ink).help("播放列表 · \(player.queue.count) 首")
-            }
-        }.padding(.horizontal, 24).padding(.vertical, 16).frame(height: 94).background(.regularMaterial)
     }
 }
 
@@ -442,7 +441,7 @@ struct ServerSettings: View {
                 }.padding(.horizontal, 4)
             }
             .font(.system(size: 14)).foregroundStyle(Theme.ink).controlSize(.large)
-            .frame(maxWidth: 760).padding(32).frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(30)
         }.background(Theme.paper).task { await cache.refreshSize() }
     }
 
