@@ -24,15 +24,35 @@ struct DesktopView: View {
     @State private var artist: String?
     @State private var showQueue = false
     @State private var showLibraryMenu = false
+    @State private var selecting = false
+    @State private var selection = TrackSelection()
+    @State private var showSelectionFilters = false
+    @StateObject private var batch = TrackBatchActions()
 
-    private var tracks: [Track] {
-        let source = section == .downloads ? library.libraryDownloads : library.tracks
+    private var collectionTracks: [Track] {
+        let source: [Track]
+        if section == .downloads {
+            let current = Dictionary(library.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            source = library.libraryDownloads.map { current[$0.id] ?? $0 }
+        } else { source = library.tracks }
         return source.filter {
             (section != .favorites || $0.favorite) &&
             (album == nil || ($0.album == album?.title && $0.albumArtist == album?.artist)) &&
-            (artist == nil || $0.artist == artist || $0.albumArtist == artist) &&
-            (query.isEmpty || "\($0.title) \($0.artist) \($0.album)".localizedCaseInsensitiveContains(query))
+            (artist == nil || $0.artist == artist || $0.albumArtist == artist)
         }
+    }
+    private var tracks: [Track] {
+        selection.filtered(collectionTracks, downloadedIDs: Set(library.downloaded.map(\.id)))
+    }
+    private var selectedTracks: [Track] {
+        var unfiltered = selection
+        unfiltered.query = ""
+        unfiltered.favoritesOnly = false
+        unfiltered.downloadsOnly = false
+        return selection.selected(in: unfiltered.filtered(collectionTracks, downloadedIDs: []))
+    }
+    private var songCollection: Bool {
+        !showingSettings && !player.expanded && !(section == .albums && album == nil) && !(section == .artists && artist == nil)
     }
     private var title: String { showingSettings ? "设置" : album?.title ?? artist ?? section.rawValue }
 
@@ -51,13 +71,27 @@ struct DesktopView: View {
                     if showQueue { queue.frame(width: 290).transition(.move(edge: .trailing)) }
                 }
                 Divider()
-                DesktopPlaybackBar(showingSettings: $showingSettings, showQueue: $showQueue)
+                ZStack {
+                    DesktopPlaybackBar(showingSettings: $showingSettings, showQueue: $showQueue)
+                        .opacity(selecting && songCollection ? 0 : 1)
+                        .disabled(selecting && songCollection)
+                        .allowsHitTesting(!(selecting && songCollection))
+                        .accessibilityHidden(selecting && songCollection)
+                    if selecting && songCollection { selectionActions }
+                }
             }.background(Theme.paper)
         }.foregroundStyle(Theme.ink)
         .onExitCommand {
+            cancelSelection()
             player.expanded = false
             showQueue = false
         }
+        .onChange(of: section) { _, _ in resetCollection() }
+        .onChange(of: album?.id) { _, _ in resetCollection() }
+        .onChange(of: artist) { _, _ in resetCollection() }
+        .onChange(of: library.libraryScope) { _, _ in resetCollection() }
+        .onChange(of: showingSettings) { _, value in if value { cancelSelection() } }
+        .onChange(of: player.expanded) { _, value in if value { cancelSelection() } }
         .alert("Resona", isPresented: Binding(get: { library.error != nil || player.error != nil }, set: { if !$0 { library.error = nil; player.error = nil } })) {
             Button("好", role: .cancel) { library.error = nil; player.error = nil }
         } message: { Text(player.error ?? library.error ?? "") }
@@ -148,10 +182,10 @@ struct DesktopView: View {
                 .font(.system(size: 24, weight: .semibold)).lineLimit(1)
             Spacer()
             if library.busy { ProgressView().controlSize(.small) }
-            if !showingSettings { HStack {
+            if !showingSettings && !songCollection && !selecting { HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted)
                 TextField("搜索歌曲、专辑、艺术家", text: $query).textFieldStyle(.plain)
-                    .onSubmit { player.expanded = false; section = .tracks; album = nil; artist = nil }
+                    .onSubmit { player.expanded = false; selection.query = query }
                 if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) }
             }.padding(10).frame(width: 255).background(.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 9)) }
             Button { Task { await library.refresh() } } label: { Image(systemName: "arrow.clockwise") }.disabled(library.busy).help("刷新音乐库")
@@ -162,14 +196,10 @@ struct DesktopView: View {
     private var collection: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                HStack(spacing: 24) {
-                    if let album { Artwork(path: album.artwork).frame(width: 130, height: 130) }
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("YOUR PERSONAL MUSIC UNIVERSE").font(.system(size: 9, weight: .medium)).tracking(3).foregroundStyle(Theme.muted)
-                        Text(library.offline ? "已下载的旋律，始终在身边。连接服务器请前往设置。" : "让每一份热爱，产生共鸣。")
-                            .font(.callout).foregroundStyle(Theme.muted)
-                    }
-                    Spacer()
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("YOUR PERSONAL MUSIC UNIVERSE").font(.system(size: 9, weight: .medium)).tracking(3).foregroundStyle(Theme.muted)
+                    Text(library.offline ? "已下载的旋律，始终在身边。连接服务器请前往设置。" : "让每一份热爱，产生共鸣。")
+                        .font(.callout).foregroundStyle(Theme.muted)
                 }.padding(.vertical, 12)
                 if section == .albums && album == nil {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 24)], spacing: 28) {
@@ -196,15 +226,37 @@ struct DesktopView: View {
                         }
                     }
                 } else {
-                    HStack(spacing: 18) {
-                        libraryAction("全部播放", symbol: "play.fill", primary: true) { playAll() }
-                        libraryAction("加入播放列表", symbol: "text.badge.plus") { player.append(tracks, session: library.session) }
-                        libraryAction("随机播放", symbol: "shuffle") { playAll(shuffle: true) }
-                        Spacer()
-                        Text("\(tracks.count) 首").font(.caption).foregroundStyle(Theme.muted)
-                    }.disabled(tracks.isEmpty)
+                    if selecting {
+                        selectionToolbar
+                    } else {
+                        VStack(spacing: 16) {
+                            HStack(spacing: 10) {
+                                Button { playAll() } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "play.fill").font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(.white).frame(width: 28, height: 28).background(Theme.accent, in: Circle())
+                                        Text("全部播放").font(.system(size: 14, weight: .medium))
+                                    }
+                                }.disabled(tracks.isEmpty).accessibilityLabel("全部播放")
+                                Text("（共 \(tracks.count) 首）").font(.system(size: 12)).foregroundStyle(Theme.ink.opacity(0.65))
+                                Spacer()
+                                Button { selecting = true; showQueue = false } label: { Image(systemName: "checklist").collectionIcon() }
+                                    .accessibilityLabel("选歌").help("选歌").disabled(tracks.isEmpty)
+                                Menu {
+                                    Picker("排序", selection: $selection.sortOrder) {
+                                        ForEach(TrackSelection.SortOrder.allCases, id: \.self) { order in Text(order.rawValue).tag(order) }
+                                    }
+                                } label: { Image(systemName: "arrow.up.arrow.down").foregroundStyle(Theme.ink) }
+                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().collectionIcon()
+                                    .help("歌曲排序").accessibilityLabel("歌曲排序")
+                                Button { playAll(shuffle: true) } label: { Image(systemName: "shuffle").collectionIcon() }
+                                    .accessibilityLabel("随机播放").help("随机播放").disabled(tracks.isEmpty)
+                            }.buttonStyle(.plain)
+                            trackSearchControls
+                        }
+                    }
                     if tracks.isEmpty {
-                        ContentUnavailableView("等待下一次共鸣", systemImage: "opticaldisc", description: Text("在设置中连接服务器并下载音乐，之后可离线播放。"))
+                        ContentUnavailableView(collectionTracks.isEmpty ? "等待下一次共鸣" : "没有匹配的歌曲", systemImage: collectionTracks.isEmpty ? "opticaldisc" : "magnifyingglass", description: Text(collectionTracks.isEmpty ? "在设置中连接服务器并下载音乐，之后可离线播放。" : "试试其他关键词或取消筛选，已选歌曲会保留。"))
                             .frame(maxWidth: .infinity).padding(.top, 55)
                     }
                     LazyVStack(spacing: 0) {
@@ -218,21 +270,97 @@ struct DesktopView: View {
         }
     }
 
-    private func libraryAction(_ title: String, symbol: String, primary: Bool = false,
-                               action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol)
-                .font(.system(size: 14, weight: .medium))
-                .padding(.horizontal, 20).frame(minWidth: 128, minHeight: 40)
-                .foregroundStyle(primary ? Color.white : Theme.ink)
-                .background(primary ? Theme.accent : .white.opacity(0.7),
-                            in: RoundedRectangle(cornerRadius: 9))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 9)
-                        .strokeBorder(primary ? .clear : Theme.ink.opacity(0.14))
+    private var selectionActions: some View {
+        let chosen = selectedTracks
+        let downloadedIDs = Set(library.downloaded.map(\.id))
+        return HStack(spacing: 10) {
+            Text("已选 \(chosen.count) 首").font(.callout).monospacedDigit()
+            if batch.busy {
+                ProgressView().controlSize(.small)
+                Text("\(batch.completed) / \(batch.total)").font(.caption).monospacedDigit()
+            }
+            Spacer()
+            Button { runBatch(.download) } label: { Image(systemName: "arrow.down.to.line").collectionIcon() }
+                .help("下载所选歌曲").accessibilityLabel("下载所选歌曲")
+                .disabled(batch.busy || library.session == nil || library.offline || chosen.isEmpty ||
+                          chosen.allSatisfy { downloadedIDs.contains($0.id) })
+            Button { runBatch(.favorite) } label: { Image(systemName: "heart").collectionIcon() }
+                .help("喜欢所选歌曲").accessibilityLabel("喜欢所选歌曲")
+                .disabled(batch.busy || library.session == nil || library.offline || chosen.isEmpty || chosen.allSatisfy(\.favorite))
+            Button {
+                player.append(chosen, session: library.session)
+                cancelSelection()
+            } label: { Image(systemName: "text.badge.plus").collectionIcon() }
+                .help("加入播放列表").accessibilityLabel("加入播放列表")
+                .disabled(batch.busy || chosen.isEmpty)
+        }.buttonStyle(.plain).padding(.horizontal, 30).frame(height: 82).background(.regularMaterial)
+    }
+
+    private func runBatch(_ action: TrackBatchActions.Action) {
+        let chosen = selectedTracks
+        Task { _ = await batch.run(action, tracks: chosen, library: library, player: player) }
+    }
+
+    private var selectionToolbar: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 16) {
+                Button { selection.toggleAll(in: tracks) } label: {
+                    Label(selection.allSelected(in: tracks) ? "取消全选" : "全选",
+                          systemImage: selection.allSelected(in: tracks) ? "checkmark.circle.fill" :
+                            (tracks.contains { selection.selectedIDs.contains($0.id) } ? "minus.circle.fill" : "circle"))
+                }.buttonStyle(.plain).disabled(tracks.isEmpty || batch.busy)
+                    .accessibilityLabel("全选当前结果")
+                    .accessibilityValue(selection.allSelected(in: tracks) ? "已全选" : "未全选")
+                Text("已选 \(selectedTracks.count) 首").font(.caption).foregroundStyle(Theme.ink.opacity(0.7))
+                Spacer()
+                Button("完成") { cancelSelection() }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+                    .help("退出选歌，不修改播放列表")
+            }
+            trackSearchControls
+        }
+    }
+
+    private var trackSearchControls: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(Theme.ink.opacity(0.6))
+                TextField("搜索歌曲 / 专辑 / 歌手", text: $selection.query).textFieldStyle(.plain).accessibilityLabel("搜索歌曲")
+                if !selection.query.isEmpty {
+                    Button { selection.query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel("清除歌曲搜索")
                 }
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain).opacity(tracks.isEmpty ? 0.45 : 1)
+            }.padding(10).background(.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 9))
+            Button { showSelectionFilters.toggle() } label: {
+                Image(systemName: "line.3.horizontal.decrease").collectionIcon()
+            }.buttonStyle(.plain).foregroundStyle(selection.hasFilters ? Theme.accent : Theme.ink)
+                .help("筛选歌曲").accessibilityLabel("筛选歌曲")
+                .popover(isPresented: $showSelectionFilters) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("筛选歌曲").font(.headline)
+                        Picker("搜索范围", selection: $selection.searchField) {
+                            ForEach(TrackSelection.SearchField.allCases, id: \.self) { field in Text(field.rawValue).tag(field) }
+                        }
+                        Toggle("仅我喜欢的", isOn: $selection.favoritesOnly)
+                        Toggle("仅已下载", isOn: $selection.downloadsOnly)
+                        Button("重置筛选") {
+                            selection.searchField = .all
+                            selection.favoritesOnly = false
+                            selection.downloadsOnly = false
+                        }.disabled(!selection.hasFilters)
+                    }.padding(20).frame(width: 260).tint(Theme.accent)
+                }
+        }
+    }
+
+    private func cancelSelection() {
+        selecting = false
+        selection.selectedIDs.removeAll()
+        showSelectionFilters = false
+    }
+
+    private func resetCollection() {
+        cancelSelection()
+        selection = TrackSelection()
     }
 
     private func playAll(shuffle: Bool = false) {
@@ -242,36 +370,60 @@ struct DesktopView: View {
 
     private func trackRow(_ track: Track, index: Int, queue: [Track]) -> some View {
         HStack(spacing: 14) {
-            Button { player.play(track, queue: queue, session: library.session) } label: {
+            Button {
+                if selecting { selection.toggle(track.id) }
+                else { player.play(track, queue: queue, session: library.session) }
+            } label: {
                 HStack(spacing: 14) {
-                    Text(player.current?.id == track.id && player.playing ? "♫" : String(format: "%02d", index + 1)).font(.caption.monospacedDigit()).frame(width: 24)
+                    if selecting {
+                        Image(systemName: selection.selectedIDs.contains(track.id) ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 20)).frame(width: 24)
+                            .foregroundStyle(selection.selectedIDs.contains(track.id) ? Theme.accent : Theme.ink.opacity(0.6))
+                    } else {
+                        if player.current?.id == track.id && player.playing {
+                            Image(systemName: "waveform").font(.caption).frame(width: 24)
+                        } else {
+                            Text(String(format: "%02d", index + 1)).font(.caption.monospacedDigit()).frame(width: 24)
+                        }
+                    }
                     Artwork(path: track.artwork).frame(width: 44, height: 44)
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(track.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                        Text(track.artist).font(.caption).foregroundStyle(Theme.muted).lineLimit(1)
+                        Text(track.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                        HStack(spacing: 8) {
+                            Text(track.format.uppercased() + (track.bitrate > 0 ? " \(track.bitrate / 1000)K" : ""))
+                                .font(.system(size: 10, weight: .medium)).padding(.horizontal, 5).padding(.vertical, 2)
+                                .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.ink.opacity(0.2)) }
+                            Text("\(track.artist) · \(track.album)").font(.caption).lineLimit(1)
+                        }.foregroundStyle(Theme.ink.opacity(0.65))
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                    Text(track.album).font(.caption).foregroundStyle(Theme.muted).lineLimit(1).frame(maxWidth: 180, alignment: .leading)
                     Text(clock(track.duration)).font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)
                 }.contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("播放 \(track.title)")
-            Button { Task { await library.favorite(track) } } label: {
-                Image(systemName: track.favorite ? "heart.fill" : "heart").foregroundStyle(Theme.accent)
-            }.buttonStyle(.borderless).disabled(library.offline).help("收藏")
-            Menu {
-                Button("加入播放列表") { player.append([track], session: library.session) }
-                if library.downloaded.contains(where: { $0.id == track.id }) {
-                    Text("已下载 · 支持离线播放")
-                    Button("删除下载", role: .destructive) {
-                        if player.current?.id == track.id { player.stop() }
-                        library.removeDownload(track)
+            }.buttonStyle(.plain).disabled(selecting && batch.busy)
+                .accessibilityLabel(selecting ? "\(selection.selectedIDs.contains(track.id) ? "取消选择" : "选择") \(track.title)" : "播放 \(track.title)")
+                .accessibilityValue(selecting ? (selection.selectedIDs.contains(track.id) ? "已选择" : "未选择") : "")
+            if !selecting {
+                Button { Task { await library.favorite(track) } } label: {
+                    Image(systemName: track.favorite ? "heart.fill" : "heart").foregroundStyle(Theme.accent)
+                }.buttonStyle(.borderless).disabled(library.offline).help("收藏")
+                Menu {
+                    Button("加入播放列表") { player.append([track], session: library.session) }
+                    if library.downloaded.contains(where: { $0.id == track.id }) {
+                        Text("已下载 · 支持离线播放")
+                        Button("删除下载", role: .destructive) {
+                            if player.current?.id == track.id { player.stop() }
+                            library.removeDownload(track)
+                        }
+                    } else {
+                        Button("下载到本机") { Task { await library.download(track) } }
+                            .disabled(library.session == nil || library.offline || library.downloading.contains(track.id))
                     }
-                } else {
-                    Button("下载到本机") { Task { await library.download(track) } }
-                        .disabled(library.session == nil || library.offline || library.downloading.contains(track.id))
-                }
-            } label: { Image(systemName: library.downloading.contains(track.id) ? "arrow.down.circle.dotted" : "ellipsis") }
-                .menuStyle(.borderlessButton).frame(width: 24).help("下载与播放操作")
-        }.padding(.vertical, 12).foregroundStyle(player.current?.id == track.id ? Theme.accent : Theme.ink)
+                } label: { Image(systemName: library.downloading.contains(track.id) ? "arrow.down.circle.dotted" : "ellipsis") }
+                    .menuStyle(.borderlessButton).frame(width: 24).help("下载与播放操作")
+            }
+        }.padding(.horizontal, 12).padding(.vertical, 14)
+            .background((selecting ? selection.selectedIDs.contains(track.id) : player.current?.id == track.id) ? Theme.sage : .clear,
+                        in: RoundedRectangle(cornerRadius: 9))
+            .foregroundStyle(player.current?.id == track.id ? Theme.accent : Theme.ink)
     }
 
     private var queue: some View {
@@ -295,6 +447,15 @@ struct DesktopView: View {
                 }.onAppear { proxy.scrollTo(player.current?.id, anchor: .center) }
             }
         }.padding(18).background(.regularMaterial)
+    }
+}
+
+private extension View {
+    func collectionIcon() -> some View {
+        font(.system(size: 15, weight: .regular)).frame(width: 34, height: 34)
+            .background(.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 7))
+            .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.ink.opacity(0.12)) }
+            .contentShape(Rectangle())
     }
 }
 
@@ -366,10 +527,27 @@ struct ListeningView: View {
 
 struct ServerSettings: View {
     @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var desktop: DesktopIntegration
     @ObservedObject private var cache = PlaybackCache.shared
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                settingsSection("歌词与菜单栏") {
+                    Toggle("桌面歌词", isOn: $desktop.desktopLyricsEnabled)
+                    explanation("在桌面上单行显示当前歌词，可拖动位置。")
+                    Toggle("锁定桌面歌词（鼠标穿透）", isOn: $desktop.lyricsLocked)
+                        .disabled(!desktop.desktopLyricsEnabled)
+                    HStack(spacing: 16) {
+                        Text("歌词字号")
+                        Slider(value: $desktop.fontSize, in: 18...48, step: 1)
+                            .accessibilityLabel("桌面歌词字号")
+                        Text("\(Int(desktop.fontSize))").monospacedDigit().frame(width: 28)
+                    }.disabled(!desktop.desktopLyricsEnabled)
+                    Divider()
+                    Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
+                    Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
+                    explanation("歌词和播控独立显示，默认歌词在左、播控在右。按住 ⌘ 拖动可分别调整位置，系统会记住排列。关闭播控后仍保留波形入口，可打开播放面板。")
+                }.toggleStyle(.switch)
                 settingsSection("服务器") {
                     if let session = library.session {
                         Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 16) {

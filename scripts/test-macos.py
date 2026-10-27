@@ -25,6 +25,22 @@ def main():
         def log_message(self, *args):
             pass
 
+        def do_GET(self):
+            track = json.loads((build / "track.json").read_text())
+            authorized = self.headers.get("Authorization") == "Bearer test-session"
+            prefix = f"/api/v1/tracks/{track['id']}/"
+            if authorized and self.path == prefix + "stream":
+                data = (build / "song.mp3").read_bytes()
+            elif authorized and self.path == prefix + "lyrics":
+                data = b'[00:00]Downloaded lyric'
+            else:
+                self.send_error(401 if not authorized else 404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_PUT(self):
             track = json.loads((build / "track.json").read_text())
             authorized = self.headers.get("Authorization") == "Bearer test-session"

@@ -22,7 +22,7 @@ struct ResonaDesktopApp: App {
     var body: some Scene {
         Window("Resona", id: "main") {
             DesktopView(showingSettings: $showingSettings)
-                .environmentObject(library).environmentObject(player)
+                .environmentObject(library).environmentObject(player).environmentObject(desktop)
                 .tint(Theme.accent).preferredColorScheme(.light)
                 .frame(minWidth: 920, minHeight: 620)
                 .task {
@@ -68,6 +68,7 @@ struct ResonaDesktopApp: App {
                 Toggle("锁定桌面歌词（鼠标穿透）", isOn: $desktop.lyricsLocked)
                     .disabled(!desktop.desktopLyricsEnabled)
                 Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
+                Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
             }
         }
     }
