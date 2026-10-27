@@ -671,12 +671,13 @@ class _MusicPageState extends State<MusicPage> {
   Widget settings(BuildContext context) => LayoutBuilder(
     builder: (context, bounds) => ListView(
       padding: EdgeInsets.symmetric(
-        horizontal: ((bounds.maxWidth - 732) / 2).clamp(24.0, double.infinity),
-        vertical: 24,
+        horizontal: desktop
+            ? 24
+            : ((bounds.maxWidth - 732) / 2).clamp(24.0, double.infinity),
+        vertical: desktop ? 16 : 24,
       ),
       children: [
-        brand(context),
-        const SizedBox(height: 28),
+        if (!desktop) ...[brand(context), const SizedBox(height: 28)],
         settingsGroup('服务器', [
           if (c.session != null) ...[
             SelectableText(c.session!.server.toString()),
@@ -871,15 +872,6 @@ class _MusicPageState extends State<MusicPage> {
                   ),
                 ),
                 const SizedBox(height: 20),
-              ],
-              if (desktop) ...[
-                Text(
-                  title,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.headlineLarge?.copyWith(fontFamily: 'Georgia'),
-                ),
-                const SizedBox(height: 16),
               ],
               Row(
                 children: [

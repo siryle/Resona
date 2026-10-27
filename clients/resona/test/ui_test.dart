@@ -136,43 +136,73 @@ void main() {
   });
 
   for (final width in [800.0, 1280.0, 1920.0]) {
-    testWidgets('settings scrollbar stays at the workspace edge at $width', (
-      tester,
-    ) async {
-      tester.view.physicalSize = Size(width, 720);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final c = MusicController()..section = '设置';
-      addTearDown(c.dispose);
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: ResonaApp(controller: c).theme(Brightness.light),
-          home: MediaQuery(
-            data: MediaQueryData(
-              size: Size(width, 720),
-              textScaler: const TextScaler.linear(1.3),
+    testWidgets(
+      'settings cards fill the workspace with equal margins at $width',
+      (tester) async {
+        tester.view.physicalSize = Size(width, 720);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final c = MusicController()..section = '设置';
+        addTearDown(c.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ResonaApp(controller: c).theme(Brightness.light),
+            home: MediaQuery(
+              data: MediaQueryData(
+                size: Size(width, 720),
+                textScaler: const TextScaler.linear(1.3),
+              ),
+              child: MusicPage(controller: c),
             ),
-            child: MusicPage(controller: c),
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final list = find.byType(ListView);
-      expect(tester.getRect(list).right, closeTo(width, 0.1));
-      final scrollbar = find.byType(Scrollbar);
-      expect(scrollbar, findsOneWidget);
-      expect(tester.getRect(scrollbar).right, closeTo(width, 0.1));
-      final panel = find
-          .ancestor(of: find.text('服务器'), matching: find.byType(Column))
-          .first;
-      expect(tester.getSize(panel).width, lessThanOrEqualTo(732));
-      await tester.drag(list, const Offset(0, -1000));
-      await tester.pumpAndSettle();
-      expect(find.text('开源许可').hitTestable(), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    }, variant: TargetPlatformVariant({TargetPlatform.windows}));
+        );
+        await tester.pumpAndSettle();
+        final list = find.byType(ListView);
+        expect(tester.getRect(list).right, closeTo(width, 0.1));
+        final scrollbar = find.byType(Scrollbar);
+        expect(scrollbar, findsOneWidget);
+        expect(tester.getRect(scrollbar).right, closeTo(width, 0.1));
+        final panel = find
+            .ancestor(of: find.text('服务器'), matching: find.byType(Column))
+            .first;
+        final workspace = tester.getRect(list);
+        final card = tester.getRect(panel);
+        expect(card.left - workspace.left, closeTo(24, 0.1));
+        expect(workspace.right - card.right, closeTo(24, 0.1));
+        expect(find.text('Resona.'), findsOneWidget);
+        await tester.drag(list, const Offset(0, -1000));
+        await tester.pumpAndSettle();
+        expect(find.text('开源许可').hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+      variant: TargetPlatformVariant({TargetPlatform.windows}),
+    );
   }
+
+  testWidgets('Windows pages show the title only in the header', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final c = MusicController();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(ResonaApp(controller: c));
+    await tester.pumpAndSettle();
+    for (final title in desktopDestinations) {
+      await tester.tap(find.widgetWithText(ListTile, title));
+      await tester.pumpAndSettle();
+      expect(find.text(title), findsNWidgets(2));
+      final header = find.descendant(
+        of: find.byType(CustomScrollView),
+        matching: find.text(title),
+      );
+      expect(header, findsNothing);
+      expect(tester.takeException(), isNull);
+    }
+  }, variant: TargetPlatformVariant({TargetPlatform.windows}));
 
   testWidgets('Android enqueue exposes the paused mini player', (tester) async {
     tester.view.physicalSize = const Size(390, 1000);
