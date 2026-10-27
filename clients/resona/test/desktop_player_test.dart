@@ -108,6 +108,26 @@ void main() {
     }
   }
 
+  testWidgets('Windows footer cycles sequential, repeat and shuffle playback', (
+    tester,
+  ) async {
+    final c = await workspace(tester, const Size(1280, 720), Brightness.light);
+    await expand(tester);
+    await tester.tap(find.byTooltip('顺序播放'));
+    await tester.pumpAndSettle();
+    expect(c.repeat, isTrue);
+    expect(c.shuffle, isFalse);
+    await tester.tap(find.byTooltip('列表循环'));
+    await tester.pumpAndSettle();
+    expect(c.repeat, isFalse);
+    expect(c.shuffle, isTrue);
+    await tester.tap(find.byTooltip('随机播放'));
+    await tester.pumpAndSettle();
+    expect(c.repeat, isFalse);
+    expect(c.shuffle, isFalse);
+    expect(tester.takeException(), isNull);
+  }, variant: TargetPlatformVariant({TargetPlatform.windows}));
+
   testWidgets(
     'collapse, Escape, settings and navigation close Windows details',
     (tester) async {

@@ -1435,10 +1435,31 @@ class DesktopPlayer extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       IconButton(
-                        tooltip: '随机播放',
-                        isSelected: c.shuffle,
-                        onPressed: () => c.setShuffle(!c.shuffle),
-                        icon: const Icon(Icons.shuffle, size: 19),
+                        tooltip: c.shuffle
+                            ? '随机播放'
+                            : c.repeat
+                            ? '列表循环'
+                            : '顺序播放',
+                        isSelected: c.shuffle || c.repeat,
+                        onPressed: () {
+                          if (c.shuffle) {
+                            c.setShuffle(false);
+                            c.setRepeat(false);
+                          } else if (c.repeat) {
+                            c.setRepeat(false);
+                            c.setShuffle(true);
+                          } else {
+                            c.setRepeat(true);
+                          }
+                        },
+                        icon: Icon(
+                          c.shuffle
+                              ? Icons.shuffle
+                              : c.repeat
+                              ? Icons.repeat
+                              : Icons.playlist_play,
+                          size: 19,
+                        ),
                       ),
                       IconButton(
                         tooltip: '上一首',

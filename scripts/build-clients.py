@@ -131,7 +131,7 @@ def run_installer(installer, log, directory=None):
         command.append(f'/DIR={directory}')
     completed = subprocess.run(command, timeout=180)
     if completed.returncode and log.is_file():
-        print('\n'.join(log.read_text(encoding='utf-8', errors='replace').splitlines()[-30:]))
+        print('\n'.join(log.read_text(encoding='utf-8-sig', errors='replace').splitlines()[-30:]))
     return completed.returncode
 
 
