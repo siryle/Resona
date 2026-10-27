@@ -71,6 +71,12 @@ def main():
         actual = windows_product_version(exe)
         if actual != f'{v["version"]}+{v["build"]}':
             raise SystemExit(f'Windows version mismatch: {actual}')
+        with exe.open('rb') as binary:
+            binary.seek(0x3C)
+            offset = int.from_bytes(binary.read(4), 'little')
+            binary.seek(offset)
+            if binary.read(6) != b'PE\0\0\x64\x86':
+                raise SystemExit('Windows application must be x64')
         for name in ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'):
             if not (bundle / name).is_file():
                 raise SystemExit(f'Missing Windows runtime: {name}')

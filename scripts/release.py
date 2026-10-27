@@ -216,8 +216,9 @@ def verify_windows(path):
     offset = struct.unpack_from('<I', binary, 0x3C)[0]
     if offset < 64 or offset + 6 > len(binary) or binary[offset:offset + 4] != b'PE\0\0':
         raise ValueError('Invalid Windows PE header')
-    if struct.unpack_from('<H', binary, offset + 4)[0] != 0x8664:
-        raise ValueError('Windows installer must be x64')
+    # Inno Setup 6 uses an x86 bootstrapper; Windows CI verifies its x64 payload.
+    if struct.unpack_from('<H', binary, offset + 4)[0] not in (0x14C, 0x8664):
+        raise ValueError('Unsupported Windows installer architecture')
     v = version()
     if f'{v["version"]}.{v["build"]}'.encode('utf-16le') not in binary:
         raise ValueError('Windows installer version differs from VERSION.json')
