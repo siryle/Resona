@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/widgets.dart';
+import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:resona_client/api.dart';
 import 'package:resona_client/cache.dart';
 import 'package:resona_client/controller.dart';
@@ -41,6 +43,7 @@ void main() {
       'title': 'Offline Song',
       'format': 'mp3',
       '_downloaded': true,
+      'duration': 120,
     });
     await cache.audio(track).writeAsBytes([1, 2, 3]);
     final key = cache
@@ -53,6 +56,155 @@ void main() {
     });
     return identity;
   }
+
+  Future<File> playbackState(Session identity) async {
+    final cache = PlaybackCache(
+      Directory('${root.path}/playback-cache'),
+      identity,
+    );
+    return File('${cache.root.path}.playback.json');
+  }
+
+  Future<void> saveQueue(MusicController c) async {
+    c.current = c.tracks.single;
+    c.queue = [
+      Track({'id': 'uncached-song', 'title': 'Remote Song', 'duration': 90}),
+      c.current!,
+      Track({'id': 'cloud-song', 'library': 'cloud', 'duration': 100}),
+    ];
+    c.position = const Duration(seconds: 37);
+    c.setShuffle(true);
+    c.setRepeat(true);
+    await c.setVolume(0.35);
+  }
+
+  test(
+    'restart restores queue, current song and progress before connecting',
+    () async {
+      final identity = await prepare('http://127.0.0.1:1');
+      final first = MusicController(supportDirectory: root);
+      await first.initialize();
+      await saveQueue(first);
+      first.dispose();
+
+      final engine = RecordingPlayer();
+      final restored = PlaybackController(root, engine);
+      await restored.initialize();
+      expect(restored.current?.title, 'Offline Song');
+      expect(restored.queue.map((track) => track.id), [
+        'uncached-song',
+        'local-song',
+        'cloud-song',
+      ]);
+      expect(restored.position, const Duration(seconds: 37));
+      expect(restored.duration, const Duration(seconds: 120));
+      expect(restored.playing, false);
+      expect(restored.volume, 0.35);
+      expect(restored.shuffle && restored.repeat, true);
+      expect(engine.opened, isEmpty);
+      await restored.seek(42);
+      await restored.toggle();
+      expect(engine.opened.single.start, const Duration(seconds: 42));
+      expect(
+        engine.opened.single.uri,
+        Media(restored.cache!.audio(restored.current!).uri.toString()).uri,
+      );
+      expect(restored.queue.length, 3);
+      restored.enqueue(Track({'id': 'appended-song'}));
+      await restored.savePlaybackState();
+      final state =
+          jsonDecode(await (await playbackState(identity)).readAsString())
+              as Map;
+      expect((state['queue'] as List).last['id'], 'appended-song');
+      expect(jsonEncode(state), isNot(contains('token')));
+      await restored.stopPlayback();
+      restored.dispose();
+
+      final stopped = MusicController(supportDirectory: root);
+      await stopped.initialize();
+      expect(stopped.current, isNull);
+      expect(stopped.queue.length, 4);
+      stopped.dispose();
+    },
+  );
+
+  test('expired credentials preserve the restored playback queue', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      request.response.statusCode = 401;
+      await request.response.close();
+    });
+    try {
+      final identity = await prepare('http://127.0.0.1:${server.port}');
+      final first = MusicController(supportDirectory: root);
+      await first.initialize();
+      await saveQueue(first);
+      first.dispose();
+      FlutterSecureStorage.setMockInitialValues({
+        'session': jsonEncode(
+          Session(identity.server, identity.username, 'expired').toJson(),
+        ),
+      });
+      final restored = MusicController(supportDirectory: root);
+      await restored.initialize();
+      expect(restored.authenticated, false);
+      expect(restored.current?.id, 'local-song');
+      expect(restored.queue.length, 3);
+      expect(restored.position.inSeconds, 37);
+      await restored.logout();
+      restored.dispose();
+      final loggedOut = MusicController(supportDirectory: root);
+      await loggedOut.initialize();
+      expect(loggedOut.current, isNull);
+      expect(loggedOut.queue, isEmpty);
+      loggedOut.dispose();
+    } finally {
+      await server.close(force: true);
+    }
+  });
+
+  test('playback state is isolated by server and username', () async {
+    await prepare('http://127.0.0.1:1');
+    final first = MusicController(supportDirectory: root);
+    await first.initialize();
+    await saveQueue(first);
+    first.dispose();
+    for (final identity in [
+      Session(serverAddress('http://127.0.0.1:2'), 'user', ''),
+      Session(serverAddress('http://127.0.0.1:1'), 'other-user', ''),
+    ]) {
+      FlutterSecureStorage.setMockInitialValues({
+        'identity': jsonEncode(identity.toJson()),
+      });
+      final other = MusicController(supportDirectory: root);
+      await other.initialize();
+      expect(other.current, isNull);
+      expect(other.queue, isEmpty);
+      other.dispose();
+    }
+  });
+
+  test(
+    'damaged playback state does not prevent cached library startup',
+    () async {
+      final identity = await prepare('http://127.0.0.1:1');
+      await (await playbackState(identity)).writeAsString('{"queue": [');
+      final c = MusicController(supportDirectory: root);
+      await c.initialize();
+      expect(c.current, isNull);
+      expect(c.queue, isEmpty);
+      expect(c.tracks.single.id, 'local-song');
+      expect(c.error, isNull);
+      c.enqueue(c.tracks.single);
+      c.didChangeAppLifecycleState(AppLifecycleState.inactive);
+      await c.savePlaybackState();
+      c.dispose();
+      final restored = MusicController(supportDirectory: root);
+      await restored.initialize();
+      expect(restored.queue.single.id, 'local-song');
+      restored.dispose();
+    },
+  );
 
   test(
     'tokenless account identity restores offline library and manual downloads',
@@ -90,10 +242,23 @@ void main() {
       });
       final c = MusicController(supportDirectory: root);
       try {
-        await prepare('http://127.0.0.1:${server.port}', token: 'pending');
+        final identity = await prepare('http://127.0.0.1:${server.port}');
+        final first = MusicController(supportDirectory: root);
+        await first.initialize();
+        await saveQueue(first);
+        first.dispose();
+        FlutterSecureStorage.setMockInitialValues({
+          'session': jsonEncode(
+            Session(identity.server, identity.username, 'pending').toJson(),
+          ),
+        });
         final initialized = c.initialize();
         await contacted.future;
         expect(c.tracks.single.title, 'Offline Song');
+        expect(c.current?.id, 'local-song');
+        expect(c.queue.length, 3);
+        expect(c.position.inSeconds, 37);
+        expect(c.playing, false);
         expect(c.loading, false);
         expect(c.offline, true);
         release.complete();
@@ -132,4 +297,25 @@ void main() {
       }
     },
   );
+}
+
+class PlaybackController extends MusicController {
+  final RecordingPlayer engine;
+  PlaybackController(Directory root, this.engine)
+    : super(supportDirectory: root);
+  @override
+  Player get player => engine;
+}
+
+class RecordingPlayer implements Player {
+  final List<Media> opened = [];
+  @override
+  Future<void> open(Playable playable, {bool play = true}) async {
+    opened.add(playable as Media);
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {}
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }

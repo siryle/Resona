@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import AVFoundation
 
 @main
 struct OfflineTests {
@@ -76,6 +77,51 @@ struct OfflineTests {
         cloudLibrary.session = library.session
         await cloudLibrary.selectLibrary("cloud")
         let cloud = cloudLibrary.tracks[0]
+        let snapshotPlayer = PlayerModel(downloads: store, cache: cache)
+        snapshotPlayer.volume = 0
+        snapshotPlayer.play(track, queue: [cloud, track], session: library.session)
+        snapshotPlayer.pause()
+        snapshotPlayer.seek(3)
+        snapshotPlayer.mode = .repeatAll
+        snapshotPlayer.volume = 0.25
+        snapshotPlayer.append([track], session: library.session)
+        let restoredEngine = AVPlayer()
+        let restoredPlayer = PlayerModel(downloads: store, cache: cache, player: restoredEngine)
+        restoredPlayer.restorePlayback(session: library.session)
+        assert(restoredPlayer.current == track && restoredPlayer.queue.map(\.id) == [cloud.id, track.id],
+               "Restart lost the current song or queue order, including uncached cloud tracks")
+        assert(restoredPlayer.position == 3 && restoredPlayer.duration == track.duration &&
+               restoredPlayer.mode == .repeatAll && restoredPlayer.volume == 0.25,
+               "Restart lost progress, playback mode or volume")
+        assert(!restoredPlayer.playing && restoredEngine.currentItem == nil, "Restart unexpectedly opened audio")
+        restoredPlayer.seek(4)
+        restoredPlayer.restorePlayback(session: library.session)
+        assert(restoredPlayer.position == 4, "A repeated startup task reset playback progress")
+        restoredPlayer.resume()
+        for _ in 0..<40 {
+            if restoredEngine.currentTime().seconds >= 4 && restoredPlayer.playing { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        assert(restoredPlayer.isLocal && restoredEngine.currentItem != nil && restoredPlayer.playing &&
+               restoredEngine.currentTime().seconds >= 4, restoredPlayer.error ?? "Restored song did not resume from saved progress")
+        restoredPlayer.pause()
+        let anotherAccount = PlayerModel(downloads: store, cache: cache)
+        anotherAccount.restorePlayback(session: Session(server: library.session!.server, username: "other", token: "test-session"))
+        assert(anotherAccount.current == nil && anotherAccount.queue.isEmpty, "Playback state leaked between accounts")
+        let anotherServer = PlayerModel(downloads: store, cache: cache)
+        anotherServer.restorePlayback(session: otherServer)
+        assert(anotherServer.current == nil && anotherServer.queue.isEmpty, "Playback state leaked between servers")
+        let snapshot = try Data(contentsOf: root.appendingPathComponent("playback.json"))
+        assert(!String(decoding: snapshot, as: UTF8.self).contains("test-session"), "Playback snapshot stored credentials")
+        restoredPlayer.stop()
+        let stoppedPlayer = PlayerModel(downloads: store, cache: cache)
+        stoppedPlayer.restorePlayback(session: nil)
+        assert(stoppedPlayer.current == nil && stoppedPlayer.queue.isEmpty, "Restart resurrected stopped playback")
+        try Data("{broken".utf8).write(to: root.appendingPathComponent("playback.json"))
+        let damagedPlayer = PlayerModel(downloads: store, cache: cache)
+        damagedPlayer.restorePlayback(session: library.session)
+        assert(damagedPlayer.current == nil && damagedPlayer.queue.isEmpty, "Corrupt state prevented an empty startup")
+        print("PASS: playback restart restores current song, ordered mixed-source queue, progress, mode and volume; lazy audio resumes from saved progress; account isolation, stopped and corrupt state")
         cloudCache.start(cloud, session: cloudLibrary.session!)
         for _ in 0..<80 {
             if cloudCache.audio(cloud) != nil { break }

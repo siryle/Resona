@@ -1048,8 +1048,7 @@ class _MusicPageState extends State<MusicPage> {
                 if (value == 'download') unawaited(c.download(track));
                 if (value == 'remove') unawaited(c.removeDownload(track));
                 if (value == 'queue') {
-                  c.queue.add(track);
-                  c.notifyListeners();
+                  c.enqueue(track);
                 }
               },
               itemBuilder: (_) => [
@@ -1480,10 +1479,7 @@ Future<void> showPlayer(
                   IconButton(
                     tooltip: c.repeat ? '关闭列表循环' : '列表循环',
                     isSelected: c.repeat,
-                    onPressed: () {
-                      c.repeat = !c.repeat;
-                      c.notifyListeners();
-                    },
+                    onPressed: () => c.setRepeat(!c.repeat),
                     icon: const Icon(Icons.repeat),
                   ),
                   IconButton(

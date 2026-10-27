@@ -2,14 +2,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'package:flutter/foundation.dart';
+import 'dart:typed_data';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:path_provider/path_provider.dart';
 import 'api.dart';
 import 'cache.dart';
 
-class MusicController extends ChangeNotifier {
+class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   static const _credentials = FlutterSecureStorage();
   final Directory? supportDirectory;
   MusicController({this.supportDirectory});
@@ -43,6 +44,11 @@ class MusicController extends ChangeNotifier {
   Duration position = Duration.zero, duration = Duration.zero;
   String lyricText = '';
   Future<void> _cacheWork = Future.value();
+  Future<void> _stateWork = Future.value();
+  File? _stateFile;
+  bool _restoringPlayback = false;
+  bool _needsPlaybackOpen = false;
+  Duration _savedPosition = Duration.zero;
   bool _disposed = false;
   bool repeat = false;
   Future<bool> Function()? activateAudio;
@@ -59,6 +65,7 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
+    WidgetsBinding.instance.addObserver(this);
     loading = true;
     notifyListeners();
     try {
@@ -108,10 +115,88 @@ class MusicController extends ChangeNotifier {
       session,
     );
     await cache!.load();
+    _stateFile = File('${cache!.root.path}.playback.json');
+    _restoringPlayback = true;
+    try {
+      await _restorePlaybackState();
+    } finally {
+      _restoringPlayback = false;
+    }
     final secret = base64UrlEncode(
       List.generate(32, (_) => Random.secure().nextInt(256)),
     );
     relay = PlaybackRelay(api!, secret);
+  }
+
+  Future<void> _restorePlaybackState() async {
+    await _stateWork;
+    try {
+      final state = jsonDecode(await _stateFile!.readAsString()) as Map;
+      final restoredQueue = (state['queue'] as List)
+          .map((value) => Track(Map<String, dynamic>.from(value as Map)))
+          .toList();
+      final restoredCurrent = state['current'] == null
+          ? null
+          : Track(Map<String, dynamic>.from(state['current'] as Map));
+      if (restoredQueue.any((track) => track.id.isEmpty) ||
+          restoredCurrent?.id.isEmpty == true) {
+        return;
+      }
+      final restoredPosition = (state['position'] as num).toInt();
+      final restoredVolume = (state['volume'] as num).toDouble();
+      final restoredShuffle = state['shuffle'] as bool;
+      final restoredRepeat = state['repeat'] as bool;
+      if (!restoredVolume.isFinite) return;
+      final restoredDuration = Duration(
+        milliseconds: ((restoredCurrent?.duration ?? 0) * 1000).round(),
+      );
+      queue = restoredQueue;
+      current = restoredCurrent;
+      if (current != null && !queue.any((track) => track.id == current!.id)) {
+        queue.add(current!);
+      }
+      duration = restoredDuration;
+      position = Duration(
+        milliseconds: restoredPosition.clamp(0, duration.inMilliseconds),
+      );
+      _savedPosition = position;
+      volume = restoredVolume.clamp(0, 1);
+      shuffle = restoredShuffle;
+      repeat = restoredRepeat;
+      playing = false;
+      _needsPlaybackOpen = current != null;
+    } catch (_) {
+      /* Missing or damaged state must not prevent startup. */
+    }
+  }
+
+  Future<void> savePlaybackState() {
+    final file = _stateFile;
+    if (file == null || _restoringPlayback) return Future.value();
+    final snapshot = jsonEncode({
+      'current': current?.json,
+      'queue': queue.map((track) => track.json).toList(),
+      'position': position.inMilliseconds,
+      'volume': volume,
+      'shuffle': shuffle,
+      'repeat': repeat,
+    });
+    _savedPosition = position;
+    return _stateWork = _stateWork
+        .then((_) async {
+          final partial = File('${file.path}.part');
+          await partial.writeAsString(snapshot, flush: true);
+          await partial.rename(file.path);
+        })
+        .catchError((Object _) {
+          error = '无法保存播放状态，请检查本机存储空间。';
+          notifyListeners();
+        });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) unawaited(savePlaybackState());
   }
 
   Future<void> reconnect() async {
@@ -326,10 +411,17 @@ class MusicController extends ChangeNotifier {
     _subscriptions.addAll([
       instance.stream.playing.listen((value) {
         playing = value;
+        if (!value && !busy && !opening && !_needsPlaybackOpen) {
+          unawaited(savePlaybackState());
+        }
         notifyListeners();
       }),
       instance.stream.position.listen((value) {
+        if (busy || opening || _needsPlaybackOpen) return;
         position = value;
+        if ((position - _savedPosition).abs() >= const Duration(seconds: 5)) {
+          unawaited(savePlaybackState());
+        }
         notifyListeners();
       }),
       instance.stream.duration.listen((value) {
@@ -350,7 +442,11 @@ class MusicController extends ChangeNotifier {
     return instance;
   }
 
-  Future<void> play(Track track, {bool replaceQueue = true}) async {
+  Future<void> play(
+    Track track, {
+    bool replaceQueue = true,
+    Duration startPosition = Duration.zero,
+  }) async {
     if (busy) return;
     if (api == null ||
         (track.unavailable && !(cache?.contains(track) ?? false))) {
@@ -362,11 +458,13 @@ class MusicController extends ChangeNotifier {
     if (replaceQueue) queue = List.of(tracks);
     if (!queue.any((t) => t.id == track.id)) queue = [track];
     current = track;
-    position = Duration.zero;
     lyricText = '';
     duration = Duration(milliseconds: (track.duration * 1000).round());
+    position = startPosition >= duration ? Duration.zero : startPosition;
+    _needsPlaybackOpen = true;
     opening = true;
     error = null;
+    unawaited(savePlaybackState());
     notifyListeners();
     try {
       final local = cache?.contains(track) ?? false;
@@ -385,7 +483,9 @@ class MusicController extends ChangeNotifier {
       }
       if (request != _playRequest) return;
       await player.setVolume(volume * 100);
-      await player.open(Media(uri.toString()));
+      await player.open(Media(uri.toString(), start: position));
+      if (request != _playRequest) return;
+      _needsPlaybackOpen = false;
       unawaited(_lyrics(track, request, local));
       if (!local) {
         final activeCache = cache!, activeAPI = api!;
@@ -436,6 +536,8 @@ class MusicController extends ChangeNotifier {
     current = null;
     opening = false;
     playing = false;
+    _needsPlaybackOpen = false;
+    await savePlaybackState();
     notifyListeners();
   }
 
@@ -456,16 +558,34 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> toggle() async {
-    if (_player == null || current == null) return;
+    if (current == null) return;
+    if (_needsPlaybackOpen) {
+      await play(current!, replaceQueue: false, startPosition: position);
+      return;
+    }
     if (!playing && duration > Duration.zero && position >= duration) {
       await player.seek(Duration.zero);
     }
     if (!playing && activateAudio != null && !await activateAudio!()) return;
     await player.playOrPause();
+    await savePlaybackState();
   }
 
-  Future<void> seek(double seconds) =>
-      player.seek(Duration(milliseconds: (seconds * 1000).round()));
+  Future<void> seek(double seconds) async {
+    position = Duration(
+      milliseconds: (seconds * 1000).round().clamp(0, duration.inMilliseconds),
+    );
+    if (!_needsPlaybackOpen) await player.seek(position);
+    await savePlaybackState();
+    notifyListeners();
+  }
+
+  void enqueue(Track track) {
+    queue.add(track);
+    unawaited(savePlaybackState());
+    notifyListeners();
+  }
+
   Future<void> favorite(Track track) async {
     if (offline || !authenticated) {
       error = '连接服务器后可修改收藏。';
@@ -485,6 +605,7 @@ class MusicController extends ChangeNotifier {
       tracks = tracks.map((t) => t.id == track.id ? replacement : t).toList();
       queue = queue.map((t) => t.id == track.id ? replacement : t).toList();
       if (current?.id == track.id) current = replacement;
+      await savePlaybackState();
     } catch (e) {
       error = e is APIException ? e.message : '收藏保存失败，请重试。';
     }
@@ -525,6 +646,7 @@ class MusicController extends ChangeNotifier {
       await activeCache?.clear();
       cache = activeCache;
       _covers.clear();
+      await savePlaybackState();
       if (section == '缓存' || offline) await load();
     } catch (_) {
       error = '缓存清理失败，请关闭占用文件后重试。';
@@ -544,6 +666,7 @@ class MusicController extends ChangeNotifier {
         ? null
         : Session(session!.server, session!.username, '');
     try {
+      if (!revoke) await savePlaybackState();
       await _player?.stop();
       await relay?.close();
       final activeCache = cache;
@@ -569,6 +692,7 @@ class MusicController extends ChangeNotifier {
       relay = null;
       current = null;
       queue = [];
+      if (revoke) await savePlaybackState();
       collections = [];
       _covers.clear();
       album = '';
@@ -631,16 +755,25 @@ class MusicController extends ChangeNotifier {
   Future<void> setVolume(double value) async {
     volume = value;
     await _player?.setVolume(value * 100);
+    await savePlaybackState();
     notifyListeners();
   }
 
   void setShuffle(bool value) {
     shuffle = value;
+    unawaited(savePlaybackState());
+    notifyListeners();
+  }
+
+  void setRepeat(bool value) {
+    repeat = value;
+    unawaited(savePlaybackState());
     notifyListeners();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
     for (final sub in _subscriptions) {
       unawaited(sub.cancel());

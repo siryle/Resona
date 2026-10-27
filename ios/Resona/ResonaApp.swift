@@ -4,6 +4,7 @@ import SwiftUI
 struct ResonaApp: App {
     @StateObject private var library = LibraryModel()
     @StateObject private var player = PlayerModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -12,7 +13,13 @@ struct ResonaApp: App {
             .environmentObject(player)
             .tint(Theme.accent)
             .preferredColorScheme(.light)
-            .task { await library.refresh() }
+            .task {
+                player.restorePlayback(session: library.session)
+                await library.refresh()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { player.savePlaybackState() }
+            }
             .onChange(of: library.session?.token) { _, _ in
                 player.connectionChanged(library.session)
             }

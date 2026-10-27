@@ -7,6 +7,7 @@ struct ResonaDesktopApp: App {
     @StateObject private var player = PlayerModel()
     @State private var showingSettings = false
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         Window("Resona", id: "main") {
@@ -14,7 +15,16 @@ struct ResonaDesktopApp: App {
                 .environmentObject(library).environmentObject(player)
                 .tint(Theme.accent).preferredColorScheme(.light)
                 .frame(minWidth: 920, minHeight: 620)
-                .task { await library.refresh() }
+                .task {
+                    player.restorePlayback(session: library.session)
+                    await library.refresh()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase != .active { player.savePlaybackState() }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    player.savePlaybackState()
+                }
                 .onChange(of: library.session?.token) { _, _ in
                     player.connectionChanged(library.session)
                 }

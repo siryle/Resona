@@ -9,7 +9,7 @@ import AppKit
 typealias PlatformImage = NSImage
 #endif
 
-enum PlaybackMode: CaseIterable {
+enum PlaybackMode: String, Codable, CaseIterable {
     case sequential, repeatAll, repeatOne, shuffle
 
     var title: String {
@@ -31,6 +31,16 @@ enum PlaybackMode: CaseIterable {
     }
 }
 
+private struct PlaybackState: Codable {
+    let server: URL?
+    let username: String?
+    let current: Track?
+    let queue: [Track]
+    let position: Double
+    let mode: PlaybackMode
+    let volume: Float
+}
+
 @MainActor
 final class PlayerModel: ObservableObject {
     @Published var current: Track?
@@ -40,14 +50,20 @@ final class PlayerModel: ObservableObject {
     @Published var lyrics: [LyricLine] = []
     @Published var plainLyrics = ""
     @Published var error: String?
-    @Published var mode = PlaybackMode.sequential
+    @Published var mode = PlaybackMode.sequential { didSet { savePlaybackState() } }
     @Published var expanded = false
     @Published private(set) var queue: [Track] = []
-    @Published var volume: Float = 0.8 { didSet { player.volume = volume } }
+    @Published var volume: Float = 0.8 {
+        didSet { player.volume = volume; savePlaybackState() }
+    }
 
     private let player: AVPlayer
     private let downloads: OfflineStore
     private let cache: PlaybackCache
+    private let stateURL: URL
+    private var restored = false
+    private var restoring = false
+    private var savedPosition: Double = 0
     private var cacheRequested = false
     private var session: Session?
     private var timeObserver: Any?
@@ -73,6 +89,7 @@ final class PlayerModel: ObservableObject {
         self.player = player
         self.downloads = downloads
         self.cache = cache ?? .shared
+        self.stateURL = downloads.root.appendingPathComponent("playback.json")
         player.volume = volume
         playbackObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
@@ -83,9 +100,10 @@ final class PlayerModel: ObservableObject {
         }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.player.currentItem != nil else { return }
                 self.position = time.seconds.isFinite ? time.seconds : 0
                 if let value = self.player.currentItem?.duration.seconds, value.isFinite, value > 0 { self.duration = value }
+                if abs(self.position - self.savedPosition) >= 5 { self.savePlaybackState() }
                 if self.position > 0, !self.isLocal, !self.cacheRequested,
                    let track = self.current, let session = self.session {
                     self.cacheRequested = true
@@ -143,10 +161,46 @@ final class PlayerModel: ObservableObject {
         }
     }
 
-    func play(_ track: Track, queue: [Track], session: Session?, recovering: Bool = false) {
+    func restorePlayback(session: Session?) {
+        guard !restored else { return }
+        restored = true
+        guard current == nil,
+              let data = try? Data(contentsOf: stateURL),
+              let state = try? JSONDecoder().decode(PlaybackState.self, from: data),
+              state.server == session?.server, state.username == session?.username,
+              state.position.isFinite, state.volume.isFinite else { return }
+        restoring = true
+        defer { restoring = false }
+        self.session = session
+        if let session { cache.activate(session) }
+        queue = state.queue
+        current = state.current
+        if let current, !queue.contains(where: { $0.id == current.id }) { queue.append(current) }
+        duration = max(0, current?.duration ?? 0)
+        position = min(max(0, state.position), duration)
+        savedPosition = position
+        mode = state.mode
+        volume = min(max(0, state.volume), 1)
+    }
+
+    func savePlaybackState() {
+        guard restored, !restoring else { return }
+        let state = PlaybackState(server: session?.server, username: session?.username,
+                                  current: current, queue: queue, position: position, mode: mode, volume: volume)
+        do {
+            try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
+            savedPosition = position
+        } catch {
+            self.error = "无法保存播放状态：\(error.localizedDescription)"
+        }
+    }
+
+    func play(_ track: Track, queue: [Track], session: Session?, recovering: Bool = false, startPosition: Double = 0) {
         if let session { cache.activate(session) }
         let local = localAudio(track)
         guard local != nil || session != nil else { error = "请在设置中连接服务器，或播放已下载的歌曲。"; return }
+        restored = true
         self.queue = session == nil ? queue.filter { localAudio($0) != nil } : queue
         self.session = session
         if !recovering { linkRetried = false }
@@ -168,8 +222,8 @@ final class PlayerModel: ObservableObject {
            let image = PlatformImage(contentsOfFile: cover.path) {
             nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
         }
-        position = 0
         duration = track.duration
+        position = min(max(0, startPosition), duration)
         lyrics = []
         plainLyrics = ""
         error = nil
@@ -212,6 +266,10 @@ final class PlayerModel: ObservableObject {
             Task { @MainActor [weak self] in self?.next(automatic: true) }
         }
         player.replaceCurrentItem(with: item)
+        if position > 0 {
+            player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        savePlaybackState()
         resume()
         artworkTask = Task { [weak self] in
             guard local == nil, let session, track.artwork != nil else { return }
@@ -245,7 +303,11 @@ final class PlayerModel: ObservableObject {
     }
 
     func resume() {
-        guard current != nil else { return }
+        guard let current else { return }
+        if player.currentItem == nil {
+            play(current, queue: queue, session: session, startPosition: position)
+            return
+        }
         if reachedEnd || (duration > 0 && position >= duration) { seek(0) }
         do {
             #if os(iOS)
@@ -267,6 +329,7 @@ final class PlayerModel: ObservableObject {
         player.pause()
         playing = false
         updateNowPlaying()
+        savePlaybackState()
     }
     func toggle() { playing ? pause() : resume() }
 
@@ -275,6 +338,7 @@ final class PlayerModel: ObservableObject {
         position = min(max(0, seconds), duration)
         player.seek(to: CMTime(seconds: position, preferredTimescale: 600))
         updateNowPlaying()
+        savePlaybackState()
     }
 
     func next(automatic: Bool = false) {
@@ -306,13 +370,21 @@ final class PlayerModel: ObservableObject {
             play(first, queue: added, session: session)
             pause()
         } else { queue += added }
+        savePlaybackState()
     }
 
     func connectionChanged(_ session: Session?) {
-        if isLocal {
+        let previous = self.session
+        if previous?.server == session?.server && previous?.username == session?.username {
+            self.session = session
+            if let session { cache.activate(session) }
+            return
+        }
+        if isLocal || (player.currentItem == nil && current.flatMap({ localAudio($0) }) != nil) {
             self.session = session
             if let session { cache.activate(session) }
             queue = queue.filter { localAudio($0) != nil }
+            savePlaybackState()
         } else { stop() }
     }
 
@@ -334,6 +406,9 @@ final class PlayerModel: ObservableObject {
         lyricTask?.cancel()
         artworkTask?.cancel()
         nowPlayingArtwork = nil
+        position = 0
+        duration = 0
+        savePlaybackState()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         #if os(macOS)
         MPNowPlayingInfoCenter.default().playbackState = .stopped
