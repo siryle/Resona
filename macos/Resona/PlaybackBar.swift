@@ -10,7 +10,7 @@ struct DesktopPlaybackBar: View {
     @FocusState private var focusedControl: Control?
 
     private enum Control: Hashable {
-        case bar, progress, artwork, previous, play, next, volume, favorite, mode, queue
+        case progress, artwork, previous, play, next, volume, favorite, mode, queue
     }
 
     private var showPlayerControls: Bool {
@@ -79,7 +79,9 @@ struct DesktopPlaybackBar: View {
                                 }
                             }.lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                         }.contentShape(Rectangle())
-                    }.buttonStyle(.plain).help("展开海报与歌词").focused($focusedControl, equals: .artwork)
+                    }.buttonStyle(.plain).help(player.expanded ? "收起播放页" : "展开海报与歌词")
+                        .accessibilityLabel(player.expanded ? "收起播放页" : "展开海报与歌词")
+                        .focused($focusedControl, equals: .artwork)
                 } else {
                     Text("选一首，此刻想听的歌").font(.system(size: 13)).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -138,10 +140,12 @@ struct DesktopPlaybackBar: View {
                 }.buttonStyle(.plain)
             }.padding(.horizontal, 20).frame(height: 79)
         }.background(.regularMaterial).contentShape(Rectangle())
-            .onHover { playerBarHovered = $0 }
-            .focusable().focused($focusedControl, equals: .bar)
+            .onHover {
+                playerBarHovered = $0
+                if !$0 { focusedControl = nil }
+            }
             .onKeyPress(.space) {
-                guard focusedControl == .bar, player.current != nil else { return .ignored }
+                guard focusedControl == .progress, player.current != nil else { return .ignored }
                 player.toggle()
                 return .handled
             }

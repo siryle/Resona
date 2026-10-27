@@ -160,6 +160,8 @@ jobs:
           command -v ffmpeg >/dev/null || brew install ffmpeg
           python3 scripts/test-apple.py
           python3 scripts/test-audio-routes.py
+          python3 scripts/test-lyrics.py
+          python3 scripts/test-macos.py
       - name: Build Unsigned iOS IPA and Universal macOS DMG
         run: |
           sh scripts/build-ios.sh

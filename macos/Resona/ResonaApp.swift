@@ -3,11 +3,21 @@ import AppKit
 
 @main
 struct ResonaDesktopApp: App {
-    @StateObject private var library = LibraryModel()
-    @StateObject private var player = PlayerModel()
+    @NSApplicationDelegateAdaptor(DesktopAppDelegate.self) private var appDelegate
+    @StateObject private var library: LibraryModel
+    @StateObject private var player: PlayerModel
+    @StateObject private var desktop: DesktopIntegration
     @State private var showingSettings = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let library = LibraryModel()
+        let player = PlayerModel()
+        _library = StateObject(wrappedValue: library)
+        _player = StateObject(wrappedValue: player)
+        _desktop = StateObject(wrappedValue: DesktopIntegration(player: player, library: library))
+    }
 
     var body: some Scene {
         Window("Resona", id: "main") {
@@ -16,6 +26,10 @@ struct ResonaDesktopApp: App {
                 .tint(Theme.accent).preferredColorScheme(.light)
                 .frame(minWidth: 920, minHeight: 620)
                 .task {
+                    desktop.openMainWindow = {
+                        openWindow(id: "main")
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
                     player.restorePlayback(session: library.session)
                     await library.refresh()
                 }
@@ -48,20 +62,13 @@ struct ResonaDesktopApp: App {
                 Button("上一首") { player.previous() }.keyboardShortcut(.leftArrow, modifiers: [.command])
                 Button("随机播放") { player.shuffle.toggle() }
                 Button("切换播放模式") { player.cycleMode() }
+                Divider()
+                Toggle("桌面歌词", isOn: $desktop.desktopLyricsEnabled)
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                Toggle("锁定桌面歌词（鼠标穿透）", isOn: $desktop.lyricsLocked)
+                    .disabled(!desktop.desktopLyricsEnabled)
+                Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
             }
         }
     }
-}
-
-enum Theme {
-    static let paper = Color(red: 0.965, green: 0.957, blue: 0.937)
-    static let ink = Color(red: 0.16, green: 0.18, blue: 0.15)
-    static let accent = Color(red: 0.77, green: 0.35, blue: 0.22)
-    static let sage = Color(red: 0.89, green: 0.92, blue: 0.85)
-    static let muted = Color(red: 0.52, green: 0.56, blue: 0.48)
-}
-
-func clock(_ seconds: Double) -> String {
-    guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-    return "\(Int(seconds) / 60):\(String(format: "%02d", Int(seconds) % 60))"
 }

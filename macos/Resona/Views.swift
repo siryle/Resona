@@ -54,6 +54,10 @@ struct DesktopView: View {
                 DesktopPlaybackBar(showingSettings: $showingSettings, showQueue: $showQueue)
             }.background(Theme.paper)
         }.foregroundStyle(Theme.ink)
+        .onExitCommand {
+            player.expanded = false
+            showQueue = false
+        }
         .alert("Resona", isPresented: Binding(get: { library.error != nil || player.error != nil }, set: { if !$0 { library.error = nil; player.error = nil } })) {
             Button("好", role: .cancel) { library.error = nil; player.error = nil }
         } message: { Text(player.error ?? library.error ?? "") }
