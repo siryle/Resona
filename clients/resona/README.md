@@ -37,7 +37,7 @@ The existing Swift clients remain the iOS / macOS implementation.
 Use Flutter **3.47.8** stable, JDK 17 and Android SDK for Android, or Visual Studio
 with the Desktop development with C++ workload for Windows. Android requires
 Android 7.0 / API 24 or newer. Windows requires Windows 10 / 11 x64 and the
-Microsoft Visual C++ 2015–2022 x64 runtime. Run the installer; it upgrades an older installed copy instead of creating a second one. A previously extracted ZIP is not registered and is left untouched.
+Microsoft Visual C++ 2015–2022 x64 runtime. Extract the entire ZIP, not just the EXE.
 See the official [Android setup](https://docs.flutter.dev/platform-integration/android/setup)
 and [Windows setup](https://docs.flutter.dev/platform-integration/windows/setup).
 
@@ -53,8 +53,6 @@ python3 scripts/build-clients.py android
 # On Windows:
 python scripts/build-clients.py windows
 ```
-
-The Windows build requires [Inno Setup 6](https://jrsoftware.org/isinfo.php). Its compiler produces an installer whose identity stays constant across releases, so a newer package upgrades the installed copy.
 
 `VERSION.json` is the only release version source. The script passes its version
 and build to Flutter, verifies the APK manifest / EXE version and writes versioned

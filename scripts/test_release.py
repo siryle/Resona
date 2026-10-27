@@ -194,26 +194,5 @@ class ReleaseTests(unittest.TestCase):
                 release.verify_checksum(path)
 
 
-    def test_windows_installer_is_x64_and_carries_the_version(self):
-        quad = f'{release.version()["version"]}.{release.version()["build"]}'.encode("utf-16le")
-
-        def package(path, machine, payload, header=True):
-            dos = bytearray(b"MZ" + bytes(0x7E))
-            dos[0x3C:0x40] = struct.pack("<I", 0x80 if header else 0x20)
-            body = bytes(dos) + (b"PE\0\0" + struct.pack("<H", machine) + payload if header else payload)
-            path.write_bytes(body)
-            path.with_suffix(path.suffix + ".sha256").write_text(
-                hashlib.sha256(body).hexdigest() + "  " + path.name)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "Resona-Windows-test-x64.exe"
-            package(path, 0x8664, quad)
-            release.verify_windows(path)
-            for machine, payload, header in ((0x14C, quad, True), (0x8664, b"missing", True), (0x8664, quad, False)):
-                package(path, machine, payload, header)
-                with self.assertRaises(ValueError):
-                    release.verify_windows(path)
-
-
 if __name__ == "__main__":
     unittest.main()

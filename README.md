@@ -180,7 +180,7 @@ iOS 使用音乐播放的系统路由共享策略，监听音频设备连接和�
 
 共享客户端位于 `clients/resona`，按手机、平板及桌面宽度自适应导航。支持登录凭据安全保存、本地 / 网盘曲库、搜索、专辑、艺术家、收藏、播放、同步歌词、自动播放缓存及缓存清理；Android 包含媒体通知与后台音频服务。
 
-GitHub Actions 在对应系统构建 Android APK、Windows x64 安装包、iOS IPA 和 macOS DMG，并提供 SHA-256。Android 默认产出开发证书签名的预览 APK，正式签名可配置 Secrets；Windows 安装包暂无 Authenticode 签名。安装包会升级本机已安装的旧版本，不会再并列安装一份；以前手动解压的 ZIP 不在安装记录中，第一次改用安装包时按新安装处理。正式产物从 GitHub Release 获取，构建期间也可在 Actions 运行记录的 Artifacts 中下载。详细环境、签名与验证说明见 [客户端文档](clients/resona/README.md)。
+GitHub Actions 在对应系统构建 Android APK、Windows x64 ZIP、iOS IPA 和 macOS DMG，并提供 SHA-256。Android 默认产出开发证书签名的预览 APK，正式签名可配置 Secrets；Windows 暂无 Authenticode 签名。正式产物从 GitHub Release 获取，构建期间也可在 Actions 运行记录的 Artifacts 中下载。详细环境、签名与验证说明见 [客户端文档](clients/resona/README.md)。
 
 ## 开发与测试
 

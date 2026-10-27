@@ -44,17 +44,6 @@ const destinationIcons = [
 String clock(Duration value) =>
     '${value.inMinutes}:${(value.inSeconds % 60).toString().padLeft(2, '0')}';
 
-String playbackMeta(Track track) {
-  final rate = track.json['sample_rate'];
-  var text = track.format.toUpperCase();
-  if (rate is num && rate >= 1000) {
-    final khz = rate / 1000;
-    text +=
-        ' · ${khz == khz.roundToDouble() ? khz.toStringAsFixed(0) : khz.toStringAsFixed(1)} kHz';
-  }
-  return text;
-}
-
 class ResonaApp extends StatelessWidget {
   final MusicController controller;
   const ResonaApp({super.key, required this.controller});
@@ -467,7 +456,6 @@ class _MusicPageState extends State<MusicPage> {
   Timer? debounce;
   final search = TextEditingController();
   int tab = 0;
-  bool listening = false;
   MusicController get c => widget.controller;
   bool get desktop => Theme.of(context).platform == TargetPlatform.windows;
   @override
@@ -480,10 +468,7 @@ class _MusicPageState extends State<MusicPage> {
   void navigate(int index) {
     debounce?.cancel();
     search.clear();
-    setState(() {
-      tab = index;
-      listening = false;
-    });
+    setState(() => tab = index);
     c.navigate(
       desktop
           ? ['歌曲', '专辑', '艺术家', '喜欢', '缓存'][index]
@@ -492,14 +477,9 @@ class _MusicPageState extends State<MusicPage> {
   }
 
   void settingsPage() {
-    setState(() {
-      tab = desktop ? -1 : 4;
-      listening = false;
-    });
+    setState(() => tab = desktop ? -1 : 4);
     c.navigate('设置');
   }
-
-  bool get listeningNow => desktop && listening && c.current != null;
 
   String get title => c.collectionTitle.isNotEmpty
       ? c.collectionTitle
@@ -547,13 +527,7 @@ class _MusicPageState extends State<MusicPage> {
             ],
           ),
           player: desktop
-              ? DesktopPlayer(
-                  controller: c,
-                  expanded: listeningNow,
-                  onExpand: c.current == null
-                      ? null
-                      : () => setState(() => listening = !listening),
-                )
+              ? DesktopPlayer(controller: c)
               : c.current == null
               ? null
               : Padding(
@@ -569,13 +543,7 @@ class _MusicPageState extends State<MusicPage> {
                 padding: EdgeInsets.fromLTRB(desktop ? 28 : 20, 16, 12, 8),
                 child: Row(
                   children: [
-                    if (listeningNow)
-                      IconButton(
-                        tooltip: '收起播放页',
-                        onPressed: () => setState(() => listening = false),
-                        icon: const Icon(Icons.expand_more),
-                      )
-                    else if (c.album.isNotEmpty || c.artist.isNotEmpty)
+                    if (c.album.isNotEmpty || c.artist.isNotEmpty)
                       IconButton(
                         tooltip: '返回列表',
                         onPressed: () => c.navigate(c.section),
@@ -583,7 +551,7 @@ class _MusicPageState extends State<MusicPage> {
                       ),
                     Expanded(
                       child: Text(
-                        listeningNow ? '正在播放' : title,
+                        title,
                         style: Theme.of(context).textTheme.titleLarge,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -618,11 +586,7 @@ class _MusicPageState extends State<MusicPage> {
                 ),
               if (c.loading) const LinearProgressIndicator(minHeight: 2),
               Expanded(
-                child: listeningNow
-                    ? DesktopListening(controller: c)
-                    : c.section == '设置'
-                    ? settings(context)
-                    : library(context),
+                child: c.section == '设置' ? settings(context) : library(context),
               ),
             ],
           ),
@@ -638,7 +602,6 @@ class _MusicPageState extends State<MusicPage> {
       isDense: true,
     ),
     onChanged: (value) {
-      if (listening) setState(() => listening = false);
       debounce?.cancel();
       debounce = Timer(const Duration(milliseconds: 350), () {
         c.search = value;
@@ -1184,131 +1147,9 @@ class _MusicPageState extends State<MusicPage> {
   );
 }
 
-class DesktopListening extends StatelessWidget {
-  final MusicController controller;
-  const DesktopListening({super.key, required this.controller});
-  @override
-  Widget build(BuildContext context) {
-    final c = controller, track = c.current!;
-    final scheme = Theme.of(context).colorScheme;
-    final wide = MediaQuery.sizeOf(context).width >= 1100;
-    final lyrics = LyricView(
-      text: c.lyricText,
-      position: c.position,
-      seek: c.seek,
-      stage: true,
-    );
-    final poster = Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Flexible(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final side = [
-                constraints.maxWidth,
-                if (constraints.maxHeight.isFinite) constraints.maxHeight,
-                350.0,
-              ].reduce((a, b) => a < b ? a : b);
-              if (side < 96) return const SizedBox.shrink();
-              return Center(
-                child: SizedBox(
-                  width: side,
-                  height: side,
-                  child: DecoratedBox(
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Color(0xff161616),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color(0x38000000),
-                          blurRadius: 18,
-                          offset: Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: EdgeInsets.all(side * 0.12),
-                      child: ClipOval(
-                        child: Cover(
-                          controller: c,
-                          track: track,
-                          size: side * 0.76,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 22),
-        Text(
-          track.title,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '${track.artist} · ${track.album}',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.center,
-          style: Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          playbackMeta(track),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-        ),
-      ],
-    );
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [scheme.secondaryContainer, scheme.surface],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(36, 12, 36, 20),
-        child: wide
-            ? Row(
-                children: [
-                  Expanded(child: poster),
-                  const SizedBox(width: 40),
-                  Expanded(child: lyrics),
-                ],
-              )
-            : Column(
-                children: [
-                  Expanded(flex: 5, child: poster),
-                  const SizedBox(height: 12),
-                  Expanded(flex: 4, child: lyrics),
-                ],
-              ),
-      ),
-    );
-  }
-}
-
 class DesktopPlayer extends StatelessWidget {
   final MusicController controller;
-  final bool expanded;
-  final VoidCallback? onExpand;
-  const DesktopPlayer({
-    super.key,
-    required this.controller,
-    this.expanded = false,
-    this.onExpand,
-  });
+  const DesktopPlayer({super.key, required this.controller});
   @override
   Widget build(BuildContext context) {
     final c = controller, track = c.current;
@@ -1322,52 +1163,31 @@ class DesktopPlayer extends StatelessWidget {
               width: 210,
               child: track == null
                   ? const Text('选一首，此刻想听的歌')
-                  : Tooltip(
-                      message: expanded ? '收起播放页' : '展开海报与歌词',
-                      child: InkWell(
-                        onTap: onExpand,
-                        child: Row(
-                          children: [
-                            Stack(
-                              alignment: Alignment.bottomCenter,
+                  : InkWell(
+                      onTap: () => showPlayer(context, c),
+                      child: Row(
+                        children: [
+                          Cover(controller: c, track: track, size: 48),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Cover(controller: c, track: track, size: 48),
-                                Icon(
-                                  expanded
-                                      ? Icons.expand_more
-                                      : Icons.expand_less,
-                                  size: 16,
-                                  color: Colors.white,
-                                  shadows: const [
-                                    Shadow(
-                                      blurRadius: 3,
-                                      color: Colors.black54,
-                                    ),
-                                  ],
+                                Text(
+                                  track.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  track.artist,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ],
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    track.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    track.artist,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
             ),
@@ -1820,118 +1640,40 @@ List<LyricLine> parseLyrics(String text) {
       .toList();
 }
 
-class LyricView extends StatefulWidget {
+class LyricView extends StatelessWidget {
   final String text;
   final Duration position;
   final ValueChanged<double> seek;
-  final bool stage;
   const LyricView({
     super.key,
     required this.text,
     required this.position,
     required this.seek,
-    this.stage = false,
   });
   @override
-  State<LyricView> createState() => _LyricViewState();
-}
-
-class _LyricViewState extends State<LyricView> {
-  final scroll = ScrollController();
-  int shown = -2;
-  @override
-  void dispose() {
-    scroll.dispose();
-    super.dispose();
-  }
-
-  void center(int index, double extent) {
-    if (!scroll.hasClients || index < 0) return;
-    final target =
-        (80 + index * extent - (scroll.position.viewportDimension - extent) / 2)
-            .clamp(0.0, scroll.position.maxScrollExtent)
-            .toDouble();
-    if ((scroll.offset - target).abs() < 1) return;
-    scroll.animateTo(
-      target,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final lines = parseLyrics(widget.text);
-    final scheme = Theme.of(context).colorScheme;
-    if (lines.isEmpty) {
-      return Center(
-        child: Text(
-          widget.stage ? '纯粹聆听，也是共鸣。\n暂无歌词' : '暂无歌词',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            color: scheme.onSurfaceVariant,
-            height: 1.6,
-          ),
-        ),
-      );
-    }
+    final lines = parseLyrics(text);
+    if (lines.isEmpty) return const Center(child: Text('暂无歌词'));
     final active = lines.lastIndexWhere(
       (line) =>
           line.seconds != null &&
-          line.seconds! <= widget.position.inMilliseconds / 1000,
+          line.seconds! <= position.inMilliseconds / 1000,
     );
-    final extent = 72.0 * MediaQuery.textScalerOf(context).scale(1);
-    if (widget.stage && active != shown) {
-      shown = active;
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => center(active, extent),
-      );
-    }
-    if (!widget.stage) {
-      return ListView.builder(
-        itemCount: lines.length,
-        itemBuilder: (context, i) => ListTile(
-          title: Text(
-            lines[i].text,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontWeight: active == i ? FontWeight.w700 : FontWeight.normal,
-              color: active == i ? scheme.primary : null,
-            ),
-          ),
-          onTap: lines[i].seconds == null
-              ? null
-              : () => widget.seek(lines[i].seconds!.clamp(0, double.infinity)),
-        ),
-      );
-    }
     return ListView.builder(
-      controller: scroll,
-      padding: const EdgeInsets.symmetric(vertical: 80),
       itemCount: lines.length,
-      itemExtent: extent,
-      itemBuilder: (context, i) {
-        final current = active == i;
-        return InkWell(
-          onTap: lines[i].seconds == null
-              ? null
-              : () => widget.seek(lines[i].seconds!.clamp(0, double.infinity)),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              lines[i].text,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 22,
-                height: 1.35,
-                fontWeight: current ? FontWeight.w600 : FontWeight.w400,
-                color: current ? scheme.onSurface : scheme.onSurfaceVariant,
-              ),
-            ),
+      itemBuilder: (context, i) => ListTile(
+        title: Text(
+          lines[i].text,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontWeight: active == i ? FontWeight.w700 : FontWeight.normal,
+            color: active == i ? Theme.of(context).colorScheme.primary : null,
           ),
-        );
-      },
+        ),
+        onTap: lines[i].seconds == null
+            ? null
+            : () => seek(lines[i].seconds!.clamp(0, double.infinity)),
+      ),
     );
   }
 }
