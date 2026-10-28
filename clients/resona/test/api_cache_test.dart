@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resona_client/api.dart';
@@ -82,6 +83,10 @@ void main() {
         } else {
           request.response.add(servedAudio);
         }
+      } else if (request.uri.path.endsWith('/artists/avatar')) {
+        expect(request.uri.path, '/prefix/api/v1/artists/avatar');
+        expect(request.uri.queryParameters['name'], 'Artist & 歌手');
+        request.response.add([1, 2, 3]);
       } else if (request.uri.path.endsWith('/lyrics')) {
         request.response.write('[00:01]Hello');
       } else {
@@ -95,6 +100,14 @@ void main() {
     api.close();
     await server.close(force: true);
     await directory.delete(recursive: true);
+  });
+
+  test('artist artwork keeps authentication, query and proxy prefix', () async {
+    final path =
+        '/api/v1/artists/avatar?name=${Uri.encodeQueryComponent('Artist & 歌手')}';
+    expect(await api.artistArtwork(path), [1, 2, 3]);
+    expect(await api.artistArtwork('https://evil.example/avatar'), isEmpty);
+    expect(await api.artistArtwork(''), isEmpty);
   });
 
   test(

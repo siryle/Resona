@@ -3,10 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:path_provider/path_provider.dart';
+
 import 'api.dart';
 import 'cache.dart';
 
@@ -52,6 +54,14 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   Duration _savedPosition = Duration.zero;
   bool _disposed = false;
   bool repeat = false;
+  bool repeatOne = false;
+  String get modeTitle => shuffle
+      ? '随机循环'
+      : repeatOne
+      ? '单曲循环'
+      : repeat
+      ? '列表循环'
+      : '顺序播放';
   Future<bool> Function()? activateAudio;
   Session? get session => api?.session;
   bool get authenticated => session?.token.isNotEmpty == true;
@@ -164,6 +174,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       volume = restoredVolume.clamp(0, 1);
       shuffle = restoredShuffle;
       repeat = restoredRepeat;
+      repeatOne = state['repeat_one'] == true;
       playing = false;
       _needsPlaybackOpen = current != null;
     } catch (_) {
@@ -181,6 +192,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       'volume': volume,
       'shuffle': shuffle,
       'repeat': repeat,
+      'repeat_one': repeatOne,
     });
     _savedPosition = position;
     return _stateWork = _stateWork
@@ -419,6 +431,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       final seen = <String>{};
       queue = all.where((track) => seen.add(track.id)).toList();
       shuffle = shuffled;
+      if (shuffled) repeatOne = false;
       await play(
         queue[shuffled ? Random().nextInt(queue.length) : 0],
         replaceQueue: false,
@@ -492,7 +505,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       }),
       instance.stream.completed.listen((value) {
         if (value) {
-          unawaited(next());
+          unawaited(next(completed: true));
         }
       }),
       instance.stream.error.listen((value) {
@@ -603,13 +616,17 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  Future<void> next({int delta = 1}) async {
+  Future<void> next({int delta = 1, bool completed = false}) async {
     if (queue.isEmpty || current == null) return;
+    if (completed && repeatOne) {
+      await play(current!, replaceQueue: false);
+      return;
+    }
     final index = queue.indexWhere((t) => t.id == current!.id);
-    final next = shuffle && delta > 0
-        ? Random().nextInt(queue.length)
+    final next = shuffle && delta > 0 && queue.length > 1
+        ? (index + 1 + Random().nextInt(queue.length - 1)) % queue.length
         : index + delta;
-    if (next >= queue.length && !repeat) {
+    if (next >= queue.length && !repeat && !repeatOne && !shuffle) {
       await _player?.pause();
       return;
     }
@@ -697,6 +714,23 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         }
       } catch (_) {
         /* Use the themed placeholder. */
+      }
+      return Uint8List(0);
+    });
+  }
+
+  Future<Uint8List> artistArtwork(String name, String path) {
+    final key = 'artist:${session?.server}:$name:$path';
+    if (_covers.length >= 100 && !_covers.containsKey(key)) {
+      _covers.remove(_covers.keys.first);
+    }
+    return _covers.putIfAbsent(key, () async {
+      try {
+        if (!offline && authenticated && path.isNotEmpty) {
+          return Uint8List.fromList(await api!.artistArtwork(path));
+        }
+      } catch (_) {
+        /* Keep the artist's initial when artwork is unavailable. */
       }
       return Uint8List(0);
     });
@@ -831,12 +865,32 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
 
   void setShuffle(bool value) {
     shuffle = value;
+    if (value) repeatOne = false;
     unawaited(savePlaybackState());
     notifyListeners();
   }
 
   void setRepeat(bool value) {
     repeat = value;
+    if (value) repeatOne = false;
+    unawaited(savePlaybackState());
+    notifyListeners();
+  }
+
+  void cycleMode() {
+    if (shuffle) {
+      shuffle = false;
+      repeat = false;
+      repeatOne = false;
+    } else if (repeatOne) {
+      repeatOne = false;
+      shuffle = true;
+    } else if (repeat) {
+      repeat = false;
+      repeatOne = true;
+    } else {
+      repeat = true;
+    }
     unawaited(savePlaybackState());
     notifyListeners();
   }

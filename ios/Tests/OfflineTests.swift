@@ -19,6 +19,14 @@ struct OfflineTests {
         library.password = "test-password"
         await library.login()
         assert(library.session != nil && !library.offline && library.tracks.count == 1, library.error ?? "login failed")
+        assert(library.artists.first?.artwork == "/api/v1/artists/avatar?name=Resona")
+        let legacyArtist = try JSONDecoder().decode(Artist.self, from: Data(#"{"name":"Legacy","tracks":1}"#.utf8))
+        assert(legacyArtist.artwork == nil, "Older servers must retain the initial placeholder")
+        var avatarRequest = URLRequest(url: library.resource(library.artists[0].artwork!)!)
+        avatarRequest.setValue("Bearer \(library.session!.token)", forHTTPHeaderField: "Authorization")
+        let (avatarData, avatarResponse) = try await URLSession.shared.data(for: avatarRequest)
+        assert((avatarResponse as? HTTPURLResponse)?.statusCode == 200 && !avatarData.isEmpty,
+               "Artist artwork must retain authentication and reverse-proxy path prefixes")
         let track = library.tracks[0]
         let liked = await library.favorite(track)
         assert(liked?.favorite == true && library.tracks[0].favorite, "Favorite state did not update")

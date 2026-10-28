@@ -83,6 +83,26 @@ void main() {
   });
 
   test(
+    'single repeat replays completed audio and manual next still skips',
+    () async {
+      c.queue = c.tracks.take(2).toList();
+      c.current = c.queue.first;
+      c.cycleMode();
+      c.cycleMode();
+      expect(c.repeatOne, isTrue);
+      await c.next(completed: true);
+      expect(c.selected?.id, c.queue.first.id);
+      await c.next();
+      expect(c.selected?.id, c.queue.last.id);
+      await c.next();
+      expect(c.selected?.id, c.queue.first.id);
+      c.cycleMode();
+      await c.next();
+      expect(c.selected?.id, c.queue.last.id);
+    },
+  );
+
+  test(
     'bulk play fetches all matching pages and leaves the view paginated',
     () async {
       await c.playAll();

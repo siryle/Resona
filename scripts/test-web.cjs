@@ -24,6 +24,15 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
     await page.locator("#login-button").click();
     await page.locator("#app").waitFor({ state: "visible" });
     assert.equal(await page.locator("#logout").innerText(), "退出登录");
+    await page.locator('.nav-item[data-view=artists]').click();
+    await page.waitForFunction(() => document.querySelector('.artist-avatar img')?.naturalWidth > 0);
+    assert((await page.locator('.artist-avatar img').first().getAttribute('src')).includes('/artists/avatar?name=Artist'));
+    await page.route('**/api/v1/artists/avatar?*', route => route.fulfill({ status: 404 }));
+    await page.locator('.nav-item[data-view=tracks]').click();
+    await page.locator('.nav-item[data-view=artists]').click();
+    await page.waitForFunction(() => document.querySelector('.artist-avatar')?.textContent === 'A' &&
+      !document.querySelector('.artist-avatar img'));
+    await page.unroute('**/api/v1/artists/avatar?*');
     const management = await page
       .locator(".nav-item")
       .evaluateAll((nodes) => nodes.map((node) => node.dataset.view));
@@ -142,7 +151,28 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
         document.querySelector("#audio").currentTime > 0,
     );
     assert.equal(await page.locator("#track-dialog").isVisible(), false);
+    await page.mouse.move(400, 200);
+    await page.locator('#search').focus();
+    await page.waitForFunction(() => !document.querySelector('#player-lyrics').hidden);
+    assert.equal(await page.locator('#player-lyric-current').innerText(), 'First line');
+    assert.equal(await page.locator('#player-lyric-next').innerText(), 'Second line');
+    await page.locator('#player-bar').hover();
+    await page.waitForFunction(() => !document.querySelector('#player-metadata').hidden);
+    await page.locator('#seek').focus();
+    const beforeSeek = await page.locator('#audio').evaluate(audio => audio.currentTime);
+    await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(before => document.querySelector('#audio').currentTime >= before + 4.5, beforeSeek);
+    assert.equal(await page.locator('#player-lyrics').isVisible(), false);
+    await page.locator('#seek').evaluate(input => {
+      input.value = '0';
+      input.dispatchEvent(new Event('input'));
+    });
+    const player = await page.locator('#player-bar').boundingBox();
+    const progress = await page.locator('.player-progress').boundingBox();
+    assert(Math.abs(player.y - progress.y) <= 2, 'seek bar must span the top of the footer');
+    await page.screenshot({ path: '.build/web-player-desktop.png' });
     await page.locator("#play-pause").click();
+    assert.equal(await page.locator('#player-metadata').isVisible(), true);
     await page.locator(".nav-item[data-view=manage]").click();
     await page.locator("#track-list .track-actions").nth(99).waitFor();
     const source = await page.locator("#audio").getAttribute("src");
@@ -390,7 +420,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
       path: ".build/resona-v8-queue-desktop.png",
       fullPage: false,
     });
-    for (const width of [1024, 760, 390]) {
+    for (const width of [1024, 800, 760, 390, 320]) {
       await page.setViewportSize({ width, height: 844 });
       assert.equal(
         await page.evaluate(

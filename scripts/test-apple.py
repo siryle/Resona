@@ -70,7 +70,10 @@ def main():
                 elif path.endswith("/albums"):
                     self.respond({"items": []})
                 elif path.endswith("/artists"):
-                    self.respond({"items": []})
+                    self.respond({"items": [{"name": "Resona", "tracks": 1,
+                                             "artwork": "/api/v1/artists/avatar?name=Resona"}]})
+                elif path.endswith("/artists/avatar"):
+                    self.respond((ROOT / "ios/Resona/Assets.xcassets/BrandIcon.imageset/BrandIcon.png").read_bytes(), "image/png")
                 elif path.endswith("/stream"):
                     if cloud_id in path:
                         self.send_response(302)

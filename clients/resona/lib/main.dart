@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
+
 import 'api.dart';
 import 'controller.dart';
 import 'android_audio.dart';
@@ -1009,11 +1011,10 @@ class _MusicPageState extends State<MusicPage> {
                 horizontal: 24,
                 vertical: 8,
               ),
-              leading: CircleAvatar(
-                backgroundColor: Theme.of(
-                  context,
-                ).colorScheme.secondaryContainer,
-                child: const Icon(Icons.person_outline),
+              leading: ArtistAvatar(
+                controller: c,
+                name: value['name'] as String,
+                path: value['artwork'] as String? ?? '',
               ),
               title: Text(value['name'] as String),
               subtitle: Text('${value['tracks']} 首'),
@@ -1338,7 +1339,7 @@ class DesktopListening extends StatelessWidget {
   }
 }
 
-class DesktopPlayer extends StatelessWidget {
+class DesktopPlayer extends StatefulWidget {
   final MusicController controller;
   final bool expanded;
   final VoidCallback onExpand;
@@ -1349,174 +1350,318 @@ class DesktopPlayer extends StatelessWidget {
     this.expanded = false,
   });
   @override
+  State<DesktopPlayer> createState() => _DesktopPlayerState();
+}
+
+class _DesktopPlayerState extends State<DesktopPlayer> {
+  bool hovered = false, focused = false;
+  String? lyricText;
+  List<LyricLine> lyrics = [];
+  late final progressFocus = FocusNode(
+    onKeyEvent: (_, event) {
+      if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+        return KeyEventResult.ignored;
+      }
+      final c = widget.controller;
+      if (c.current == null || c.duration <= Duration.zero) {
+        return KeyEventResult.ignored;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.space) {
+        unawaited(c.toggle());
+      } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+          event.logicalKey == LogicalKeyboardKey.arrowRight) {
+        unawaited(
+          c.seek(
+            c.position.inMilliseconds / 1000 +
+                (event.logicalKey == LogicalKeyboardKey.arrowRight ? 5 : -5),
+          ),
+        );
+      } else {
+        return KeyEventResult.ignored;
+      }
+      return KeyEventResult.handled;
+    },
+  );
+
+  @override
+  void dispose() {
+    progressFocus.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final c = controller, track = c.current;
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: Row(
-          children: [
-            SizedBox(
-              width: MediaQuery.sizeOf(context).width < 1000 ? 140 : 210,
-              child: track == null
-                  ? const Text('选一首，此刻想听的歌')
-                  : Tooltip(
-                      message: expanded ? '收起播放页' : '展开海报与歌词',
-                      child: InkWell(
-                        onTap: onExpand,
-                        child: Row(
-                          children: [
-                            Stack(
-                              alignment: Alignment.bottomCenter,
-                              children: [
-                                Cover(controller: c, track: track, size: 48),
-                                Icon(
-                                  expanded
-                                      ? Icons.expand_more
-                                      : Icons.expand_less,
-                                  size: 16,
-                                  color: Colors.white,
-                                  shadows: const [
-                                    Shadow(
-                                      color: Colors.black54,
-                                      blurRadius: 3,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    track.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    track.artist,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
+    final c = widget.controller, track = c.current;
+    final scheme = Theme.of(context).colorScheme;
+    if (lyricText != c.lyricText) {
+      lyricText = c.lyricText;
+      lyrics = parseLyrics(
+        c.lyricText,
+      ).where((line) => line.seconds != null && line.text.isNotEmpty).toList();
+    }
+    final active = lyrics.lastIndexWhere(
+      (line) => line.seconds! <= c.position.inMilliseconds / 1000,
+    );
+    final showLyrics = c.playing && !hovered && !focused && active >= 0;
+    final max = c.duration.inMilliseconds.toDouble();
+    final canSeek = track != null && max > 0;
+    progressFocus.canRequestFocus = canSeek;
+    Widget control(
+      String label,
+      IconData icon,
+      VoidCallback? action, {
+      Color? color,
+    }) => IconButton(
+      tooltip: label,
+      onPressed: action,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 32, height: 36),
+      icon: Icon(icon, size: 21, color: color),
+    );
+    final transport = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        control(
+          '上一首',
+          Icons.skip_previous,
+          track == null ? null : () => c.next(delta: -1),
+        ),
+        const SizedBox(width: 12),
+        IconButton.filled(
+          tooltip: c.playing ? '暂停' : '播放',
+          onPressed: track == null || c.opening ? null : () => c.toggle(),
+          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+          padding: EdgeInsets.zero,
+          icon: Icon(c.playing ? Icons.pause : Icons.play_arrow, size: 22),
+        ),
+        const SizedBox(width: 12),
+        control('下一首', Icons.skip_next, track == null ? null : () => c.next()),
+      ],
+    );
+    final tools = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 108,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.volume_up_outlined, size: 14),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 3,
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 5,
+                        ),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 10,
+                        ),
+                      ),
+                      child: SizedBox(
+                        height: 20,
+                        child: Slider(
+                          padding: EdgeInsets.zero,
+                          value: c.volume,
+                          semanticFormatterCallback: (value) =>
+                              '音量 ${(value * 100).round()}%',
+                          onChanged: c.setVolume,
                         ),
                       ),
                     ),
-            ),
-            if (track != null)
-              IconButton(
-                tooltip: track.favorite ? '取消喜欢' : '喜欢',
-                onPressed: c.offline ? null : () => c.favorite(track),
-                icon: Icon(
-                  track.favorite ? Icons.favorite : Icons.favorite_outline,
+                  ),
+                ],
+              ),
+              FittedBox(
+                child: Text(
+                  '${clock(c.position)} / ${clock(c.duration)}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: scheme.onSurfaceVariant,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
                 ),
               ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+            ],
+          ),
+        ),
+        const SizedBox(width: 14),
+        control(
+          track?.favorite == true ? '取消喜欢' : '喜欢',
+          track?.favorite == true ? Icons.favorite : Icons.favorite_outline,
+          track == null || c.offline || !c.authenticated
+              ? null
+              : () => c.favorite(track),
+          color: track?.favorite == true ? scheme.primary : null,
+        ),
+        const SizedBox(width: 8),
+        control(
+          c.modeTitle,
+          c.shuffle
+              ? Icons.shuffle
+              : c.repeatOne
+              ? Icons.repeat_one
+              : c.repeat
+              ? Icons.repeat
+              : Icons.playlist_play,
+          track == null ? null : c.cycleMode,
+          color: c.shuffle || c.repeat || c.repeatOne ? scheme.primary : null,
+        ),
+        const SizedBox(width: 8),
+        control('播放列表', Icons.queue_music, () => showQueue(context, c)),
+      ],
+    );
+    final info = track == null
+        ? const Text('选一首，此刻想听的歌', maxLines: 1, overflow: TextOverflow.ellipsis)
+        : Tooltip(
+            message: widget.expanded ? '收起播放页' : '展开海报与歌词',
+            child: InkWell(
+              onTap: widget.onExpand,
+              borderRadius: BorderRadius.circular(7),
+              child: Row(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        tooltip: c.shuffle
-                            ? '随机播放'
-                            : c.repeat
-                            ? '列表循环'
-                            : '顺序播放',
-                        isSelected: c.shuffle || c.repeat,
-                        onPressed: () {
-                          if (c.shuffle) {
-                            c.setShuffle(false);
-                            c.setRepeat(false);
-                          } else if (c.repeat) {
-                            c.setRepeat(false);
-                            c.setShuffle(true);
-                          } else {
-                            c.setRepeat(true);
-                          }
-                        },
-                        icon: Icon(
-                          c.shuffle
-                              ? Icons.shuffle
-                              : c.repeat
-                              ? Icons.repeat
-                              : Icons.playlist_play,
-                          size: 19,
-                        ),
+                  Cover(controller: c, track: track, size: 46),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      layoutBuilder: (current, previous) => Stack(
+                        alignment: Alignment.centerLeft,
+                        children: [...previous, ?current],
                       ),
-                      IconButton(
-                        tooltip: '上一首',
-                        onPressed: track == null
-                            ? null
-                            : () => c.next(delta: -1),
-                        icon: const Icon(Icons.skip_previous),
-                      ),
-                      IconButton.filled(
-                        tooltip: c.playing ? '暂停' : '播放',
-                        onPressed: track == null ? null : () => c.toggle(),
-                        icon: Icon(c.playing ? Icons.pause : Icons.play_arrow),
-                      ),
-                      IconButton(
-                        tooltip: '下一首',
-                        onPressed: track == null ? null : () => c.next(),
-                        icon: const Icon(Icons.skip_next),
-                      ),
-                    ],
-                  ),
-                  Row(
-                    children: [
-                      Text(
-                        clock(c.position),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      Expanded(
-                        child: Slider(
-                          value: c.position.inMilliseconds.toDouble().clamp(
-                            0,
-                            c.duration.inMilliseconds > 0
-                                ? c.duration.inMilliseconds.toDouble()
-                                : 1,
+                      duration: MediaQuery.disableAnimationsOf(context)
+                          ? Duration.zero
+                          : const Duration(milliseconds: 180),
+                      child: Column(
+                        key: ValueKey(showLyrics),
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            showLyrics ? lyrics[active].text : track.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                          max: c.duration.inMilliseconds > 0
-                              ? c.duration.inMilliseconds.toDouble()
-                              : 1,
-                          onChanged: track == null
-                              ? null
-                              : (value) => c.seek(value / 1000),
-                        ),
+                          const SizedBox(height: 5),
+                          Text(
+                            showLyrics
+                                ? (active + 1 < lyrics.length
+                                      ? lyrics[active + 1].text
+                                      : '')
+                                : [track.artist, track.album]
+                                      .where((value) => value.isNotEmpty)
+                                      .join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ),
-                      Text(
-                        clock(c.duration),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
+                    ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 12),
-            if (MediaQuery.sizeOf(context).width >= 1100) ...[
-              const Icon(Icons.volume_up_outlined, size: 18),
-              SizedBox(
-                width: 85,
-                child: Slider(value: c.volume, onChanged: c.setVolume),
-              ),
-            ],
-            IconButton(
-              tooltip: '播放列表',
-              onPressed: () => showQueue(context, c),
-              icon: const Icon(Icons.queue_music),
-            ),
-          ],
+          );
+    return MouseRegion(
+      onEnter: (_) => setState(() => hovered = true),
+      onExit: (_) => setState(() => hovered = false),
+      child: Focus(
+        onFocusChange: (value) => setState(() => focused = value),
+        child: Material(
+          color: scheme.surfaceContainerLow,
+          child: LayoutBuilder(
+            builder: (context, bounds) {
+              final compact = bounds.maxWidth < 650;
+              return Stack(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 3, 20, 0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          height: 79,
+                          child: Row(
+                            children: [
+                              Expanded(child: info),
+                              const SizedBox(width: 22),
+                              transport,
+                              if (!compact) ...[
+                                const SizedBox(width: 22),
+                                tools,
+                              ],
+                            ],
+                          ),
+                        ),
+                        if (compact)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: tools,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    top: -6,
+                    left: 0,
+                    right: 0,
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 3,
+                        trackShape: const RectangularSliderTrackShape(),
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 4,
+                        ),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 8,
+                        ),
+                      ),
+                      child: SizedBox(
+                        height: 16,
+                        child: Semantics(
+                          label: '播放进度',
+                          child: Focus.withExternalFocusNode(
+                            focusNode: progressFocus,
+                            child: ExcludeFocus(
+                              child: Slider(
+                                key: const ValueKey('desktop-progress'),
+                                padding: EdgeInsets.zero,
+                                value: c.position.inMilliseconds
+                                    .toDouble()
+                                    .clamp(0, max > 0 ? max : 1),
+                                max: max > 0 ? max : 1,
+                                semanticFormatterCallback: (value) =>
+                                    '${clock(Duration(milliseconds: value.round()))} / ${clock(c.duration)}',
+                                onChanged: canSeek
+                                    ? (value) => c.seek(value / 1000)
+                                    : null,
+                                onChangeStart: canSeek
+                                    ? (_) => progressFocus.requestFocus()
+                                    : null,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -1558,6 +1703,46 @@ Future<void> showQueue(BuildContext context, MusicController c) =>
         ),
       ),
     );
+
+class ArtistAvatar extends StatelessWidget {
+  final MusicController controller;
+  final String name, path;
+  const ArtistAvatar({
+    super.key,
+    required this.controller,
+    required this.name,
+    required this.path,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final placeholder = ColoredBox(
+      color: Theme.of(context).colorScheme.secondaryContainer,
+      child: Center(child: Text(name.isEmpty ? '' : name.characters.first)),
+    );
+    return ExcludeSemantics(
+      child: ClipOval(
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: FutureBuilder<Uint8List>(
+            key: ValueKey('${controller.session?.server}:$name:$path'),
+            future: controller.artistArtwork(name, path),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                return placeholder;
+              }
+              return Image.memory(
+                snapshot.data!,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => placeholder,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class Cover extends StatelessWidget {
   final MusicController controller;

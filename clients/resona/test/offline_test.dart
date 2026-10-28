@@ -129,6 +129,21 @@ void main() {
     },
   );
 
+  test('single repeat mode survives restart', () async {
+    await prepare('http://127.0.0.1:1');
+    final c = MusicController(supportDirectory: root);
+    await c.initialize();
+    c.cycleMode();
+    c.cycleMode();
+    await c.savePlaybackState();
+    c.dispose();
+    final restored = MusicController(supportDirectory: root);
+    await restored.initialize();
+    expect(restored.repeatOne, isTrue);
+    expect(restored.modeTitle, '单曲循环');
+    restored.dispose();
+  });
+
   test('enqueue prepares paused playback without opening the engine', () async {
     await prepare('http://127.0.0.1:1');
     final engine = RecordingPlayer();

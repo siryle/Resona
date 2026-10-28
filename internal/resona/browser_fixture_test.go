@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -156,6 +157,14 @@ func TestBrowserFixture(t *testing.T) {
 	s.scanner.logger.Warn("Fixture scan warning")
 	s.logger.With("category", "plugin").Error("Fixture plugin failure <script>alert(1)</script>")
 	s.scanner.catalog = mockCatalog(t, catalogFixtures)
+	avatar, err := os.ReadFile(filepath.Join("..", "..", "docs", "brand", "resona-icon.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cacheArtwork(filepath.Join(s.config.DataDir, "artwork", "artists",
+		fmt.Sprintf("%x.jpg", sha256.Sum256([]byte("Artist")))), avatar); err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(s.Handler())
 	defer server.Close()
 	if err := s.store.update(func(st *libraryState) error {

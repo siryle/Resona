@@ -974,9 +974,9 @@ $("metadata-form").addEventListener("submit", async (event) => {
     if (state.current?.id === id) {
       Object.assign(state.current, updated);
       $("player-title").textContent = updated.title;
-      $("player-artist").textContent = updated.artist;
+      $("player-artist").textContent = [updated.artist, updated.album].filter(Boolean).join(" · ");
       renderListeningTrack();
-      if (listening.expanded) loadListeningLyrics(true);
+      loadListeningLyrics(true);
       if ("mediaSession" in navigator)
         navigator.mediaSession.metadata = new MediaMetadata({
           title: updated.title,
@@ -1146,7 +1146,7 @@ async function toggleFavorite(track) {
       if (item.id === updated.id) item.favorite = updated.favorite;
   if (state.current?.id === updated.id) {
     state.current.favorite = updated.favorite;
-    $("player-favorite").textContent = updated.favorite ? "♥" : "♡";
+    renderPlayerFavorite();
   }
 }
 async function loadArtists() {
@@ -1166,10 +1166,16 @@ async function loadArtists() {
       el("strong", "", artist.name),
       el("small", "", `${artist.tracks} 首歌曲`),
     );
-    card.append(
-      el("span", "artist-avatar", Array.from(artist.name)[0] || "♫"),
-      copy,
-    );
+    const avatar = el("span", "artist-avatar", Array.from(artist.name)[0] || "");
+    if (artist.artwork) {
+      const image = el("img");
+      image.alt = "";
+      image.loading = "lazy";
+      image.src = artist.artwork;
+      image.addEventListener("error", () => image.remove(), { once: true });
+      avatar.append(image);
+    }
+    card.append(avatar, copy);
     card.addEventListener("click", () =>
       navigate("tracks", { artist: artist.name, label: artist.name }),
     );
@@ -1640,12 +1646,13 @@ function play(track, queue, autoplay = true) {
   audio.src = `/api/v1/tracks/${track.id}/stream`;
   audio.volume = Number($("volume").value);
   $("player-title").textContent = track.title;
-  $("player-artist").textContent = track.artist;
+  $("player-artist").textContent = [track.artist, track.album].filter(Boolean).join(" · ");
   $("player-format").textContent = track.format;
   $("duration").textContent = time(track.duration);
   $("elapsed").textContent = "0:00";
   $("seek").value = "0";
-  $("player-favorite").textContent = track.favorite ? "♥" : "♡";
+  renderPlayerFavorite();
+  renderPlayerProgress();
   artwork($("player-art"), track);
   renderListeningTrack();
   listening.controller?.abort();
@@ -1654,7 +1661,8 @@ function play(track, queue, autoplay = true) {
   listening.lines = [];
   listening.active = -2;
   $("listening-lyrics-list").replaceChildren();
-  if (listening.expanded) loadListeningLyrics();
+  renderPlayerLyrics();
+  loadListeningLyrics();
   $("player-bar").hidden = false;
   document.body.classList.add("has-player");
   if ("mediaSession" in navigator)
@@ -1801,6 +1809,7 @@ async function loadListeningLyrics(force = false) {
   }
 }
 function updateListeningLyrics() {
+  renderPlayerLyrics();
   if (!listening.expanded || !listening.lines.length) return;
   const active = ResonaLyrics.activeAt(listening.lines, audio.currentTime);
   const list = $("listening-lyrics-list");
@@ -1826,6 +1835,36 @@ function updateListeningLyrics() {
     list.scrollTo({ top, behavior: "instant" });
   }
 }
+function renderPlayerFavorite() {
+  const favorite = Boolean(state.current?.favorite);
+  const label = favorite ? "取消喜欢" : "喜欢";
+  $("player-favorite").setAttribute("aria-pressed", String(favorite));
+  $("player-favorite").setAttribute("aria-label", label);
+  $("player-favorite").title = label;
+}
+function renderPlayerProgress() {
+  const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+  const position = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+  const progress = duration > 0 ? Math.min(1000, position / duration * 1000) : 0;
+  $("seek").disabled = duration <= 0;
+  $("seek").value = String(progress);
+  $("seek").style.setProperty("--progress", `${progress / 10}%`);
+  $("seek").setAttribute("aria-valuetext", `${time(position)} / ${time(duration)}`);
+  $("elapsed").textContent = time(position);
+  $("duration").textContent = time(duration);
+}
+function renderPlayerLyrics() {
+  const lines = ResonaLyrics.playbackLines(listening.lines, audio.currentTime);
+  const showLyrics = lines.length > 0 && !audio.paused &&
+    !$("player-bar").matches(":hover, :focus-within") &&
+    !window.matchMedia("(hover: none)").matches;
+  $("player-metadata").hidden = showLyrics;
+  $("player-lyrics").hidden = !showLyrics;
+  $("player-lyric-current").textContent = lines[0]?.text || "";
+  $("player-lyric-next").textContent = lines[1]?.text || "";
+}
+for (const event of ["mouseenter", "mouseleave", "focusin", "focusout"])
+  $("player-bar").addEventListener(event, () => requestAnimationFrame(renderPlayerLyrics));
 $("expand-player").addEventListener("click", () =>
   setExpanded(!listening.expanded),
 );
@@ -2138,29 +2177,36 @@ $("volume").addEventListener("input", () => {
 $("seek").addEventListener("input", () => {
   if (Number.isFinite(audio.duration))
     audio.currentTime = (Number($("seek").value) / 1000) * audio.duration;
+  renderPlayerProgress();
+});
+$("seek").addEventListener("keydown", (event) => {
+  if (!["ArrowLeft", "ArrowRight", " "].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === " ") $("play-pause").click();
+  else if (Number.isFinite(audio.duration))
+    audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + (event.key === "ArrowRight" ? 5 : -5)));
 });
 audio.addEventListener("play", () => {
   state.playbackRequested = true;
-  $("play-pause").textContent = "Ⅱ";
+  $("play-symbol").setAttribute("d", "M8 5h2v14H8Zm6 0h2v14h-2Z");
   $("play-pause").setAttribute("aria-label", "暂停");
   $("listening-record").classList.add("spinning");
+  renderPlayerLyrics();
 });
 audio.addEventListener("pause", () => {
   if (!audio.error) state.playbackRequested = false;
-  $("play-pause").textContent = "▶";
+  $("play-symbol").setAttribute("d", "m9 5 11 7-11 7Z");
   $("play-pause").setAttribute("aria-label", "播放");
   $("listening-record").classList.remove("spinning");
+  renderPlayerLyrics();
 });
+audio.addEventListener("durationchange", renderPlayerProgress);
 audio.addEventListener("ended", () => skip(1, true));
 audio.addEventListener("error", playbackFailed);
 audio.addEventListener("timeupdate", () => {
   if (Number.isFinite(audio.currentTime) && !audio.error) state.playbackPosition = audio.currentTime;
   updateListeningLyrics();
-  $("elapsed").textContent = time(audio.currentTime);
-  if (Number.isFinite(audio.duration) && audio.duration > 0) {
-    $("duration").textContent = time(audio.duration);
-    $("seek").value = String((audio.currentTime / audio.duration) * 1000);
-  }
+  renderPlayerProgress();
 });
 if ("mediaSession" in navigator) {
   for (const [action, handler] of [

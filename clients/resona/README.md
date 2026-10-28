@@ -9,6 +9,14 @@ The existing Swift clients remain the iOS / macOS implementation.
   structure, with a mini-player above the phone tab bar and a navigation rail on
   tablets. Windows follows the macOS sidebar, search header and persistent
   playback footer. Supports resizing, rotation, text scaling and light / dark themes.
+- The Windows footer matches macOS: a top-edge seek bar, artwork and current/next
+  lyric, playback controls, then volume/time, favorite, mode and queue. Hover,
+  keyboard focus or pause reveals song/artist/album information. Narrow windows
+  put secondary controls on another row. Progress supports pointer seeking,
+  five-second arrow-key steps and Space to play/pause. Sequential, list repeat,
+  single repeat and shuffle modes persist across restarts.
+- Artist lists use authenticated server artwork in circular avatars, retaining
+  the artist's initial when the field is absent or the image is unavailable.
 - Windows opens playback details within the main workspace: a record and album
   information beside synchronized, clickable lyrics, with the sidebar and
   playback footer still available. Narrow windows stack artwork above lyrics.

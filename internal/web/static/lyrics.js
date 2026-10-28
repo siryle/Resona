@@ -47,7 +47,11 @@
     }
     return result;
   }
-  const api = { parse, activeAt };
+  function playbackLines(lines, seconds) {
+    const index = activeAt(lines, seconds);
+    return index < 0 ? [] : lines.slice(index, index + 2);
+  }
+  const api = { parse, activeAt, playbackLines };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else globalThis.ResonaLyrics = api;
 })();

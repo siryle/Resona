@@ -1,3 +1,5 @@
+import 'dart:ui' show PointerDeviceKind;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,6 +16,22 @@ Track song(String id) => Track({
   'sample_rate': 44100,
   'duration': 180,
 });
+
+class SeekController extends MusicController {
+  @override
+  Future<void> seek(double seconds) async {
+    position = Duration(
+      milliseconds: (seconds * 1000).round().clamp(0, duration.inMilliseconds),
+    );
+    notifyListeners();
+  }
+
+  @override
+  Future<void> toggle() async {
+    playing = !playing;
+    notifyListeners();
+  }
+}
 
 Future<MusicController> workspace(
   WidgetTester tester,
@@ -60,6 +78,53 @@ Future<void> expand(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets(
+    'Windows progress responds to pointer and five-second keyboard seeking',
+    (tester) async {
+      tester.view.physicalSize = const Size(1000, 300);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final c = SeekController()
+        ..current = song('seek')
+        ..duration = const Duration(seconds: 100);
+      addTearDown(c.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: AnimatedBuilder(
+                animation: c,
+                builder: (_, _) =>
+                    DesktopPlayer(controller: c, onExpand: () {}),
+              ),
+            ),
+          ),
+        ),
+      );
+      final seek = find.byKey(const ValueKey('desktop-progress'));
+      await tester.tapAt(tester.getRect(seek).center);
+      await tester.pumpAndSettle();
+      expect(c.position.inSeconds, closeTo(50, 2));
+      final before = c.position;
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+      expect(c.position, before + const Duration(seconds: 5));
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pumpAndSettle();
+      expect(c.position, before);
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pumpAndSettle();
+      expect(c.playing, isTrue);
+      await tester.drag(seek, const Offset(150, 0));
+      await tester.pumpAndSettle();
+      expect(c.position, greaterThan(before));
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant({TargetPlatform.windows}),
+  );
+
   for (final size in [
     const Size(640, 600),
     const Size(720, 600),
@@ -108,7 +173,7 @@ void main() {
     }
   }
 
-  testWidgets('Windows footer cycles sequential, repeat and shuffle playback', (
+  testWidgets('Windows footer cycles all four macOS playback modes', (
     tester,
   ) async {
     final c = await workspace(tester, const Size(1280, 720), Brightness.light);
@@ -120,11 +185,51 @@ void main() {
     await tester.tap(find.byTooltip('列表循环'));
     await tester.pumpAndSettle();
     expect(c.repeat, isFalse);
+    expect(c.repeatOne, isTrue);
+    expect(c.shuffle, isFalse);
+    await tester.tap(find.byTooltip('单曲循环'));
+    await tester.pumpAndSettle();
+    expect(c.repeatOne, isFalse);
     expect(c.shuffle, isTrue);
-    await tester.tap(find.byTooltip('随机播放'));
+    await tester.tap(find.byTooltip('随机循环'));
     await tester.pumpAndSettle();
     expect(c.repeat, isFalse);
     expect(c.shuffle, isFalse);
+    expect(tester.takeException(), isNull);
+  }, variant: TargetPlatformVariant({TargetPlatform.windows}));
+
+  testWidgets('Windows footer shows lyrics until hovered, focused or paused', (
+    tester,
+  ) async {
+    final c = await workspace(tester, const Size(1280, 720), Brightness.light);
+    c.playing = true;
+    c.position = const Duration(milliseconds: 1500);
+    c.notifyListeners();
+    await tester.pumpAndSettle();
+    final bar = find.byType(DesktopPlayer);
+    Finder text(String value) =>
+        find.descendant(of: bar, matching: find.text(value));
+    expect(text('First line'), findsOneWidget);
+    expect(text('Second line'), findsOneWidget);
+    expect(text('Song one'), findsNothing);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(bar));
+    await tester.pumpAndSettle();
+    expect(text('Song one'), findsOneWidget);
+    await mouse.moveTo(Offset.zero);
+    await tester.pumpAndSettle();
+    expect(text('First line'), findsOneWidget);
+    final play = find.descendant(of: bar, matching: find.byTooltip('暂停'));
+    Focus.of(tester.element(play)).requestFocus();
+    await tester.pumpAndSettle();
+    expect(text('Song one'), findsOneWidget);
+    FocusManager.instance.primaryFocus?.unfocus();
+    c.playing = false;
+    c.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(text('Song one'), findsOneWidget);
     expect(tester.takeException(), isNull);
   }, variant: TargetPlatformVariant({TargetPlatform.windows}));
 

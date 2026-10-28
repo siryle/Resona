@@ -194,6 +194,18 @@ class ResonaAPI {
     return limitedBytes(response, 5 << 20);
   }
 
+  Future<List<int>> artistArtwork(String path) async {
+    if (path.isEmpty) return [];
+    final uri = session.server.resolve(path.replaceFirst(RegExp(r'^/+'), ''));
+    if (!sameOrigin(uri, session.server) || uri.userInfo.isNotEmpty) return [];
+    final response = await media(client, uri);
+    if (response.statusCode != 200) {
+      await response.drain<void>();
+      return [];
+    }
+    return limitedBytes(response, 5 << 20);
+  }
+
   Future<String> lyrics(Track track) async {
     final response = await media(
       client,

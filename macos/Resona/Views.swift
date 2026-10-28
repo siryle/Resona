@@ -214,7 +214,8 @@ struct DesktopView: View {
                         ForEach(library.artists.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { item in
                             Button { artist = item.name } label: {
                                 HStack {
-                                    Text(String(item.name.prefix(1))).font(.title2).frame(width: 48, height: 48).background(Theme.sage, in: Circle())
+                                    Artwork(path: item.artwork, fallback: String(item.name.prefix(1)))
+                                        .frame(width: 48, height: 48).clipShape(Circle())
                                     VStack(alignment: .leading) { Text(item.name); Text("\(item.tracks) 首").font(.caption).foregroundStyle(Theme.muted) }
                                     Spacer()
                                 }.padding(14).background(.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
@@ -451,16 +452,18 @@ private extension View {
 struct Artwork: View {
     @EnvironmentObject private var library: LibraryModel
     let path: String?
+    var fallback: String? = nil
     @State private var image: NSImage?
     var body: some View {
         ZStack {
             LinearGradient(colors: [Theme.sage, Theme.muted.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)
             if let image { Image(nsImage: image).resizable().scaledToFill() }
+            else if let fallback { Text(fallback).font(.title2).foregroundStyle(Theme.ink) }
             else { Image(systemName: "opticaldisc").resizable().scaledToFit().padding(15).foregroundStyle(Theme.muted) }
         }.aspectRatio(1, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 7))
-        .task(id: "\(library.session?.token ?? "")\(path ?? "")") {
+        .task(id: "\(library.session?.server.absoluteString ?? "")\(library.session?.token ?? "")\(path ?? "")") {
             image = nil
-            if let path, let id = path.split(separator: "/").dropLast().last,
+            if let path, path.hasPrefix("/api/v1/tracks/"), let id = path.split(separator: "/").dropLast().last,
                let cover = OfflineStore.shared.sidecar(String(id), name: "cover")
                     ?? PlaybackCache.shared.store?.sidecar(String(id), name: "cover") {
                 image = NSImage(contentsOf: cover)

@@ -49,12 +49,14 @@ struct Artwork: View {
     @EnvironmentObject private var library: LibraryModel
     let path: String?
     var radius: CGFloat = 12
+    var fallback: String? = nil
     @State private var image: UIImage?
 
     var body: some View {
         ZStack {
             LinearGradient(colors: [Theme.sage, Color(red: 0.77, green: 0.81, blue: 0.69)], startPoint: .topLeading, endPoint: .bottomTrailing)
             if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else if let fallback { Text(fallback).font(.title2).foregroundStyle(Theme.ink) }
             else {
                 GeometryReader { proxy in
                     Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(Theme.ink.opacity(0.65))
@@ -64,9 +66,9 @@ struct Artwork: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: radius))
-        .task(id: "\(library.session?.server.absoluteString ?? "")\(path ?? "")") {
+        .task(id: "\(library.session?.server.absoluteString ?? "")\(library.session?.token ?? "")\(path ?? "")") {
             image = nil
-            if let path, let id = path.split(separator: "/").dropLast().last,
+            if let path, path.hasPrefix("/api/v1/tracks/"), let id = path.split(separator: "/").dropLast().last,
                let cover = OfflineStore.shared.sidecar(String(id), name: "cover")
                     ?? PlaybackCache.shared.store?.sidecar(String(id), name: "cover") {
                 image = UIImage(contentsOfFile: cover.path)
@@ -254,7 +256,8 @@ struct CollectionView: View {
                                 TrackListView(title: artist.name, tracks: library.tracks.filter { $0.artist == artist.name || $0.albumArtist == artist.name })
                             } label: {
                                 HStack(spacing: 15) {
-                                    Text(String(artist.name.prefix(1))).font(.title2).frame(width: 52, height: 52).background(Theme.sage, in: Circle())
+                                    Artwork(path: artist.artwork, fallback: String(artist.name.prefix(1)))
+                                        .frame(width: 52, height: 52).clipShape(Circle())
                                     VStack(alignment: .leading, spacing: 5) { Text(artist.name).font(.subheadline); Text("\(artist.tracks) 首歌曲").font(.caption).foregroundStyle(Theme.muted) }
                                     Spacer(); Image(systemName: "chevron.right").font(.caption)
                                 }.padding(12).background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 13))

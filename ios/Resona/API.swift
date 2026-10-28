@@ -36,6 +36,7 @@ struct Artist: Decodable, Identifiable {
     var id: String { name }
     let name: String
     let tracks: Int
+    var artwork: String? = nil
 }
 
 struct Page<T: Decodable>: Decodable {
