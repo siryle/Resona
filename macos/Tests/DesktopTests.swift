@@ -2,6 +2,11 @@ import AppKit
 import CryptoKit
 import SwiftUI
 
+private final class DesktopTestWindow: NSWindow {
+    // Keep scripted content coordinates stable on smaller CI displays.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+}
+
 @main
 struct DesktopTests {
     @MainActor static func settle() {
@@ -384,8 +389,8 @@ struct DesktopTests {
         assert(!performBatch(.favorite, [track]) && !performBatch(.download, [track]))
         library.offline = false
 
-        let main = NSWindow(contentRect: NSRect(x: 100, y: 160, width: 1240, height: 800),
-                            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let main = DesktopTestWindow(contentRect: NSRect(x: 100, y: 160, width: 1240, height: 800),
+                                     styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         main.isReleasedWhenClosed = false
         func showLibrary() {
             main.contentView = NSHostingView(rootView: DesktopView(showingSettings: .constant(false))
@@ -394,6 +399,8 @@ struct DesktopTests {
             settle()
         }
         showLibrary()
+        assert(main.contentView!.bounds.size == NSSize(width: 1240, height: 800),
+               "Scripted UI interactions require the requested content size on every display")
         func click(_ point: NSPoint) {
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
