@@ -46,9 +46,8 @@ struct DesktopTests {
         assert(selection.filtered(songs, downloadedIDs: ["a"]).map(\.id) == ["a"])
         selection.favoritesOnly = false
         selection.downloadsOnly = false
-        selection.sortOrder = .title
-        let sorted = selection.filtered([d, c, c], downloadedIDs: [])
-        assert(sorted.map(\.id) == ["c", "c", "d"], "Natural sorting must be stable")
+        assert(selection.filtered([d, c, c], downloadedIDs: []).map(\.id) == ["d", "c", "c"],
+               "Filtering must preserve the collection's original order")
         assert(selection.selected(in: songs).map(\.id) == ["d", "c"], "Queue additions preserve source order")
         assert(selection.selected(in: [a]).isEmpty, "Out-of-scope or deleted tracks cannot be appended")
         selection.toggle("c")
@@ -226,10 +225,13 @@ struct DesktopTests {
         let main = NSWindow(contentRect: NSRect(x: 100, y: 160, width: 1240, height: 800),
                             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         main.isReleasedWhenClosed = false
-        main.contentView = NSHostingView(rootView: DesktopView(showingSettings: .constant(false))
-            .environmentObject(library).environmentObject(player).environmentObject(desktop).tint(Theme.accent).preferredColorScheme(.light))
-        main.makeKeyAndOrderFront(nil)
-        settle()
+        func showLibrary() {
+            main.contentView = NSHostingView(rootView: DesktopView(showingSettings: .constant(false))
+                .environmentObject(library).environmentObject(player).environmentObject(desktop).tint(Theme.accent).preferredColorScheme(.light))
+            main.makeKeyAndOrderFront(nil)
+            settle()
+        }
+        showLibrary()
         func click(_ point: NSPoint) {
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
@@ -252,7 +254,7 @@ struct DesktopTests {
         let navigation = snapshot(NSRect(x: 0, y: 0, width: 204, height: 800))
         func selectSongs() {
             let before = snapshot(footerRect)
-            click(NSPoint(x: 1105, y: 594))
+            click(NSPoint(x: 1149, y: 594))
             assert(snapshot(footerRect) != before, "Selection actions must cover the playback footer")
         }
         selectSongs()
@@ -376,7 +378,7 @@ struct DesktopTests {
             player.expanded = false
             settle()
             try capture(main, "songs-compact")
-            click(NSPoint(x: 785, y: 414))
+            click(NSPoint(x: 829, y: 414))
             try capture(main, "selection-compact")
             click(NSPoint(x: 870, y: 420))
             player.expanded = true
@@ -395,6 +397,29 @@ struct DesktopTests {
             NSStatusBar.system.removeStatusItem(saved.statusItem)
             NSStatusBar.system.removeStatusItem(saved.lyricStatusItem)
         }
+        player.pause()
+        player.expanded = false
+        main.setContentSize(NSSize(width: 1240, height: 800))
+        showLibrary()
+        func editableField(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable { return field }
+            return view.subviews.lazy.compactMap { editableField(in: $0) }.first
+        }
+        main.makeFirstResponder(editableField(in: main.contentView!)!)
+        settle()
+        let previousRect = NSRect(x: 835, y: 20, width: 30, height: 42)
+        let nextRect = NSRect(x: 937, y: 20, width: 30, height: 42)
+        let previousPaused = snapshot(previousRect)
+        let nextPaused = snapshot(nextRect)
+        // Drive the playing state without audio timing or pointer movement masking the regression.
+        player.playing = true
+        settle()
+        settle()
+        try snapshot(main.contentView!.bounds).write(to: root.appendingPathComponent("playing.png"))
+        assert(snapshot(previousRect) == previousPaused && snapshot(nextRect) == nextPaused,
+               "Previous and next must stay visible during playback without hover or keyboard focus")
+        click(NSPoint(x: 900, y: 40))
+        assert(!player.playing, "The visible pause button must work without first hovering the playback bar")
         desktop.desktopLyricsEnabled = false
         main.close()
         NSStatusBar.system.removeStatusItem(desktop.statusItem)

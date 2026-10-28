@@ -5,22 +5,17 @@ struct TrackSelection {
     enum SearchField: String, CaseIterable {
         case all = "全部", title = "歌曲", album = "专辑", artist = "歌手"
     }
-    enum SortOrder: String, CaseIterable {
-        case original = "默认顺序", title = "歌曲名称", artist = "歌手名称", album = "专辑名称"
-    }
-
     var selectedIDs = Set<String>()
     var query = ""
     var searchField = SearchField.all
     var favoritesOnly = false
     var downloadsOnly = false
-    var sortOrder = SortOrder.original
 
     var hasFilters: Bool { searchField != .all || favoritesOnly || downloadsOnly }
 
     func filtered(_ tracks: [Track], downloadedIDs: Set<String>) -> [Track] {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let result = tracks.filter { track in
+        return tracks.filter { track in
             guard !favoritesOnly || track.favorite,
                   !downloadsOnly || downloadedIDs.contains(track.id) else { return false }
             let text: String
@@ -32,19 +27,6 @@ struct TrackSelection {
             }
             return term.isEmpty || text.localizedCaseInsensitiveContains(term)
         }
-        guard sortOrder != .original else { return result }
-        func sortKey(_ track: Track) -> String {
-            switch sortOrder {
-            case .original: return ""
-            case .title: return track.title
-            case .artist: return track.artist
-            case .album: return track.album
-            }
-        }
-        return result.enumerated().sorted {
-            let comparison = sortKey($0.element).localizedStandardCompare(sortKey($1.element))
-            return comparison == .orderedSame ? $0.offset < $1.offset : comparison == .orderedAscending
-        }.map(\.element)
     }
 
     func allSelected(in tracks: [Track]) -> Bool {

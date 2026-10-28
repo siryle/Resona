@@ -45,11 +45,7 @@ struct DesktopView: View {
         selection.filtered(collectionTracks, downloadedIDs: Set(library.downloaded.map(\.id)))
     }
     private var selectedTracks: [Track] {
-        var unfiltered = selection
-        unfiltered.query = ""
-        unfiltered.favoritesOnly = false
-        unfiltered.downloadsOnly = false
-        return selection.selected(in: unfiltered.filtered(collectionTracks, downloadedIDs: []))
+        selection.selected(in: collectionTracks)
     }
     private var songCollection: Bool {
         !showingSettings && !player.expanded && !(section == .albums && album == nil) && !(section == .artists && artist == nil)
@@ -242,13 +238,6 @@ struct DesktopView: View {
                                 Spacer()
                                 Button { selecting = true; showQueue = false } label: { Image(systemName: "checklist").collectionIcon() }
                                     .accessibilityLabel("选歌").help("选歌").disabled(tracks.isEmpty)
-                                Menu {
-                                    Picker("排序", selection: $selection.sortOrder) {
-                                        ForEach(TrackSelection.SortOrder.allCases, id: \.self) { order in Text(order.rawValue).tag(order) }
-                                    }
-                                } label: { Image(systemName: "arrow.up.arrow.down").foregroundStyle(Theme.ink) }
-                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().collectionIcon()
-                                    .help("歌曲排序").accessibilityLabel("歌曲排序")
                                 Button { playAll(shuffle: true) } label: { Image(systemName: "shuffle").collectionIcon() }
                                     .accessibilityLabel("随机播放").help("随机播放").disabled(tracks.isEmpty)
                             }.buttonStyle(.plain)
@@ -532,22 +521,6 @@ struct ServerSettings: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                settingsSection("歌词与菜单栏") {
-                    Toggle("桌面歌词", isOn: $desktop.desktopLyricsEnabled)
-                    explanation("在桌面上单行显示当前歌词，可拖动位置。")
-                    Toggle("锁定桌面歌词（鼠标穿透）", isOn: $desktop.lyricsLocked)
-                        .disabled(!desktop.desktopLyricsEnabled)
-                    HStack(spacing: 16) {
-                        Text("歌词字号")
-                        Slider(value: $desktop.fontSize, in: 18...48, step: 1)
-                            .accessibilityLabel("桌面歌词字号")
-                        Text("\(Int(desktop.fontSize))").monospacedDigit().frame(width: 28)
-                    }.disabled(!desktop.desktopLyricsEnabled)
-                    Divider()
-                    Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
-                    Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
-                    explanation("歌词和播控独立显示，默认歌词在左、播控在右。按住 ⌘ 拖动可分别调整位置，系统会记住排列。关闭播控后仍保留波形入口，可打开播放面板。")
-                }.toggleStyle(.switch)
                 settingsSection("服务器") {
                     if let session = library.session {
                         Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 16) {
@@ -585,6 +558,22 @@ struct ServerSettings: View {
                         }
                     }
                 }
+                settingsSection("歌词与菜单栏") {
+                    Toggle("桌面歌词", isOn: $desktop.desktopLyricsEnabled)
+                    explanation("在桌面上单行显示当前歌词，可拖动位置。")
+                    Toggle("锁定桌面歌词（鼠标穿透）", isOn: $desktop.lyricsLocked)
+                        .disabled(!desktop.desktopLyricsEnabled)
+                    HStack(spacing: 16) {
+                        Text("歌词字号")
+                        Slider(value: $desktop.fontSize, in: 18...48, step: 1)
+                            .accessibilityLabel("桌面歌词字号")
+                        Text("\(Int(desktop.fontSize))").monospacedDigit().frame(width: 28)
+                    }.disabled(!desktop.desktopLyricsEnabled)
+                    Divider()
+                    Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
+                    Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
+                    explanation("歌词和播控独立显示，默认歌词在左、播控在右。按住 ⌘ 拖动可分别调整位置，系统会记住排列。关闭播控后仍保留波形入口，可打开播放面板。")
+                }.toggleStyle(.switch)
                 settingsSection("离线音乐") {
                     HStack {
                         Text("本机下载")

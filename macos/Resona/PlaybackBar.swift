@@ -13,7 +13,7 @@ struct DesktopPlaybackBar: View {
         case progress, artwork, previous, play, next, volume, favorite, mode, queue
     }
 
-    private var showPlayerControls: Bool {
+    private var showTrackInfo: Bool {
         playerBarHovered || focusedControl != nil || !player.playing
     }
 
@@ -66,16 +66,16 @@ struct DesktopPlaybackBar: View {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(track.title).font(.system(size: 14, weight: .semibold))
                                     Text("\(track.artist) · \(track.album)").font(.system(size: 12)).foregroundStyle(Theme.ink.opacity(0.65))
-                                }.opacity(showPlayerControls || lyrics.isEmpty ? 1 : 0)
-                                    .accessibilityHidden(!showPlayerControls && !lyrics.isEmpty)
+                                }.opacity(showTrackInfo || lyrics.isEmpty ? 1 : 0)
+                                    .accessibilityHidden(!showTrackInfo && !lyrics.isEmpty)
                                 if !lyrics.isEmpty {
                                     VStack(alignment: .leading, spacing: 5) {
                                         Text(lyrics[0]).font(.system(size: 14, weight: .medium))
                                         if lyrics.count > 1 {
                                             Text(lyrics[1]).font(.system(size: 12)).foregroundStyle(Theme.ink.opacity(0.65))
                                         }
-                                    }.opacity(showPlayerControls ? 0 : 1)
-                                        .accessibilityHidden(showPlayerControls)
+                                    }.opacity(showTrackInfo ? 0 : 1)
+                                        .accessibilityHidden(showTrackInfo)
                                 }
                             }.lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                         }.contentShape(Rectangle())
@@ -100,9 +100,7 @@ struct DesktopPlaybackBar: View {
                     Button { player.next() } label: {
                         Image(systemName: "forward.end.fill").frame(width: 26, height: 36)
                     }.help("下一首").accessibilityLabel("下一首").focused($focusedControl, equals: .next)
-                }.buttonStyle(.plain).disabled(player.current == nil || !showPlayerControls).fixedSize()
-                    .opacity(showPlayerControls ? 1 : 0)
-                    .allowsHitTesting(showPlayerControls).accessibilityHidden(!showPlayerControls)
+                }.buttonStyle(.plain).disabled(player.current == nil).fixedSize()
                 HStack(spacing: 14) {
                     VStack(spacing: 5) {
                         HStack(spacing: 8) {
@@ -149,6 +147,6 @@ struct DesktopPlaybackBar: View {
                 player.toggle()
                 return .handled
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showPlayerControls)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showTrackInfo)
     }
 }
