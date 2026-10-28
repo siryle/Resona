@@ -95,6 +95,50 @@ struct DesktopTests {
         assert(selection.selectedIDs == ["d"])
     }
 
+    @MainActor static func menuLyricTests() {
+        let button = MenuBarLyricButton(frame: NSRect(x: 0, y: 0, width: 216, height: 22))
+        button.font = .menuBarFont(ofSize: 14)
+        button.update(text: "Short", elapsed: 0, playing: false)
+        let center = button.textDrawingRect.midX
+        button.update(text: "A longer line", elapsed: 0, playing: false)
+        assert(abs(button.textDrawingRect.midX - center) < 0.01 && center == button.viewport.midX,
+               "Short lines must share the same center inside the fixed lyric viewport")
+        assert(button.viewport.width == 182 && button.viewport.maxX == button.bounds.maxX - 1)
+        let long = String(repeating: "Long lyric ", count: 8)
+        button.update(text: long, elapsed: 0, duration: 8, playing: false)
+        assert(button.textDrawingRect.minX == button.viewport.minX, "A long line must start at its head")
+        button.update(text: long, elapsed: 0.1, duration: 8, playing: false)
+        assert(button.textDrawingRect.minX == button.viewport.minX, "The head must remain readable before scrolling")
+        button.update(text: long, elapsed: 100, duration: 8, playing: false)
+        assert(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ||
+               abs(button.textDrawingRect.maxX - button.viewport.maxX) < 0.01,
+               "Scrolling must stop at the tail without wrapping or restarting")
+        button.update(text: long, elapsed: 4, duration: 8, playing: false)
+        let paused = button.textDrawingRect
+        button.update(text: long, elapsed: 2, duration: 4, playing: false)
+        assert(button.textDrawingRect == paused, "Equal line progress must produce the same offset at different speeds")
+        settle()
+        assert(button.textDrawingRect == paused, "Paused playback must freeze the lyric offset")
+        button.update(text: long, elapsed: 0, duration: 8, playing: false)
+        assert(button.textDrawingRect.minX == button.viewport.minX, "Seeking or repeating a line must reset its head")
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            button.update(text: long, elapsed: 4, duration: 8, playing: true)
+            let start = button.textDrawingRect.minX
+            settle()
+            assert(button.textDrawingRect.minX < start, "Scrolling must advance between player position samples")
+            button.update(text: long, elapsed: 4, duration: 8, playing: false)
+            let stopped = button.textDrawingRect
+            settle()
+            assert(button.textDrawingRect == stopped, "Pausing between position samples must preserve the visible offset")
+            button.update(text: long, elapsed: 4, duration: 8, playing: true)
+            assert(abs(button.textDrawingRect.minX - stopped.minX) < 1, "Resuming must not jump back to the last raw sample")
+        }
+        button.update(text: long, elapsed: nil, playing: true)
+        assert(button.textDrawingRect.minX == button.viewport.minX, "Unsynchronized metadata must not invent lyric timing")
+        button.update(text: "Next line", elapsed: 0, playing: false)
+        assert(button.textDrawingRect.midX == center, "Changing lines must restore the fixed center")
+    }
+
     @MainActor static func main() throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
@@ -108,6 +152,7 @@ struct DesktopTests {
         let player = PlayerModel(downloads: store, cache: cache)
         let library = LibraryModel(downloads: store, persistsSession: false, cache: cache)
         player.volume = 0
+        menuLyricTests()
         placementTests()
         MenuBarPlacement.prepare(defaults: defaults, system: UserDefaults(suiteName: "com.apple.controlcenter"))
         let oldPosition = UserDefaults.standard.object(forKey: MenuBarPlacement.positionKey)
@@ -470,12 +515,7 @@ struct DesktopTests {
         settle()
         let images = root.appendingPathComponent("screenshots")
         try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
-        for (name, appearance, background) in [
-            ("menubar", NSAppearance.Name.vibrantDark, NSColor.black),
-            ("menubar-light", NSAppearance.Name.aqua, NSColor.white)
-        ] {
-            status.appearance = NSAppearance(named: appearance)
-            settle()
+        func captureMenuBar(_ name: String, background: NSColor) throws -> NSBitmapImageRep {
             var rendered: NSBitmapImageRep!
             status.effectiveAppearance.performAsCurrentDrawingAppearance {
                 let bitmap = status.bitmapImageRepForCachingDisplay(in: status.bounds)!
@@ -490,6 +530,15 @@ struct DesktopTests {
                 rendered = NSBitmapImageRep(data: image.tiffRepresentation!)!
             }
             try rendered.representation(using: .png, properties: [:])!.write(to: images.appendingPathComponent(name + ".png"))
+            return rendered
+        }
+        for (name, appearance, background) in [
+            ("menubar", NSAppearance.Name.vibrantDark, NSColor.black),
+            ("menubar-light", NSAppearance.Name.aqua, NSColor.white)
+        ] {
+            status.appearance = NSAppearance(named: appearance)
+            settle()
+            let rendered = try captureMenuBar(name, background: background)
             let scale = CGFloat(rendered.pixelsWide) / status.bounds.width
             for control in buttons {
                 let icon = control.convert(control.bounds, to: status).intersection(status.bounds)
@@ -519,6 +568,20 @@ struct DesktopTests {
             }
         }
         status.appearance = nil
+        if CommandLine.arguments.contains("--capture") {
+            let controlsFrame = buttons.map(\.frame)
+            status.appearance = NSAppearance(named: .vibrantDark)
+            for (name, elapsed) in [("head", 0.0), ("middle", 4.0), ("tail", 8.0)] {
+                lyrics.update(text: "让每一份热爱产生共鸣，让音乐陪你走过漫长的旅途", elapsed: elapsed,
+                              duration: 8, playing: false)
+                settle()
+                _ = try captureMenuBar("menubar-lyric-" + name, background: .black)
+                assert(buttons.map(\.frame) == controlsFrame, "Scrolling lyrics must never move the controls")
+            }
+            status.appearance = nil
+            player.position = 1
+            settle()
+        }
 
         if CommandLine.arguments.contains("--capture") {
             func capture(_ window: NSWindow, _ name: String) throws {

@@ -572,7 +572,7 @@ struct ServerSettings: View {
                     Divider()
                     Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
                     Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
-                    explanation("歌词在左、播控在右，默认整组放在无线等系统图标左侧，可独立开关。刘海屏预留固定歌词区域，长歌词自动截断。按住 ⌘ 可整体拖动，系统会记住位置。关闭播控后仍保留 Resona 图标，可打开播放面板。")
+                    explanation("歌词在左、播控在右，默认整组放在无线等系统图标左侧，可独立开关。歌词区域固定，短句居中，长句随播放进度向左滚动。按住 ⌘ 可整体拖动，系统会记住位置。关闭播控后仍保留 Resona 图标，可打开播放面板。")
                 }.toggleStyle(.switch)
                 settingsSection("离线音乐") {
                     HStack {

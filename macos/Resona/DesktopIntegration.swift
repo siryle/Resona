@@ -131,7 +131,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
     private let defaults: UserDefaults
     private var subscriptions = Set<AnyCancellable>()
     let statusItem: NSStatusItem
-    let lyricButton = NSButton()
+    let lyricButton = MenuBarLyricButton()
     private let popover = NSPopover()
     private var panel: NSPanel?
     private let previousButton = MenuBarIconButton()
@@ -216,14 +216,15 @@ final class DesktopIntegration: NSObject, ObservableObject {
         lyricButton.target = self
         lyricButton.action = #selector(togglePopover(_:))
         lyricButton.font = .menuBarFont(ofSize: 14)
-        lyricButton.lineBreakMode = .byTruncatingTail
+        lyricButton.lineBreakMode = .byClipping
         lyricButton.cell?.usesSingleLineMode = true
-        lyricButton.alignment = .right
+        lyricButton.alignment = .center
         lyricButton.isBordered = false
         lyricButton.focusRingType = .none
         lyricButton.translatesAutoresizingMaskIntoConstraints = false
-        lyricWidth = lyricButton.widthAnchor.constraint(equalToConstant: 160)
+        lyricWidth = lyricButton.widthAnchor.constraint(equalToConstant: MenuBarLyricButton.maximumWidth)
         lyricWidth?.isActive = true
+        lyricButton.heightAnchor.constraint(equalToConstant: NSStatusBar.system.thickness).isActive = true
         let controls = [previousButton, playButton, nextButton, favoriteButton, menuButton]
         for control in controls {
             control.isBordered = false
@@ -234,7 +235,6 @@ final class DesktopIntegration: NSObject, ObservableObject {
         }
         let stack = NSStackView(views: [lyricButton] + controls)
         stack.spacing = 0
-        stack.setCustomSpacing(8, after: lyricButton)
         stack.alignment = .centerY
         stack.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(stack)
@@ -267,16 +267,19 @@ final class DesktopIntegration: NSObject, ObservableObject {
         favoriteButton.setAccessibilityLabel(liked ? "取消喜欢" : "喜欢")
         favoriteButton.isEnabled = canFavorite
         let line = currentLyric
-        lyricButton.title = line
         lyricButton.toolTip = lyricLines.joined(separator: "\n")
         lyricButton.setAccessibilityLabel("菜单栏歌词：\(line)")
         let controls: CGFloat = menuControlsEnabled ? 120 : 24
-        let textWidth = (line as NSString).size(withAttributes: [.font: lyricButton.font!]).width + 4
-        let width = reservedMenuBarLength.map { max(40, $0 - controls - 8) } ?? min(160, max(40, textWidth))
+        let width = reservedMenuBarLength.map { max(40, $0 - controls) } ?? MenuBarLyricButton.maximumWidth
         lyricWidth?.constant = width
         lyricButton.isHidden = !menuLyricsEnabled
         [previousButton, playButton, nextButton, favoriteButton].forEach { $0.isHidden = !menuControlsEnabled }
-        let length = controls + (menuLyricsEnabled ? width + 8 : 0)
+        let active = Lyrics.playbackLines(player.lyrics, at: player.position).first
+        let end = active.flatMap { current in player.lyrics.first { $0.time > current.time }?.time } ??
+            max(player.duration, player.current?.duration ?? 0)
+        lyricButton.update(text: line, elapsed: active.map { player.position - $0.time },
+                           duration: active.map { end - $0.time }, playing: player.playing)
+        let length = controls + (menuLyricsEnabled ? width : 0)
         if abs(statusItem.length - length) > 0.5 { statusItem.length = length }
     }
 
