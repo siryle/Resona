@@ -3,7 +3,56 @@ import Combine
 import SwiftUI
 
 final class DesktopAppDelegate: NSObject, NSApplicationDelegate {
+    weak var desktop: DesktopIntegration?
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { desktop?.makeDockMenu() }
+}
+
+enum MenuBarPlacement {
+    static let positionKey = "NSStatusItem Preferred Position ResonaMenuBar"
+
+    static func prepare(defaults: UserDefaults, system: UserDefaults?) {
+        guard !defaults.bool(forKey: "menuBarSystemPlacementMigrated") else { return }
+        let saved = defaults.object(forKey: positionKey) as? NSNumber
+        // Replace the old rightmost seed once; preserve positions saved by Command-drag.
+        if saved == nil || saved?.doubleValue == 0 {
+            let wifi = system?.double(forKey: "NSStatusItem Preferred Position WiFi") ?? 0
+            let controls = system?.double(forKey: "NSStatusItem Preferred Position BentoBox") ?? 0
+            let battery = system?.double(forKey: "NSStatusItem Preferred Position Battery") ?? 0
+            defaults.set(max(224, wifi, controls, battery) + 1, forKey: positionKey)
+        }
+        defaults.set(true, forKey: "menuBarSystemPlacementMigrated")
+    }
+
+    static func reservedLength(safeArea: NSRect, items: [(name: String?, frame: NSRect)]) -> CGFloat? {
+        let trailing = items.sorted { $0.frame.maxX > $1.frame.maxX }
+        // Window geometry remains available without permission to read other apps' window titles.
+        guard let anchor = trailing.first(where: { $0.name == "WiFi" }) ??
+                (trailing.count >= 4 ? trailing[3] : nil) else { return nil }
+        // Leave a small notch inset and account for the status window's two 8-point end caps.
+        return max(150, anchor.frame.minX - safeArea.minX - 24 - 16)
+    }
+
+    static func reservedLength(on screen: NSScreen?) -> CGFloat? {
+        guard let screen, let safe = screen.auxiliaryTopRightArea else { return nil }
+        let systemIDs = Set(NSWorkspace.shared.runningApplications.filter {
+            ["com.apple.controlcenter", "com.apple.systemuiserver", "com.apple.Spotlight"].contains($0.bundleIdentifier ?? "")
+        }.map(\.processIdentifier))
+        let top = (NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY) - screen.frame.maxY
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        let items: [(name: String?, frame: NSRect)] = windows.compactMap { window in
+            guard let pid = window[kCGWindowOwnerPID as String] as? Int32, systemIDs.contains(pid),
+                  let layer = window[kCGWindowLayer as String] as? Int, layer == NSWindow.Level.statusBar.rawValue,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  abs(frame.minY - top) <= 1, frame.minX >= safe.minX, frame.maxX <= safe.maxX + 4 else { return nil }
+            return (window[kCGWindowName as String] as? String, frame)
+        }
+        return reservedLength(safeArea: safe, items: items)
+    }
 }
 
 private final class MenuBarIconButton: NSButton {
@@ -19,9 +68,24 @@ private final class MenuBarIconButton: NSButton {
         let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         let color: NSColor = usesAccentColor ? .systemRed : (dark ? .white : .black)
         // Vibrant menu bars can ignore contentTintColor on template button images.
-        guard let colored = image.withSymbolConfiguration(.init(paletteColors: [color]))?.copy() as? NSImage else { return }
+        let colored = NSImage(size: image.size)
+        colored.lockFocus()
+        image.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+        color.setFill()
+        NSRect(origin: .zero, size: image.size).fill(using: .sourceIn)
+        colored.unlockFocus()
+        colored.alignmentRect = image.alignmentRect
         colored.isTemplate = false
-        colored.draw(in: cell.imageRect(forBounds: bounds), from: .zero, operation: .sourceOver,
+        let alignment = colored.alignmentRect
+        let target = cell.imageRect(forBounds: bounds)
+        guard alignment.width > 0, alignment.height > 0 else { return }
+        let scale = min(target.width / alignment.width, target.height / alignment.height)
+        // The cell positions the alignment rect; drawing the whole canvas there flattens symbols.
+        let topInset = isFlipped ? colored.size.height - alignment.maxY : alignment.minY
+        let destination = NSRect(x: target.midX - (alignment.midX * scale),
+                                 y: target.midY - (topInset + alignment.height / 2) * scale,
+                                 width: colored.size.width * scale, height: colored.size.height * scale)
+        colored.draw(in: destination, from: .zero, operation: .sourceOver,
                      fraction: isEnabled ? (isHighlighted ? 0.65 : 1) : 0.35, respectFlipped: true, hints: nil)
     }
 }
@@ -75,6 +139,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
     private let nextButton = MenuBarIconButton()
     private let favoriteButton = MenuBarIconButton()
     private var lyricWidth: NSLayoutConstraint?
+    private var reservedMenuBarLength: CGFloat?
 
     var lyricLines: [String] {
         let active = Lyrics.playbackLines(player.lyrics, at: player.position).map(\.text)
@@ -103,9 +168,8 @@ final class DesktopIntegration: NSObject, ObservableObject {
         lyricsLocked = defaults.bool(forKey: "desktopLyricsLocked")
         let size = defaults.object(forKey: "desktopLyricsFontSize") as? Double ?? 28
         fontSize = size.isFinite ? min(48, max(18, size)) : 28
-        // Seed only our initial placement; AppKit saves subsequent Command-drags.
-        let placementKey = "NSStatusItem Preferred Position ResonaMenuBar"
-        if defaults.object(forKey: placementKey) == nil { defaults.set(0, forKey: placementKey) }
+        MenuBarPlacement.prepare(defaults: defaults, system: UserDefaults(suiteName: "com.apple.controlcenter"))
+        reservedMenuBarLength = MenuBarPlacement.reservedLength(on: NSScreen.main)
         statusItem = NSStatusBar.system.statusItem(withLength: 0)
         super.init()
         statusItem.autosaveName = "ResonaMenuBar"
@@ -120,7 +184,11 @@ final class DesktopIntegration: NSObject, ObservableObject {
         statusItem.isVisible = true
         updatePanel()
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .sink { [weak self] _ in self?.placePanel() }.store(in: &subscriptions)
+            .sink { [weak self] _ in
+                self?.placePanel()
+                self?.reservedMenuBarLength = MenuBarPlacement.reservedLength(on: self?.statusItem.button?.window?.screen ?? NSScreen.main)
+                self?.updateStatus()
+            }.store(in: &subscriptions)
     }
 
     private func configureStatusItem() {
@@ -129,7 +197,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
         button.action = #selector(togglePopover(_:))
         button.toolTip = "Resona · 歌词与播放设置"
         button.setAccessibilityLabel("Resona 菜单栏播控")
-        let menuButton = MenuBarIconButton(image: NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)!,
+        let menuButton = MenuBarIconButton(image: MenuBarLogo.image(),
                                           target: self, action: #selector(togglePopover(_:)))
         menuButton.toolTip = "Resona · 歌词与播放设置"
         menuButton.setAccessibilityLabel("歌词与播放设置")
@@ -147,7 +215,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
         }
         lyricButton.target = self
         lyricButton.action = #selector(togglePopover(_:))
-        lyricButton.font = .menuBarFont(ofSize: 12)
+        lyricButton.font = .menuBarFont(ofSize: 14)
         lyricButton.lineBreakMode = .byTruncatingTail
         lyricButton.cell?.usesSingleLineMode = true
         lyricButton.alignment = .right
@@ -162,7 +230,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
             control.focusRingType = .none
             control.translatesAutoresizingMaskIntoConstraints = false
             control.heightAnchor.constraint(equalToConstant: NSStatusBar.system.thickness).isActive = true
-            control.widthAnchor.constraint(equalToConstant: control === menuButton ? 22 : 20).isActive = true
+            control.widthAnchor.constraint(equalToConstant: 24).isActive = true
         }
         let stack = NSStackView(views: [lyricButton] + controls)
         stack.spacing = 0
@@ -182,7 +250,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
 
     private func menuImage(_ symbol: String) -> NSImage? {
         NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .semibold))
     }
 
     private func updateStatus() {
@@ -202,12 +270,59 @@ final class DesktopIntegration: NSObject, ObservableObject {
         lyricButton.title = line
         lyricButton.toolTip = lyricLines.joined(separator: "\n")
         lyricButton.setAccessibilityLabel("菜单栏歌词：\(line)")
-        let width = min(160, max(40, (line as NSString).size(withAttributes: [.font: lyricButton.font!]).width + 4))
+        let controls: CGFloat = menuControlsEnabled ? 120 : 24
+        let textWidth = (line as NSString).size(withAttributes: [.font: lyricButton.font!]).width + 4
+        let width = reservedMenuBarLength.map { max(40, $0 - controls - 8) } ?? min(160, max(40, textWidth))
         lyricWidth?.constant = width
         lyricButton.isHidden = !menuLyricsEnabled
         [previousButton, playButton, nextButton, favoriteButton].forEach { $0.isHidden = !menuControlsEnabled }
-        statusItem.length = (menuControlsEnabled ? 102 : 22) + (menuLyricsEnabled ? width + 8 : 0)
+        let length = controls + (menuLyricsEnabled ? width + 8 : 0)
+        if abs(statusItem.length - length) > 0.5 { statusItem.length = length }
     }
+
+    func makeDockMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        @discardableResult func item(_ title: String, action: Selector? = nil, enabled: Bool = true,
+                  in parent: NSMenu? = nil) -> NSMenuItem {
+            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            entry.target = self
+            entry.isEnabled = enabled && action != nil
+            (parent ?? menu).addItem(entry)
+            return entry
+        }
+        let available = player.current != nil
+        item(available ? (player.playing ? "正在播放" : "已暂停") : "尚未播放")
+        if let track = player.current {
+            item(track.title).indentationLevel = 1
+            item([track.artist, track.album].filter { !$0.isEmpty }.joined(separator: " - ")).indentationLevel = 1
+        }
+        item(player.playing ? "暂停" : "播放", action: #selector(togglePlayback), enabled: available)
+        item("下一首", action: #selector(next), enabled: available)
+        item("上一首", action: #selector(previous), enabled: available)
+        let liked = favoriteTrack?.favorite == true
+        item(liked ? "取消喜欢" : "喜欢歌曲", action: #selector(toggleFavorite), enabled: canFavorite).state = liked ? .on : .off
+        let repeatItem = item("循环播放")
+        let repeatMenu = NSMenu(title: "循环播放")
+        repeatMenu.autoenablesItems = false
+        repeatItem.submenu = repeatMenu
+        repeatItem.isEnabled = true
+        for mode in [PlaybackMode.sequential, .repeatAll, .repeatOne] {
+            let entry = item(mode.title, action: #selector(setPlaybackMode(_:)), in: repeatMenu)
+            entry.representedObject = mode.rawValue
+            entry.state = player.mode == mode ? .on : .off
+        }
+        item("随机播放", action: #selector(toggleShuffle)).state = player.shuffle ? .on : .off
+        menu.addItem(.separator())
+        return menu
+    }
+
+    @objc private func setPlaybackMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let mode = PlaybackMode(rawValue: raw) else { return }
+        player.mode = mode
+    }
+
+    @objc private func toggleShuffle() { player.shuffle.toggle() }
 
     private func updatePanel() {
         guard desktopLyricsEnabled else { panel?.orderOut(nil); return }

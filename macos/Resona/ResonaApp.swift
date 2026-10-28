@@ -16,7 +16,9 @@ struct ResonaDesktopApp: App {
         let player = PlayerModel()
         _library = StateObject(wrappedValue: library)
         _player = StateObject(wrappedValue: player)
-        _desktop = StateObject(wrappedValue: DesktopIntegration(player: player, library: library))
+        let desktop = DesktopIntegration(player: player, library: library)
+        _desktop = StateObject(wrappedValue: desktop)
+        appDelegate.desktop = desktop
     }
 
     var body: some Scene {

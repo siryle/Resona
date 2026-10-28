@@ -8,6 +8,46 @@ struct DesktopTests {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15))
     }
 
+    static func placementTests() {
+        let domain = "app.resona.placement-tests." + UUID().uuidString
+        let systemDomain = domain + ".system"
+        let defaults = UserDefaults(suiteName: domain)!
+        let system = UserDefaults(suiteName: systemDomain)!
+        defer {
+            defaults.removePersistentDomain(forName: domain)
+            system.removePersistentDomain(forName: systemDomain)
+        }
+        system.set(240, forKey: "NSStatusItem Preferred Position WiFi")
+        system.set(150, forKey: "NSStatusItem Preferred Position BentoBox")
+        defaults.set(0, forKey: MenuBarPlacement.positionKey)
+        MenuBarPlacement.prepare(defaults: defaults, system: system)
+        assert(defaults.integer(forKey: MenuBarPlacement.positionKey) == 241,
+               "The old rightmost seed must move to the left of the system cluster")
+        defaults.set(0, forKey: MenuBarPlacement.positionKey)
+        MenuBarPlacement.prepare(defaults: defaults, system: system)
+        assert(defaults.integer(forKey: MenuBarPlacement.positionKey) == 0,
+               "Migration must run only once, including a later drag to the far right")
+        defaults.removeObject(forKey: "menuBarSystemPlacementMigrated")
+        defaults.set(400, forKey: MenuBarPlacement.positionKey)
+        MenuBarPlacement.prepare(defaults: defaults, system: system)
+        assert(defaults.integer(forKey: MenuBarPlacement.positionKey) == 400,
+               "Existing custom positions must survive migration")
+        let safe = NSRect(x: 825, y: 924, width: 645, height: 32)
+        let items = [
+            (name: "Battery", frame: NSRect(x: 1159, y: 0, width: 42, height: 33)),
+            (name: "WiFi", frame: NSRect(x: 1201, y: 0, width: 38, height: 33)),
+            (name: "Item-0", frame: NSRect(x: 1239, y: 0, width: 32, height: 33)),
+            (name: "BentoBox-0", frame: NSRect(x: 1271, y: 0, width: 42, height: 33)),
+            (name: "Clock", frame: NSRect(x: 1313, y: 0, width: 159, height: 33))
+        ]
+        assert(MenuBarPlacement.reservedLength(safeArea: safe, items: items) == 336,
+               "Reserve the segment up to Wi-Fi, excluding battery and other items")
+        assert(MenuBarPlacement.reservedLength(safeArea: safe, items: items.map { (nil, $0.frame) }) == 336,
+               "Placement must also work when window titles require screen-recording permission")
+        assert(MenuBarPlacement.reservedLength(safeArea: safe, items: []) == nil,
+               "Unavailable system geometry must fall back to the compact item")
+    }
+
     static func selectionTests(_ track: Track) {
         func song(_ id: String, _ title: String, _ artist: String, _ album: String, liked: Bool = false) -> Track {
             Track(id: id, title: title, artist: artist, albumArtist: artist, album: album, year: "2026", number: 1,
@@ -68,8 +108,20 @@ struct DesktopTests {
         let player = PlayerModel(downloads: store, cache: cache)
         let library = LibraryModel(downloads: store, persistsSession: false, cache: cache)
         player.volume = 0
-        UserDefaults.standard.register(defaults: ["NSStatusItem Preferred Position ResonaMenuBar": 0])
+        placementTests()
+        MenuBarPlacement.prepare(defaults: defaults, system: UserDefaults(suiteName: "com.apple.controlcenter"))
+        let oldPosition = UserDefaults.standard.object(forKey: MenuBarPlacement.positionKey)
+        UserDefaults.standard.set(defaults.double(forKey: MenuBarPlacement.positionKey), forKey: MenuBarPlacement.positionKey)
+        defer {
+            if let oldPosition { UserDefaults.standard.set(oldPosition, forKey: MenuBarPlacement.positionKey) }
+            else { UserDefaults.standard.removeObject(forKey: MenuBarPlacement.positionKey) }
+        }
         let desktop = DesktopIntegration(player: player, library: library, defaults: defaults)
+        let delegate = DesktopAppDelegate()
+        delegate.desktop = desktop
+        let emptyDock = delegate.applicationDockMenu(NSApp)!
+        assert(emptyDock.items.first?.title == "尚未播放")
+        assert(emptyDock.items.filter { ["播放", "下一首", "上一首", "喜欢歌曲"].contains($0.title) }.allSatisfy { !$0.isEnabled })
         let status = desktop.statusItem.button!
         let lyrics = desktop.lyricButton
         let stack = status.subviews.compactMap { $0 as? NSStackView }.first!
@@ -82,24 +134,29 @@ struct DesktopTests {
         assert(desktop.statusItem.autosaveName == "ResonaMenuBar")
         assert(lyrics.window === status.window && buttons.allSatisfy { $0.window === status.window },
                "Lyrics and every playback control must occupy the same native status item")
-        assert(defaults.integer(forKey: "NSStatusItem Preferred Position ResonaMenuBar") == 0)
+        assert(defaults.double(forKey: MenuBarPlacement.positionKey) > 0)
         desktop.menuControlsEnabled = false
         settle()
         assert(buttons[0...3].allSatisfy(\.isHidden) && !buttons[4].isHidden)
         assert(!lyrics.isHidden && desktop.statusItem.isVisible, "Lyrics can remain visible with playback controls off")
         desktop.menuLyricsEnabled = false
-        assert(lyrics.isHidden && desktop.statusItem.length == 22, "The waveform entry remains when both switches are off")
+        assert(lyrics.isHidden && desktop.statusItem.length == 24, "The app logo remains when both switches are off")
         desktop.menuLyricsEnabled = true
         desktop.menuControlsEnabled = true
         assert(defaults.object(forKey: "menuControlsEnabled") as? Bool == true)
         settle()
-        assert(abs(stack.fittingSize.width - desktop.statusItem.length) <= 1 && stack.fittingSize.width <= 270,
+        assert(abs(stack.fittingSize.width - desktop.statusItem.length) <= 1,
                "Combined allocation: stack \(stack.fittingSize.width), item \(desktop.statusItem.length)")
+        assert(lyrics.font?.pointSize == 14 && buttons.allSatisfy { abs($0.alignmentRect(forFrame: $0.frame).width - 24) < 0.5 },
+               "Lyrics and all five controls must use the full-size menu bar layout")
         let statusFrame = status.window!.frame
         if let safe = status.window?.screen?.auxiliaryTopRightArea {
             assert(statusFrame.minX >= safe.minX && statusFrame.maxX <= safe.maxX,
                    "Initial combined item must not be parked behind the notch")
+            assert(abs(statusFrame.minX - safe.minX - 24) <= 1,
+                   "The lyric item must reserve the right-hand segment: frame \(statusFrame), safe \(safe), length \(desktop.statusItem.length), button \(status.frame)")
         }
+        let reservedLength = desktop.statusItem.length
 
         let audio = root.appendingPathComponent("song.mp3")
         let data = try Data(contentsOf: audio)
@@ -133,19 +190,26 @@ struct DesktopTests {
         assert(desktop.lyricLines == ["Test Song", "非同步歌词 · Resona"])
         desktop.menuLyricsEnabled = false
         settle()
-        assert(lyrics.isHidden && desktop.statusItem.length == 102)
+        assert(lyrics.isHidden && desktop.statusItem.length == 120)
         assert(buttons[0...2].allSatisfy { !$0.isHidden && $0.isEnabled }, "Hiding lyrics must preserve resident controls")
         desktop.menuLyricsEnabled = true
         player.lyrics = Lyrics.parse("[00:00]" + String(repeating: "很长的歌词", count: 20))
         player.position = 0
         settle()
-        assert(desktop.statusItem.length == 270 && stack.fittingSize.width == 270,
+        assert(abs(desktop.statusItem.length - reservedLength) <= 1 && abs(stack.fittingSize.width - reservedLength) <= 1,
                "Long lyrics must truncate without pushing controls out of their allocation")
+        assert(abs(status.window!.frame.minX - statusFrame.minX) <= 1 &&
+               abs(status.window!.frame.maxX - statusFrame.maxX) <= 1,
+               "Switches and lyric updates must preserve the native menu bar position")
         for control in buttons {
             let icon = control.cell!.imageRect(forBounds: control.bounds)
             assert(status.bounds.contains(control.convert(icon, to: status)),
                    "Every playback icon must remain inside the actual status button")
         }
+        let playbackIconHeight = buttons[0].cell!.imageRect(forBounds: buttons[0].bounds).height
+        assert(buttons[3].cell!.imageRect(forBounds: buttons[3].bounds).height >= playbackIconHeight &&
+               buttons[4].cell!.imageRect(forBounds: buttons[4].bounds).height >= playbackIconHeight,
+               "Favorite and app entry must have at least the visual height of playback icons")
         desktop.menuLyricsEnabled = false
 
         desktop.desktopLyricsEnabled = true
@@ -181,6 +245,32 @@ struct DesktopTests {
         library.offline = false
         library.tracks = [track]
         settle()
+        func dockItem(_ title: String) -> NSMenuItem {
+            desktop.makeDockMenu().items.first { $0.title == title }!
+        }
+        func selectDock(_ entry: NSMenuItem) {
+            assert(entry.isEnabled && entry.action != nil)
+            assert(NSApp.sendAction(entry.action!, to: entry.target, from: entry))
+        }
+        let pausedDock = desktop.makeDockMenu()
+        assert(pausedDock.items.prefix(3).map(\.title) == ["已暂停", track.title, "\(track.artist) - \(track.album)"])
+        assert(pausedDock.items[1].indentationLevel == 1 && pausedDock.items[2].indentationLevel == 1)
+        assert(pausedDock.items[0...2].allSatisfy { !$0.isEnabled })
+        player.mode = .sequential
+        for mode in [PlaybackMode.sequential, .repeatAll, .repeatOne] {
+            let entry = dockItem("循环播放").submenu!.items.first { $0.representedObject as? String == mode.rawValue }!
+            selectDock(entry)
+            assert(player.mode == mode)
+            assert(dockItem("循环播放").submenu!.items.filter { $0.state == .on }.map(\.title) == [mode.title])
+        }
+        selectDock(dockItem("随机播放"))
+        assert(player.shuffle && dockItem("随机播放").state == .on)
+        assert(dockItem("循环播放").submenu!.items.allSatisfy { $0.state == .off })
+        selectDock(dockItem("随机播放"))
+        assert(player.mode == .sequential && dockItem("随机播放").state == .off)
+        selectDock(dockItem("喜欢歌曲"))
+        assert(desktop.favoriting && !dockItem("喜欢歌曲").isEnabled,
+               "Dock favorites must share the in-flight guard with every other surface")
         func finishFavorite() {
             for _ in 0..<30 {
                 if !desktop.favoriting { break }
@@ -189,6 +279,11 @@ struct DesktopTests {
             settle()
             assert(!desktop.favoriting, "Favorite request did not finish")
         }
+        finishFavorite()
+        assert(dockItem("取消喜欢").state == .on && player.current?.favorite == true)
+        selectDock(dockItem("取消喜欢"))
+        finishFavorite()
+        assert(dockItem("喜欢歌曲").state == .off && player.current?.favorite == false)
         assert(buttons[3].isEnabled)
         buttons[3].performClick(nil)
         assert(desktop.favoriting && !buttons[3].isEnabled, "Repeated favorite requests must be blocked")
@@ -346,6 +441,16 @@ struct DesktopTests {
         assert(!player.expanded, "Escape must restore the library from the listening page")
         main.close()
         assert(!DesktopAppDelegate().applicationShouldTerminateAfterLastWindowClosed(NSApp))
+        selectDock(dockItem("播放"))
+        settle()
+        assert(player.playing && desktop.makeDockMenu().items.first?.title == "正在播放",
+               "Dock playback must work with the main window closed")
+        selectDock(dockItem("暂停"))
+        settle()
+        assert(!player.playing)
+        player.position = 6
+        selectDock(dockItem("上一首"))
+        assert(player.position == 0, "Dock previous must reach the shared player")
         buttons[1].performClick(nil)
         settle()
         assert(buttons[1].toolTip == "暂停", "Menu bar must play with the main window closed")
@@ -387,16 +492,30 @@ struct DesktopTests {
             try rendered.representation(using: .png, properties: [:])!.write(to: images.appendingPathComponent(name + ".png"))
             let scale = CGFloat(rendered.pixelsWide) / status.bounds.width
             for control in buttons {
-                let icon = control.convert(control.cell!.imageRect(forBounds: control.bounds), to: status)
-                var contrasting = false
+                let icon = control.convert(control.bounds, to: status).intersection(status.bounds)
+                var ink = NSRect.null
                 for y in Int((status.bounds.maxY - icon.maxY) * scale)..<Int((status.bounds.maxY - icon.minY) * scale) {
                     for x in Int(icon.minX * scale)..<Int(icon.maxX * scale) {
                         guard let color = rendered.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
                         let brightness = (color.redComponent + color.greenComponent + color.blueComponent) / 3
-                        if appearance == .vibrantDark ? brightness > 0.5 : brightness < 0.5 { contrasting = true }
+                        if appearance == .vibrantDark ? brightness > 0.5 : brightness < 0.5 {
+                            ink = ink.union(NSRect(x: x, y: y, width: 1, height: 1))
+                        }
                     }
                 }
-                assert(contrasting, "\(control.toolTip ?? "") must remain visible on the \(appearance.rawValue) menu bar")
+                assert(!ink.isNull, "\(control.toolTip ?? "") must remain visible on the \(appearance.rawValue) menu bar")
+                let source = NSBitmapImageRep(data: control.image!.tiffRepresentation!)!
+                var sourceInk = NSRect.null
+                for y in 0..<source.pixelsHigh {
+                    for x in 0..<source.pixelsWide where source.colorAt(x: x, y: y)!.alphaComponent > 0.5 {
+                        sourceInk = sourceInk.union(NSRect(x: x, y: y, width: 1, height: 1))
+                    }
+                }
+                let expectedHeight = sourceInk.height * control.image!.size.height / CGFloat(source.pixelsHigh)
+                assert(abs(ink.height / scale - expectedHeight) <= 1.5,
+                       "\(control.toolTip ?? "") must retain its configured symbol height")
+                assert(abs(ink.width / ink.height - sourceInk.width / sourceInk.height) < 0.2,
+                       "\(control.toolTip ?? "") must retain its native proportions without flattening")
             }
         }
         status.appearance = nil
