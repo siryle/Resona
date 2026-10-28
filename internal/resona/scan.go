@@ -7,9 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
-	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -277,23 +274,7 @@ func (s *Scanner) onlineArtwork(ctx context.Context, t Track) string {
 	if err != nil || len(data) > 5<<20 {
 		return ""
 	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || config.Width > 2000 || config.Height > 2000 || config.Width < 1 || config.Height < 1 {
-		return ""
-	}
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return ""
-	}
-	dir := filepath.Join(s.config.DataDir, "artwork")
-	f, err := os.CreateTemp(dir, ".remote-cover-*.jpg")
-	if err != nil {
-		return ""
-	}
-	defer os.Remove(f.Name())
-	err = jpeg.Encode(f, img, &jpeg.Options{Quality: 88})
-	closeErr := f.Close()
-	if err != nil || closeErr != nil || os.Rename(f.Name(), filepath.Join(dir, t.ID+".jpg")) != nil {
+	if cacheArtwork(filepath.Join(s.config.DataDir, "artwork", t.ID+".jpg"), data) != nil {
 		return ""
 	}
 	return "/api/v1/tracks/" + t.ID + "/cover"

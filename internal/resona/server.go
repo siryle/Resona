@@ -32,6 +32,7 @@ type Server struct {
 	plugins             *Plugins
 	cloud               *Cloud115
 	scanScheduleChanged chan struct{}
+	artistArtworkGate   chan struct{}
 }
 
 func NewServer(ctx context.Context, c Config) (*Server, error) {
@@ -57,7 +58,7 @@ func NewServer(ctx context.Context, c Config) (*Server, error) {
 	book.registerSecrets(store.pluginSettings())
 	logger := slog.New(&logHandler{book: book, console: slog.Default().Handler()})
 	s := &Server{config: c, store: store, auth: auth, scanner: NewScanner(c, store), ctx: ctx, logger: logger, logbook: book,
-		scanScheduleChanged: make(chan struct{}, 1)}
+		scanScheduleChanged: make(chan struct{}, 1), artistArtworkGate: make(chan struct{}, 1)}
 	s.scanner.logger = logger.With("category", "scan")
 	if err := s.recoverFileOperation(); err != nil {
 		return nil, err
@@ -154,6 +155,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/tracks/{id}/lyrics", s.protect(s.lyrics))
 	mux.HandleFunc("GET /api/v1/albums", s.protect(s.albums))
 	mux.HandleFunc("GET /api/v1/artists", s.protect(s.artists))
+	mux.HandleFunc("GET /api/v1/artists/avatar", s.protect(s.artistAvatar))
 	mux.HandleFunc("GET /api/v1/jobs", s.protect(func(w http.ResponseWriter, r *http.Request) {
 		jobs := s.store.Jobs(r.URL.Query().Get("summary") != "1")
 		for i := range jobs {
@@ -573,6 +575,9 @@ func (s *Server) artists(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("query artists", "error", err)
 		apiError(w, 500, "无法读取艺术家")
 		return
+	}
+	for i := range out {
+		out[i].Artwork = artistArtworkURL(out[i].Name)
 	}
 	jsonResponse(w, 200, map[string]any{"items": out})
 }

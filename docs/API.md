@@ -50,6 +50,7 @@ Content-Type: application/json
 | POST | `/api/v1/tracks/{id}/lyrics/embed` | `{}` 将当前歌词写入音频标签；已有标签歌词需 `replace:true` |
 | GET | `/api/v1/albums` | 聚合专辑 |
 | GET | `/api/v1/artists` | 聚合艺术家 |
+| GET | `/api/v1/artists/avatar?name=艺术家名称` | 按需获取并缓存艺术家头像，需要登录 |
 | GET / PUT | `/api/v1/sources` | 查询来源能力 / 保存默认来源 |
 | GET | `/api/v1/jobs` | 最近 30 次扫描记录 |
 | DELETE | `/api/v1/jobs/{id}` | 删除已结束的任务记录；不影响音乐库与文件 |
@@ -76,6 +77,8 @@ Content-Type: application/json
 歌曲列表和单曲详情的 `has_lrc_lyrics` 表示当前是否存在可读取的同名 `.lrc` 旁挂文件。它独立于 `has_embedded_lyrics`，不包含在线缓存或标签内歌词。仅检查返回页内曲目的本地文件，不访问 115 或探测音频；空白、过大、不可读或越出库目录的文件返回 `false`。
 
 歌曲字段包含 `id`（本地音频 SHA-256；网盘为账号与文件 ID 的稳定 SHA-256 摘要）、`title`、`artist`、`album_artist`、`album`、`year`、`genre`、`number`、`disc`、`duration`（秒）、`format`、`bitrate`（bit/s）、`sample_rate`（Hz）、`size`（字节）、`favorite`、`added_at`，及可选的 `artwork`、`mbid`、`release_id`、`metadata_source`（实际信息来源）、`metadata_locked`（人工更正后为 `true`）。
+
+艺术家列表返回 `name`、`tracks` 和可选的 `artwork`（Resona 同源头像地址）。列表查询不访问外部来源；客户端请求 `artwork` 时，服务端按刮削优先级在已启用的 QQ 音乐、网易云音乐中搜索同名艺术家，失败则尝试下一来源。网易云请求 500×500 缩略图；头像下载校验来源域名、5 MiB 大小和 2000×2000 尺寸上限，转换为 JPEG 后持久缓存；后续请求直接读取本地缓存，浏览器私有缓存有效期为一天。无匹配头像或艺术家不在可见曲库中返回 `404`；无匹配结果缓存 6 小时，来源临时故障返回 `502` 并附带 `Retry-After: 60`，不会写入无匹配缓存。空名称与 `Unknown Artist` 不返回头像地址。客户端可在图片不可用时继续显示名称首字占位。
 
 歌曲还包含 `library`（`local` / `cloud`）、`hash_algorithm`、`content_hash` 和 `unavailable`。本地内容摘要为 SHA-256，网盘内容摘要为 115 提供的 SHA-1；不要将网盘歌曲 ID 用作内容校验。云端曲目生成 STRM 后按文件名发布基础信息，预探测成功后补全标签、时长与封面；歌词标签检测读取后台缓存。
 

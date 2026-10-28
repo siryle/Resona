@@ -123,8 +123,9 @@ func (s *Store) queryAlbums(ctx context.Context, query url.Values) ([]Album, err
 }
 
 type artistSummary struct {
-	Name   string `json:"name"`
-	Tracks int    `json:"tracks"`
+	Name    string `json:"name"`
+	Tracks  int    `json:"tracks"`
+	Artwork string `json:"artwork,omitempty"`
 }
 
 func (s *Store) queryArtists(ctx context.Context, query url.Values) ([]artistSummary, error) {
