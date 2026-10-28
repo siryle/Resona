@@ -572,7 +572,7 @@ struct ServerSettings: View {
                     Divider()
                     Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
                     Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
-                    explanation("歌词和播控独立显示，默认歌词在左、播控在右。按住 ⌘ 拖动可分别调整位置，系统会记住排列。关闭播控后仍保留波形入口，可打开播放面板。")
+                    explanation("歌词在左、播控在右，作为一组紧凑显示，可独立开关。长歌词自动截断，优先保留播控。按住 ⌘ 可整体拖动，系统会记住位置。关闭播控后仍保留波形入口，可打开播放面板。")
                 }.toggleStyle(.switch)
                 settingsSection("离线音乐") {
                     HStack {

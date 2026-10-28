@@ -68,28 +68,38 @@ struct DesktopTests {
         let player = PlayerModel(downloads: store, cache: cache)
         let library = LibraryModel(downloads: store, persistsSession: false, cache: cache)
         player.volume = 0
+        UserDefaults.standard.register(defaults: ["NSStatusItem Preferred Position ResonaMenuBar": 0])
         let desktop = DesktopIntegration(player: player, library: library, defaults: defaults)
         let status = desktop.statusItem.button!
-        let lyrics = desktop.lyricStatusItem.button!
+        let lyrics = desktop.lyricButton
         let stack = status.subviews.compactMap { $0 as? NSStackView }.first!
-        let buttons = stack.arrangedSubviews.compactMap { $0 as? NSButton }
+        let buttons = stack.arrangedSubviews.compactMap { $0 as? NSButton }.filter { $0 !== lyrics }
         assert(buttons.count == 5, "Compact menu bar must contain previous, play, next, favorite and settings")
         assert(buttons[0...2].allSatisfy { !$0.isEnabled }, "Empty player controls must be disabled")
         assert(!buttons[3].isEnabled, "Favorite must be disabled without a song and server connection")
         assert(desktop.lyricLines == ["Resona · 此刻想听什么？"])
         assert(!desktop.desktopLyricsEnabled && desktop.menuLyricsEnabled && desktop.menuControlsEnabled)
-        assert(desktop.statusItem.autosaveName == "ResonaPlaybackControls" && desktop.lyricStatusItem.autosaveName == "ResonaMenuLyrics")
+        assert(desktop.statusItem.autosaveName == "ResonaMenuBar")
+        assert(lyrics.window === status.window && buttons.allSatisfy { $0.window === status.window },
+               "Lyrics and every playback control must occupy the same native status item")
+        assert(defaults.integer(forKey: "NSStatusItem Preferred Position ResonaMenuBar") == 0)
         desktop.menuControlsEnabled = false
         settle()
-        assert(desktop.statusItem.length == 22 && buttons[0...3].allSatisfy(\.isHidden) && !buttons[4].isHidden)
-        assert(desktop.lyricStatusItem.isVisible, "Lyrics can remain visible with playback controls off")
+        assert(buttons[0...3].allSatisfy(\.isHidden) && !buttons[4].isHidden)
+        assert(!lyrics.isHidden && desktop.statusItem.isVisible, "Lyrics can remain visible with playback controls off")
         desktop.menuLyricsEnabled = false
-        assert(!desktop.lyricStatusItem.isVisible && desktop.statusItem.length == 22, "The waveform entry remains when both switches are off")
+        assert(lyrics.isHidden && desktop.statusItem.length == 22, "The waveform entry remains when both switches are off")
         desktop.menuLyricsEnabled = true
         desktop.menuControlsEnabled = true
         assert(defaults.object(forKey: "menuControlsEnabled") as? Bool == true)
         settle()
-        assert(stack.fittingSize.width == 102, "Compact resident controls must fit without spacing inflation")
+        assert(abs(stack.fittingSize.width - desktop.statusItem.length) <= 1 && stack.fittingSize.width <= 270,
+               "Combined allocation: stack \(stack.fittingSize.width), item \(desktop.statusItem.length)")
+        let statusFrame = status.window!.frame
+        if let safe = status.window?.screen?.auxiliaryTopRightArea {
+            assert(statusFrame.minX >= safe.minX && statusFrame.maxX <= safe.maxX,
+                   "Initial combined item must not be parked behind the notch")
+        }
 
         let audio = root.appendingPathComponent("song.mp3")
         let data = try Data(contentsOf: audio)
@@ -123,8 +133,20 @@ struct DesktopTests {
         assert(desktop.lyricLines == ["Test Song", "非同步歌词 · Resona"])
         desktop.menuLyricsEnabled = false
         settle()
-        assert(!desktop.lyricStatusItem.isVisible && desktop.statusItem.length == 102)
+        assert(lyrics.isHidden && desktop.statusItem.length == 102)
         assert(buttons[0...2].allSatisfy { !$0.isHidden && $0.isEnabled }, "Hiding lyrics must preserve resident controls")
+        desktop.menuLyricsEnabled = true
+        player.lyrics = Lyrics.parse("[00:00]" + String(repeating: "很长的歌词", count: 20))
+        player.position = 0
+        settle()
+        assert(desktop.statusItem.length == 270 && stack.fittingSize.width == 270,
+               "Long lyrics must truncate without pushing controls out of their allocation")
+        for control in buttons {
+            let icon = control.cell!.imageRect(forBounds: control.bounds)
+            assert(status.bounds.contains(control.convert(icon, to: status)),
+                   "Every playback icon must remain inside the actual status button")
+        }
+        desktop.menuLyricsEnabled = false
 
         desktop.desktopLyricsEnabled = true
         settle()
@@ -337,13 +359,49 @@ struct DesktopTests {
         desktop.showMainWindow()
         assert(reopened && main.isVisible)
 
-        if CommandLine.arguments.contains("--capture") {
-            desktop.menuLyricsEnabled = true
-            player.lyrics = Lyrics.parse("[00:00]此刻，让音乐留在身边\n[00:03]每一句，都与你同步")
-            player.position = 1
+        desktop.menuLyricsEnabled = true
+        player.lyrics = Lyrics.parse("[00:00]此刻，让音乐留在身边\n[00:03]每一句，都与你同步")
+        player.position = 1
+        settle()
+        let images = root.appendingPathComponent("screenshots")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        for (name, appearance, background) in [
+            ("menubar", NSAppearance.Name.vibrantDark, NSColor.black),
+            ("menubar-light", NSAppearance.Name.aqua, NSColor.white)
+        ] {
+            status.appearance = NSAppearance(named: appearance)
             settle()
-            let images = root.appendingPathComponent("screenshots")
-            try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+            var rendered: NSBitmapImageRep!
+            status.effectiveAppearance.performAsCurrentDrawingAppearance {
+                let bitmap = status.bitmapImageRepForCachingDisplay(in: status.bounds)!
+                status.cacheDisplay(in: status.bounds, to: bitmap)
+                let image = NSImage(size: status.bounds.size)
+                image.lockFocus()
+                background.setFill()
+                NSBezierPath(rect: status.bounds).fill()
+                NSImage(cgImage: bitmap.cgImage!, size: status.bounds.size)
+                    .draw(in: status.bounds, from: .zero, operation: .sourceOver, fraction: 1)
+                image.unlockFocus()
+                rendered = NSBitmapImageRep(data: image.tiffRepresentation!)!
+            }
+            try rendered.representation(using: .png, properties: [:])!.write(to: images.appendingPathComponent(name + ".png"))
+            let scale = CGFloat(rendered.pixelsWide) / status.bounds.width
+            for control in buttons {
+                let icon = control.convert(control.cell!.imageRect(forBounds: control.bounds), to: status)
+                var contrasting = false
+                for y in Int((status.bounds.maxY - icon.maxY) * scale)..<Int((status.bounds.maxY - icon.minY) * scale) {
+                    for x in Int(icon.minX * scale)..<Int(icon.maxX * scale) {
+                        guard let color = rendered.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                        let brightness = (color.redComponent + color.greenComponent + color.blueComponent) / 3
+                        if appearance == .vibrantDark ? brightness > 0.5 : brightness < 0.5 { contrasting = true }
+                    }
+                }
+                assert(contrasting, "\(control.toolTip ?? "") must remain visible on the \(appearance.rawValue) menu bar")
+            }
+        }
+        status.appearance = nil
+
+        if CommandLine.arguments.contains("--capture") {
             func capture(_ window: NSWindow, _ name: String) throws {
                 window.orderFrontRegardless()
                 window.displayIfNeeded()
@@ -355,17 +413,6 @@ struct DesktopTests {
             }
             try capture(main, "desktop")
             try capture(panel, "lyrics")
-            let bitmap = status.bitmapImageRepForCachingDisplay(in: status.bounds)!
-            status.cacheDisplay(in: status.bounds, to: bitmap)
-            let menuImage = NSImage(size: status.bounds.size)
-            menuImage.lockFocus()
-            NSColor.white.setFill()
-            NSBezierPath(rect: status.bounds).fill()
-            NSImage(cgImage: bitmap.cgImage!, size: status.bounds.size)
-                .draw(in: status.bounds, from: .zero, operation: .sourceOver, fraction: 1)
-            menuImage.unlockFocus()
-            let rendered = NSBitmapImageRep(data: menuImage.tiffRepresentation!)!
-            try rendered.representation(using: .png, properties: [:])!.write(to: images.appendingPathComponent("menubar.png"))
             let existing = Set(NSApp.windows.map(\.windowNumber))
             buttons[4].performClick(nil)
             settle()
@@ -391,11 +438,13 @@ struct DesktopTests {
                 .tint(Theme.accent).preferredColorScheme(.light))
             try capture(settings, "settings")
             settings.close()
+            defaults.set(120, forKey: "NSStatusItem Preferred Position ResonaMenuBar")
             let saved = DesktopIntegration(player: player, library: library, defaults: defaults)
             assert(saved.desktopLyricsEnabled && saved.menuLyricsEnabled && saved.menuControlsEnabled && saved.fontSize == 32)
+            assert(defaults.integer(forKey: "NSStatusItem Preferred Position ResonaMenuBar") == 120,
+                   "Reopening must preserve a position the user has already saved")
             saved.desktopLyricsEnabled = false
             NSStatusBar.system.removeStatusItem(saved.statusItem)
-            NSStatusBar.system.removeStatusItem(saved.lyricStatusItem)
         }
         player.pause()
         player.expanded = false
@@ -423,7 +472,6 @@ struct DesktopTests {
         desktop.desktopLyricsEnabled = false
         main.close()
         NSStatusBar.system.removeStatusItem(desktop.statusItem)
-        NSStatusBar.system.removeStatusItem(desktop.lyricStatusItem)
         player.stop()
         print("macOS selection, filters, batch actions, lyrics, preferences, panel lifecycle and resident playback tests passed")
     }

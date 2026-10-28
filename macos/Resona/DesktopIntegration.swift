@@ -6,6 +6,26 @@ final class DesktopAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
+private final class MenuBarIconButton: NSButton {
+    var usesAccentColor = false { didSet { needsDisplay = true } }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let image, let cell else { return }
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let color: NSColor = usesAccentColor ? .systemRed : (dark ? .white : .black)
+        // Vibrant menu bars can ignore contentTintColor on template button images.
+        guard let colored = image.withSymbolConfiguration(.init(paletteColors: [color]))?.copy() as? NSImage else { return }
+        colored.isTemplate = false
+        colored.draw(in: cell.imageRect(forBounds: bounds), from: .zero, operation: .sourceOver,
+                     fraction: isEnabled ? (isHighlighted ? 0.65 : 1) : 0.35, respectFlipped: true, hints: nil)
+    }
+}
+
 @MainActor
 final class DesktopIntegration: NSObject, ObservableObject {
     @Published var desktopLyricsEnabled: Bool {
@@ -46,14 +66,15 @@ final class DesktopIntegration: NSObject, ObservableObject {
     let library: LibraryModel
     private let defaults: UserDefaults
     private var subscriptions = Set<AnyCancellable>()
-    let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    let lyricStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let statusItem: NSStatusItem
+    let lyricButton = NSButton()
     private let popover = NSPopover()
     private var panel: NSPanel?
-    private let previousButton = NSButton()
-    private let playButton = NSButton()
-    private let nextButton = NSButton()
-    private let favoriteButton = NSButton()
+    private let previousButton = MenuBarIconButton()
+    private let playButton = MenuBarIconButton()
+    private let nextButton = MenuBarIconButton()
+    private let favoriteButton = MenuBarIconButton()
+    private var lyricWidth: NSLayoutConstraint?
 
     var lyricLines: [String] {
         let active = Lyrics.playbackLines(player.lyrics, at: player.position).map(\.text)
@@ -82,9 +103,12 @@ final class DesktopIntegration: NSObject, ObservableObject {
         lyricsLocked = defaults.bool(forKey: "desktopLyricsLocked")
         let size = defaults.object(forKey: "desktopLyricsFontSize") as? Double ?? 28
         fontSize = size.isFinite ? min(48, max(18, size)) : 28
+        // Seed only our initial placement; AppKit saves subsequent Command-drags.
+        let placementKey = "NSStatusItem Preferred Position ResonaMenuBar"
+        if defaults.object(forKey: placementKey) == nil { defaults.set(0, forKey: placementKey) }
+        statusItem = NSStatusBar.system.statusItem(withLength: 0)
         super.init()
-        statusItem.autosaveName = "ResonaPlaybackControls"
-        lyricStatusItem.autosaveName = "ResonaMenuLyrics"
+        statusItem.autosaveName = "ResonaMenuBar"
         configureStatusItem()
         // Published changes arrive before their values; render on the next main-loop turn.
         Publishers.Merge(player.objectWillChange, library.objectWillChange).receive(on: RunLoop.main).sink { [weak self] in
@@ -93,6 +117,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
             self.updateStatus()
         }.store(in: &subscriptions)
         updateStatus()
+        statusItem.isVisible = true
         updatePanel()
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in self?.placePanel() }.store(in: &subscriptions)
@@ -104,8 +129,8 @@ final class DesktopIntegration: NSObject, ObservableObject {
         button.action = #selector(togglePopover(_:))
         button.toolTip = "Resona · 歌词与播放设置"
         button.setAccessibilityLabel("Resona 菜单栏播控")
-        let menuButton = NSButton(image: NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)!,
-                                  target: self, action: #selector(togglePopover(_:)))
+        let menuButton = MenuBarIconButton(image: NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)!,
+                                          target: self, action: #selector(togglePopover(_:)))
         menuButton.toolTip = "Resona · 歌词与播放设置"
         menuButton.setAccessibilityLabel("歌词与播放设置")
         for (control, symbol, title, action) in [
@@ -120,24 +145,28 @@ final class DesktopIntegration: NSObject, ObservableObject {
             control.toolTip = title
             control.setAccessibilityLabel(title)
         }
-        if let lyrics = lyricStatusItem.button {
-            lyrics.target = self
-            lyrics.action = #selector(togglePopover(_:))
-            lyrics.font = .menuBarFont(ofSize: 12)
-            lyrics.lineBreakMode = .byTruncatingTail
-            lyrics.alignment = .right
-        }
+        lyricButton.target = self
+        lyricButton.action = #selector(togglePopover(_:))
+        lyricButton.font = .menuBarFont(ofSize: 12)
+        lyricButton.lineBreakMode = .byTruncatingTail
+        lyricButton.cell?.usesSingleLineMode = true
+        lyricButton.alignment = .right
+        lyricButton.isBordered = false
+        lyricButton.focusRingType = .none
+        lyricButton.translatesAutoresizingMaskIntoConstraints = false
+        lyricWidth = lyricButton.widthAnchor.constraint(equalToConstant: 160)
+        lyricWidth?.isActive = true
         let controls = [previousButton, playButton, nextButton, favoriteButton, menuButton]
         for control in controls {
             control.isBordered = false
-            control.contentTintColor = .labelColor
             control.focusRingType = .none
             control.translatesAutoresizingMaskIntoConstraints = false
             control.heightAnchor.constraint(equalToConstant: NSStatusBar.system.thickness).isActive = true
             control.widthAnchor.constraint(equalToConstant: control === menuButton ? 22 : 20).isActive = true
         }
-        let stack = NSStackView(views: controls)
+        let stack = NSStackView(views: [lyricButton] + controls)
         stack.spacing = 0
+        stack.setCustomSpacing(8, after: lyricButton)
         stack.alignment = .centerY
         stack.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(stack)
@@ -165,20 +194,19 @@ final class DesktopIntegration: NSObject, ObservableObject {
         playButton.setAccessibilityLabel(title)
         let liked = favoriteTrack?.favorite == true
         favoriteButton.image = menuImage(liked ? "heart.fill" : "heart")
-        favoriteButton.contentTintColor = liked ? .systemRed : .labelColor
+        favoriteButton.usesAccentColor = liked
         favoriteButton.toolTip = canFavorite ? (liked ? "取消喜欢" : "喜欢") : (favoriting ? "正在更新喜欢状态" : "连接服务器后可修改喜欢状态")
         favoriteButton.setAccessibilityLabel(liked ? "取消喜欢" : "喜欢")
         favoriteButton.isEnabled = canFavorite
         let line = currentLyric
-        if let lyrics = lyricStatusItem.button {
-            lyrics.title = line
-            lyrics.toolTip = lyricLines.joined(separator: "\n")
-            lyrics.setAccessibilityLabel("菜单栏歌词：\(line)")
-            lyricStatusItem.length = min(220, max(60, (line as NSString).size(withAttributes: [.font: lyrics.font!]).width + 12))
-        }
-        lyricStatusItem.isVisible = menuLyricsEnabled
+        lyricButton.title = line
+        lyricButton.toolTip = lyricLines.joined(separator: "\n")
+        lyricButton.setAccessibilityLabel("菜单栏歌词：\(line)")
+        let width = min(160, max(40, (line as NSString).size(withAttributes: [.font: lyricButton.font!]).width + 4))
+        lyricWidth?.constant = width
+        lyricButton.isHidden = !menuLyricsEnabled
         [previousButton, playButton, nextButton, favoriteButton].forEach { $0.isHidden = !menuControlsEnabled }
-        statusItem.length = menuControlsEnabled ? 102 : 22
+        statusItem.length = (menuControlsEnabled ? 102 : 22) + (menuLyricsEnabled ? width + 8 : 0)
     }
 
     private func updatePanel() {
@@ -234,8 +262,8 @@ final class DesktopIntegration: NSObject, ObservableObject {
     }
     @objc private func togglePopover(_ sender: NSButton) {
         if popover.isShown { popover.performClose(nil) }
-        else if let button = sender === lyricStatusItem.button ? lyricStatusItem.button : statusItem.button {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        else if let button = statusItem.button {
+            popover.show(relativeTo: sender.convert(sender.bounds, to: button), of: button, preferredEdge: .minY)
         }
     }
 
