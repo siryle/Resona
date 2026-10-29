@@ -9,6 +9,7 @@ import 'package:media_kit/media_kit.dart' hide Track;
 import 'api.dart';
 import 'controller.dart';
 import 'android_audio.dart';
+import 'track_selection.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -457,14 +458,114 @@ class MusicPage extends StatefulWidget {
 class _MusicPageState extends State<MusicPage> {
   Timer? debounce;
   final search = TextEditingController();
+  final trackSearch = TextEditingController();
+  TrackSelection selection = TrackSelection();
+  bool selecting = false;
+  Future<bool>? collectionWork;
+  int selectionEpoch = 0;
+  late Object collectionContext;
   int tab = 0;
   bool listening = false;
   MusicController get c => widget.controller;
   bool get desktop => Theme.of(context).platform == TargetPlatform.windows;
+  Object get collectionKey =>
+      (c, c.api, c.library, c.section, c.album, c.artist, c.offline);
+  bool get songCollection =>
+      desktop &&
+      !listeningNow &&
+      c.section != '设置' &&
+      !(['专辑', '艺术家'].contains(c.section) &&
+          c.album.isEmpty &&
+          c.artist.isEmpty);
+  List<Track> get visibleTracks =>
+      selection.filtered(c.tracks, c.cache?.downloads ?? {});
+  List<Track> get chosenTracks => selection.selected(c.tracks);
+
+  @override
+  void initState() {
+    super.initState();
+    collectionContext = collectionKey;
+  }
+
+  @override
+  void didUpdateWidget(covariant MusicPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (collectionContext != collectionKey) {
+      resetSelection();
+      collectionContext = collectionKey;
+    }
+  }
+
+  void resetSelection() {
+    selecting = false;
+    selection = TrackSelection();
+    trackSearch.clear();
+    collectionWork = null;
+    selectionEpoch++;
+  }
+
+  Future<bool> completeCollection() async {
+    if (collectionWork != null) return collectionWork!;
+    final epoch = selectionEpoch;
+    final key = collectionKey;
+    Future<bool> fetch() async {
+      while (mounted && epoch == selectionEpoch && collectionKey == key) {
+        if (c.loading) return false;
+        if (c.tracks.length >= c.total) return true;
+        final before = c.tracks.length;
+        await c.load(more: true);
+        if (!mounted || epoch != selectionEpoch || collectionKey != key) {
+          return false;
+        }
+        if (c.error != null) return false;
+        if (c.tracks.length <= before) {
+          c.error = '歌曲列表不完整，请刷新后重试。';
+          c.notifyListeners();
+          return false;
+        }
+      }
+      return false;
+    }
+
+    collectionWork = fetch();
+    try {
+      return await collectionWork!;
+    } finally {
+      if (epoch == selectionEpoch) collectionWork = null;
+    }
+  }
+
+  void cancelSelection() => setState(() {
+    selecting = false;
+    selection.selectedIDs.clear();
+  });
+
+  Future<void> selectAll() async {
+    if (await completeCollection() && mounted && selecting) {
+      setState(() => selection.toggleAll(visibleTracks));
+    }
+  }
+
+  Future<void> playCollection({bool shuffled = false, Track? track}) async {
+    if (selection.active) {
+      if (!await completeCollection() || !mounted) return;
+    }
+    final matching = selection.active ? visibleTracks : null;
+    if (track != null) {
+      if (matching != null && !matching.any((item) => item.id == track.id)) {
+        return;
+      }
+      await c.play(track, fromTracks: matching);
+    } else {
+      await c.playAll(shuffled: shuffled, matchingTracks: matching);
+    }
+  }
+
   @override
   void dispose() {
     debounce?.cancel();
     search.dispose();
+    trackSearch.dispose();
     super.dispose();
   }
 
@@ -472,6 +573,7 @@ class _MusicPageState extends State<MusicPage> {
     debounce?.cancel();
     search.clear();
     setState(() {
+      resetSelection();
       tab = index;
       listening = false;
     });
@@ -484,6 +586,7 @@ class _MusicPageState extends State<MusicPage> {
 
   void settingsPage() {
     setState(() {
+      resetSelection();
       tab = desktop ? -1 : 4;
       listening = false;
     });
@@ -495,7 +598,10 @@ class _MusicPageState extends State<MusicPage> {
   void toggleListening() {
     final expand = !listeningNow;
     if (expand && c.section == '设置') navigate(0);
-    setState(() => listening = expand);
+    setState(() {
+      resetSelection();
+      listening = expand;
+    });
   }
 
   String get title => c.collectionTitle.isNotEmpty
@@ -507,10 +613,12 @@ class _MusicPageState extends State<MusicPage> {
       : destinations[tab];
   @override
   Widget build(BuildContext context) => PopScope(
-    canPop: !listeningNow && c.album.isEmpty && c.artist.isEmpty,
+    canPop: !selecting && !listeningNow && c.album.isEmpty && c.artist.isEmpty,
     onPopInvokedWithResult: (popped, _) {
       if (!popped) {
-        if (listeningNow) {
+        if (selecting) {
+          cancelSelection();
+        } else if (listeningNow) {
           setState(() => listening = false);
         } else {
           c.navigate(c.section);
@@ -527,13 +635,17 @@ class _MusicPageState extends State<MusicPage> {
         actions: {
           ActivateIntent: CallbackAction<ActivateIntent>(
             onInvoke: (_) {
-              unawaited(c.toggle());
+              if (!selecting) unawaited(c.toggle());
               return null;
             },
           ),
           DismissIntent: CallbackAction<DismissIntent>(
             onInvoke: (_) {
-              if (listeningNow) setState(() => listening = false);
+              if (selecting) {
+                cancelSelection();
+              } else if (listeningNow) {
+                setState(() => listening = false);
+              }
               return null;
             },
           ),
@@ -559,10 +671,22 @@ class _MusicPageState extends State<MusicPage> {
               ],
             ),
             player: desktop
-                ? DesktopPlayer(
-                    controller: c,
-                    expanded: listeningNow,
-                    onExpand: toggleListening,
+                ? Stack(
+                    alignment: Alignment.bottomCenter,
+                    children: [
+                      Visibility(
+                        visible: !selecting,
+                        maintainState: true,
+                        maintainAnimation: true,
+                        maintainSize: true,
+                        child: DesktopPlayer(
+                          controller: c,
+                          expanded: listeningNow,
+                          onExpand: toggleListening,
+                        ),
+                      ),
+                      if (selecting) Positioned.fill(child: selectionActions()),
+                    ],
                   )
                 : c.current == null
                 ? null
@@ -598,7 +722,9 @@ class _MusicPageState extends State<MusicPage> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (desktop && c.section != '设置')
+                      if (desktop && songCollection)
+                        SizedBox(width: 140, child: scope())
+                      else if (desktop && c.section != '设置')
                         SizedBox(width: 255, child: searchField()),
                       if (c.section != '设置')
                         IconButton(
@@ -670,6 +796,316 @@ class _MusicPageState extends State<MusicPage> {
             if (value != null) c.switchLibrary(value);
           },
   );
+  Widget collectionIcon(String label, IconData icon, VoidCallback? action) =>
+      IconButton(
+        tooltip: label,
+        onPressed: action,
+        style: IconButton.styleFrom(
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
+          side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
+          minimumSize: const Size(36, 36),
+          maximumSize: const Size(36, 36),
+          padding: EdgeInsets.zero,
+        ),
+        icon: Icon(icon, size: 19),
+      );
+
+  Widget selectionActions() {
+    final chosen = chosenTracks;
+    final enabled = !c.batchBusy && !c.busy && chosen.isNotEmpty;
+    final online = enabled && c.authenticated && !c.offline;
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      key: const ValueKey('track-selection-actions'),
+      color: scheme.brightness == Brightness.dark
+          ? const Color(0xff292c2d)
+          : const Color(0xffe8e9eb),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: scheme.outlineVariant)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                c.batchBusy
+                    ? '已选 ${chosen.length} 首 · ${c.batchCompleted} / ${c.batchTotal}'
+                    : '已选 ${chosen.length} 首',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            if (c.batchBusy) ...[
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 12),
+            ],
+            collectionIcon(
+              '下载所选歌曲',
+              Icons.vertical_align_bottom,
+              online &&
+                      c.cache != null &&
+                      chosen.any(
+                        (track) => !c.cache!.downloads.contains(track.id),
+                      )
+                  ? () => unawaited(
+                      c.runTrackBatch(TrackBatchAction.download, chosen),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 10),
+            collectionIcon(
+              '喜欢所选歌曲',
+              Icons.favorite_outline,
+              online && chosen.any((track) => !track.favorite)
+                  ? () => unawaited(
+                      c.runTrackBatch(TrackBatchAction.favorite, chosen),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 10),
+            collectionIcon(
+              '加入播放列表',
+              Icons.playlist_add,
+              enabled
+                  ? () {
+                      c.enqueueAll(chosen);
+                      cancelSelection();
+                    }
+                  : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget collectionControls() {
+    final theme = Theme.of(context), scheme = theme.colorScheme;
+    final tracks = visibleTracks;
+    final enabled = !c.loading && !c.busy && !c.queueLoading && !c.batchBusy;
+    return Column(
+      children: [
+        ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Row(
+            children: [
+              if (selecting) ...[
+                TextButton.icon(
+                  onPressed: enabled && c.tracks.isNotEmpty ? selectAll : null,
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    foregroundColor: scheme.onSurface,
+                  ),
+                  icon: Icon(
+                    selection.allSelected(tracks)
+                        ? Icons.check_circle
+                        : tracks.any(
+                            (track) => selection.selectedIDs.contains(track.id),
+                          )
+                        ? Icons.remove_circle
+                        : Icons.circle_outlined,
+                    size: 20,
+                  ),
+                  label: Text(selection.allSelected(tracks) ? '取消全选' : '全选'),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Text(
+                    '已选 ${chosenTracks.length} 首',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+                TextButton(onPressed: cancelSelection, child: const Text('完成')),
+              ] else ...[
+                TextButton.icon(
+                  onPressed: enabled && tracks.isNotEmpty
+                      ? () => playCollection()
+                      : null,
+                  style: TextButton.styleFrom(
+                    foregroundColor: scheme.onSurface,
+                    padding: EdgeInsets.zero,
+                  ),
+                  icon: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: enabled && tracks.isNotEmpty
+                          ? scheme.primary
+                          : scheme.outline,
+                    ),
+                    child: Icon(
+                      Icons.play_arrow,
+                      color: scheme.onPrimary,
+                      size: 18,
+                    ),
+                  ),
+                  label: const Text('全部播放'),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '（共 ${selection.active ? tracks.length : c.total} 首）',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+                collectionIcon(
+                  '选歌',
+                  Icons.checklist,
+                  enabled && tracks.isNotEmpty
+                      ? () {
+                          setState(() => selecting = true);
+                        }
+                      : null,
+                ),
+                const SizedBox(width: 10),
+                collectionIcon(
+                  '随机播放',
+                  Icons.shuffle,
+                  enabled && tracks.isNotEmpty
+                      ? () => playCollection(shuffled: true)
+                      : null,
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: trackSearch,
+                decoration: InputDecoration(
+                  hintText: '搜索歌曲 / 专辑 / 歌手',
+                  prefixIcon: const Icon(Icons.search, size: 19),
+                  suffixIcon: trackSearch.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清除歌曲搜索',
+                          onPressed: () => setState(() {
+                            trackSearch.clear();
+                            selection.query = '';
+                          }),
+                          icon: const Icon(Icons.cancel_outlined, size: 18),
+                        ),
+                  filled: true,
+                  fillColor: scheme.surfaceContainerLow,
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(9),
+                    borderSide: BorderSide.none,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(9),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                style: theme.textTheme.bodySmall,
+                onChanged: (value) {
+                  setState(() => selection.query = value);
+                  unawaited(completeCollection());
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            PopupMenuButton<void>(
+              tooltip: '筛选歌曲',
+              icon: Icon(
+                Icons.filter_list,
+                color: selection.hasFilters ? scheme.primary : scheme.onSurface,
+              ),
+              style: IconButton.styleFrom(
+                backgroundColor: scheme.surfaceContainerLow,
+                side: BorderSide(color: scheme.outlineVariant),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(7),
+                ),
+              ),
+              itemBuilder: (_) => [
+                PopupMenuItem<void>(
+                  enabled: false,
+                  child: StatefulBuilder(
+                    builder: (context, menuState) {
+                      void update(VoidCallback change) {
+                        setState(change);
+                        menuState(() {});
+                        unawaited(completeCollection());
+                      }
+
+                      return DefaultTextStyle(
+                        style: theme.textTheme.bodyMedium!.copyWith(
+                          color: scheme.onSurface,
+                        ),
+                        child: SizedBox(
+                          width: 260,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('筛选歌曲'),
+                              DropdownButton<TrackSearchField>(
+                                value: selection.searchField,
+                                isExpanded: true,
+                                items: [
+                                  for (final field in TrackSearchField.values)
+                                    DropdownMenuItem(
+                                      value: field,
+                                      child: Text('搜索范围 · ${field.label}'),
+                                    ),
+                                ],
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    update(() => selection.searchField = value);
+                                  }
+                                },
+                              ),
+                              CheckboxListTile(
+                                title: const Text('仅我喜欢的'),
+                                value: selection.favoritesOnly,
+                                contentPadding: EdgeInsets.zero,
+                                onChanged: (value) => update(
+                                  () => selection.favoritesOnly = value!,
+                                ),
+                              ),
+                              CheckboxListTile(
+                                title: const Text('仅已下载'),
+                                value: selection.downloadsOnly,
+                                contentPadding: EdgeInsets.zero,
+                                onChanged: (value) => update(
+                                  () => selection.downloadsOnly = value!,
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: selection.hasFilters
+                                    ? () => update(() {
+                                        selection.searchField =
+                                            TrackSearchField.all;
+                                        selection.favoritesOnly = false;
+                                        selection.downloadsOnly = false;
+                                      })
+                                    : null,
+                                child: const Text('重置筛选'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget settings(BuildContext context) => LayoutBuilder(
     builder: (context, bounds) => ListView(
       padding: EdgeInsets.symmetric(
@@ -818,268 +1254,493 @@ class _MusicPageState extends State<MusicPage> {
       ],
     ),
   );
-  Widget library(BuildContext context) => CustomScrollView(
-    slivers: [
-      SliverPadding(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-        sliver: SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (!desktop && tab == 0) ...[
-                Text(
-                  '音乐，井然有声。',
-                  style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                    fontFamily: 'Georgia',
-                    fontWeight: FontWeight.w600,
+  Widget library(BuildContext context) {
+    final tracks = desktop ? visibleTracks : c.tracks;
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(
+            desktop ? 30 : 24,
+            16,
+            desktop ? 30 : 24,
+            16,
+          ),
+          sliver: SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!desktop && tab == 0) ...[
+                  Text(
+                    '音乐，井然有声。',
+                    style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                      fontFamily: 'Georgia',
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 20),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.secondaryContainer,
-                    borderRadius: BorderRadius.circular(20),
+                  const SizedBox(height: 20),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.secondaryContainer,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '好音乐，值得好好收藏。',
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                c.offline ? '已缓存的旋律，始终在身边。' : '让每一份热爱，产生共鸣。',
+                              ),
+                              const SizedBox(height: 16),
+                              FilledButton.icon(
+                                onPressed: c.tracks.isEmpty
+                                    ? null
+                                    : () => c.play(c.tracks.first),
+                                icon: const Icon(Icons.play_arrow),
+                                label: const Text('开始聆听'),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (MediaQuery.sizeOf(context).width >= 500)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 20),
+                            child: Icon(Icons.album, size: 88),
+                          ),
+                      ],
+                    ),
                   ),
-                  child: Row(
+                  const SizedBox(height: 20),
+                ],
+                if (desktop) ...[
+                  Text(
+                    '让每一份热爱，产生共鸣。',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  if (songCollection) collectionControls(),
+                ] else
+                  Row(
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '好音乐，值得好好收藏。',
-                              style: Theme.of(context).textTheme.titleLarge,
+                      Expanded(child: scope()),
+                      Text(c.offline ? '离线' : '${c.total} 首'),
+                    ],
+                  ),
+                if (!desktop &&
+                    tab == 1 &&
+                    c.album.isEmpty &&
+                    c.artist.isEmpty) ...[
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<String>(
+                      showSelectedIcon: false,
+                      segments: [
+                        for (final value in ['歌曲', '专辑', '艺术家', '喜欢'])
+                          ButtonSegment(value: value, label: Text(value)),
+                      ],
+                      selected: {c.section},
+                      onSelectionChanged: (values) {
+                        c.navigate(values.first);
+                      },
+                    ),
+                  ),
+                ],
+                if (!desktop && tab == 3) ...[
+                  const SizedBox(height: 16),
+                  Text(
+                    '寻找共鸣',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  searchField(),
+                ],
+                if (!desktop && (tab == 2 || c.section == '缓存'))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Text('已下载 ${c.total} 首 · 无需登录即可播放'),
+                  ),
+                if (c.tracks.isNotEmpty && !desktop && tab == 1)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: Wrap(
+                      spacing: 12,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.icon(
+                          onPressed: c.busy || c.loading || c.queueLoading
+                              ? null
+                              : () => unawaited(c.playAll()),
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text('全部播放'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: c.busy || c.loading || c.queueLoading
+                              ? null
+                              : () => unawaited(c.playAll(shuffled: true)),
+                          icon: const Icon(Icons.shuffle),
+                          label: const Text('随机播放'),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        if (c.collections.isNotEmpty && c.section == '专辑')
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            sliver: SliverLayoutBuilder(
+              builder: (context, bounds) => SliverGrid.builder(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: (bounds.crossAxisExtent / 190).floor().clamp(
+                    1,
+                    6,
+                  ),
+                  mainAxisExtent: 232,
+                  crossAxisSpacing: 20,
+                  mainAxisSpacing: 16,
+                ),
+                itemCount: c.collections.length,
+                itemBuilder: (context, index) {
+                  final value = c.collections[index];
+                  final data = value['cover_track'];
+                  final artwork =
+                      Uri.tryParse(
+                        value['artwork'] as String? ?? '',
+                      )?.pathSegments ??
+                      <String>[];
+                  final track = data is Map
+                      ? Track(Map<String, dynamic>.from(data))
+                      : Track({
+                          'id': artwork.length >= 2
+                              ? artwork[artwork.length - 2]
+                              : value['id'],
+                          'artwork': value['artwork'] ?? '',
+                        });
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => c.openCollection(value),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Center(
+                            child: Cover(
+                              controller: c,
+                              track: track,
+                              size: 170,
                             ),
-                            const SizedBox(height: 12),
-                            Text(c.offline ? '已缓存的旋律，始终在身边。' : '让每一份热爱，产生共鸣。'),
-                            const SizedBox(height: 16),
-                            FilledButton.icon(
-                              onPressed: c.tracks.isEmpty
-                                  ? null
-                                  : () => c.play(c.tracks.first),
-                              icon: const Icon(Icons.play_arrow),
-                              label: const Text('开始聆听'),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          value['title'] as String,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        Text(
+                          '${value['artist']} · ${value['tracks']} 首',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        if (c.collections.isNotEmpty && c.section == '艺术家')
+          SliverList.builder(
+            itemCount: c.collections.length,
+            itemBuilder: (context, index) {
+              final value = c.collections[index];
+              return ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 8,
+                ),
+                leading: ArtistAvatar(
+                  controller: c,
+                  name: value['name'] as String,
+                  path: value['artwork'] as String? ?? '',
+                ),
+                title: Text(value['name'] as String),
+                subtitle: Text('${value['tracks']} 首'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => c.openCollection(value),
+              );
+            },
+          ),
+        if (c.collections.isEmpty && tracks.isNotEmpty)
+          SliverPadding(
+            padding: EdgeInsets.symmetric(horizontal: desktop ? 30 : 0),
+            sliver: SliverList.builder(
+              itemCount: tracks.length,
+              itemBuilder: (context, index) => desktop
+                  ? desktopSongRow(tracks[index], index)
+                  : songRow(tracks[index], index),
+            ),
+          ),
+        if (tracks.isEmpty && c.collections.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.library_music_outlined, size: 40),
+                    const SizedBox(height: 16),
+                    Text(
+                      c.loading
+                          ? '正在读取音乐库…'
+                          : desktop && selection.active
+                          ? '没有匹配的歌曲'
+                          : c.offline
+                          ? '还没有可离线播放的音乐'
+                          : '这里还没有音乐',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      desktop && selection.active
+                          ? '试试其他关键词或取消筛选，已选歌曲会保留。'
+                          : c.offline
+                          ? '在设置中连接服务器，播放或下载后即可离线聆听。'
+                          : '切换音乐库，或在服务器整理并扫描音乐。',
+                      textAlign: TextAlign.center,
+                    ),
+                    if (!c.authenticated)
+                      TextButton(
+                        onPressed: settingsPage,
+                        child: const Text('前往设置'),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        if (c.tracks.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: c.tracks.length < c.total
+                    ? OutlinedButton(
+                        onPressed: c.loading ? null : () => c.load(more: true),
+                        child: Text('加载更多 · ${c.tracks.length} / ${c.total}'),
+                      )
+                    : Text('共 ${tracks.length} 首'),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget desktopSongRow(Track track, int index) {
+    final theme = Theme.of(context), scheme = theme.colorScheme;
+    final selected = selection.selectedIDs.contains(track.id);
+    final current = c.current?.id == track.id;
+    final bitrate = track.json['bitrate'] as num? ?? 0;
+    return Column(
+      children: [
+        Material(
+          key: ValueKey('desktop-track-${track.id}'),
+          color: (selecting ? selected : current)
+              ? scheme.secondaryContainer
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Semantics(
+                    selected: selecting ? selected : current,
+                    label: selecting
+                        ? '${selected ? '取消选择' : '选择'} ${track.title}'
+                        : '播放 ${track.title}',
+                    child: InkWell(
+                      onTap: selecting
+                          ? c.batchBusy
+                                ? null
+                                : () =>
+                                      setState(() => selection.toggle(track.id))
+                          : () => playCollection(track: track),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 24,
+                              child: selecting
+                                  ? Icon(
+                                      selected
+                                          ? Icons.check_circle
+                                          : Icons.circle_outlined,
+                                      size: 20,
+                                      color: selected
+                                          ? scheme.primary
+                                          : scheme.onSurfaceVariant,
+                                    )
+                                  : current && c.playing
+                                  ? Icon(
+                                      Icons.graphic_eq,
+                                      size: 16,
+                                      color: scheme.primary,
+                                    )
+                                  : Text(
+                                      '${index + 1}'.padLeft(2, '0'),
+                                      textAlign: TextAlign.center,
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(fontSize: 12),
+                                    ),
+                            ),
+                            const SizedBox(width: 14),
+                            Cover(controller: c, track: track, size: 44),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    track.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontSize: 14,
+                                      color: current && !selecting
+                                          ? scheme.primary
+                                          : scheme.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 5,
+                                          vertical: 1,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color: scheme.outline,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '${track.format.toUpperCase()}${bitrate > 0 ? ' ${(bitrate / 1000).round()}K' : ''}',
+                                          style: theme.textTheme.bodySmall
+                                              ?.copyWith(
+                                                fontSize: 10,
+                                                color: scheme.onSurfaceVariant,
+                                              ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          '${track.artist} · ${track.album}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: theme.textTheme.bodySmall
+                                              ?.copyWith(
+                                                fontSize: 12,
+                                                color: scheme.onSurfaceVariant,
+                                              ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Text(
+                              clock(Duration(seconds: track.duration.round())),
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontSize: 12,
+                                color: scheme.onSurfaceVariant,
+                              ),
                             ),
                           ],
                         ),
                       ),
-                      if (MediaQuery.sizeOf(context).width >= 500)
-                        const Padding(
-                          padding: EdgeInsets.only(left: 20),
-                          child: Icon(Icons.album, size: 88),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-              ],
-              Row(
-                children: [
-                  Expanded(child: scope()),
-                  Text(c.offline ? '离线' : '${c.total} 首'),
-                ],
-              ),
-              if (!desktop &&
-                  tab == 1 &&
-                  c.album.isEmpty &&
-                  c.artist.isEmpty) ...[
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: SegmentedButton<String>(
-                    showSelectedIcon: false,
-                    segments: [
-                      for (final value in ['歌曲', '专辑', '艺术家', '喜欢'])
-                        ButtonSegment(value: value, label: Text(value)),
-                    ],
-                    selected: {c.section},
-                    onSelectionChanged: (values) {
-                      c.navigate(values.first);
-                    },
-                  ),
-                ),
-              ],
-              if (!desktop && tab == 3) ...[
-                const SizedBox(height: 16),
-                Text('寻找共鸣', style: Theme.of(context).textTheme.headlineMedium),
-                const SizedBox(height: 16),
-                searchField(),
-              ],
-              if ((!desktop && tab == 2) || c.section == '缓存')
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text('已下载 ${c.total} 首 · 无需登录即可播放'),
-                ),
-              if (c.tracks.isNotEmpty && (desktop || (!desktop && tab == 1)))
-                Padding(
-                  padding: const EdgeInsets.only(top: 16),
-                  child: Wrap(
-                    spacing: 12,
-                    runSpacing: 8,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: c.busy || c.loading || c.queueLoading
-                            ? null
-                            : () => unawaited(c.playAll()),
-                        icon: const Icon(Icons.play_arrow),
-                        label: const Text('全部播放'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: c.busy || c.loading || c.queueLoading
-                            ? null
-                            : () => unawaited(c.playAll(shuffled: true)),
-                        icon: const Icon(Icons.shuffle),
-                        label: const Text('随机播放'),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-      if (c.collections.isNotEmpty && c.section == '专辑')
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          sliver: SliverLayoutBuilder(
-            builder: (context, bounds) => SliverGrid.builder(
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: (bounds.crossAxisExtent / 190).floor().clamp(
-                  1,
-                  6,
-                ),
-                mainAxisExtent: 232,
-                crossAxisSpacing: 20,
-                mainAxisSpacing: 16,
-              ),
-              itemCount: c.collections.length,
-              itemBuilder: (context, index) {
-                final value = c.collections[index];
-                final data = value['cover_track'];
-                final artwork =
-                    Uri.tryParse(
-                      value['artwork'] as String? ?? '',
-                    )?.pathSegments ??
-                    <String>[];
-                final track = data is Map
-                    ? Track(Map<String, dynamic>.from(data))
-                    : Track({
-                        'id': artwork.length >= 2
-                            ? artwork[artwork.length - 2]
-                            : value['id'],
-                        'artwork': value['artwork'] ?? '',
-                      });
-                return InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: () => c.openCollection(value),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Center(
-                          child: Cover(controller: c, track: track, size: 170),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        value['title'] as String,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      Text(
-                        '${value['artist']} · ${value['tracks']} 首',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      if (c.collections.isNotEmpty && c.section == '艺术家')
-        SliverList.builder(
-          itemCount: c.collections.length,
-          itemBuilder: (context, index) {
-            final value = c.collections[index];
-            return ListTile(
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 24,
-                vertical: 8,
-              ),
-              leading: ArtistAvatar(
-                controller: c,
-                name: value['name'] as String,
-                path: value['artwork'] as String? ?? '',
-              ),
-              title: Text(value['name'] as String),
-              subtitle: Text('${value['tracks']} 首'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => c.openCollection(value),
-            );
-          },
-        ),
-      if (c.collections.isEmpty && c.tracks.isNotEmpty)
-        SliverList.builder(
-          itemCount: c.tracks.length,
-          itemBuilder: (context, index) => songRow(c.tracks[index], index),
-        ),
-      if (c.tracks.isEmpty && c.collections.isEmpty)
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.library_music_outlined, size: 40),
-                  const SizedBox(height: 16),
-                  Text(
-                    c.loading
-                        ? '正在读取音乐库…'
-                        : c.offline
-                        ? '还没有可离线播放的音乐'
-                        : '这里还没有音乐',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    c.offline
-                        ? '在设置中连接服务器，播放或下载后即可离线聆听。'
-                        : '切换音乐库，或在服务器整理并扫描音乐。',
-                    textAlign: TextAlign.center,
-                  ),
-                  if (!c.authenticated)
-                    TextButton(
-                      onPressed: settingsPage,
-                      child: const Text('前往设置'),
                     ),
+                  ),
+                ),
+                if (!selecting) ...[
+                  const SizedBox(width: 8),
+                  ...songActions(track),
                 ],
-              ),
+              ],
             ),
           ),
         ),
-      if (c.tracks.isNotEmpty)
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Center(
-              child: c.tracks.length < c.total
-                  ? OutlinedButton(
-                      onPressed: c.loading ? null : () => c.load(more: true),
-                      child: Text('加载更多 · ${c.tracks.length} / ${c.total}'),
-                    )
-                  : Text('共 ${c.total} 首'),
-            ),
+        const Divider(height: 1, thickness: 0.5),
+      ],
+    );
+  }
+
+  List<Widget> songActions(Track track) => [
+    IconButton(
+      tooltip: track.favorite ? '取消喜欢' : '喜欢',
+      onPressed: c.offline || c.batchBusy ? null : () => c.favorite(track),
+      color: desktop ? Theme.of(context).colorScheme.primary : null,
+      constraints: desktop
+          ? const BoxConstraints.tightFor(width: 36, height: 36)
+          : null,
+      padding: desktop ? EdgeInsets.zero : const EdgeInsets.all(8),
+      icon: Icon(track.favorite ? Icons.favorite : Icons.favorite_outline),
+      iconSize: 20,
+    ),
+    PopupMenuButton<String>(
+      tooltip: '下载与播放操作',
+      padding: desktop ? EdgeInsets.zero : const EdgeInsets.all(8),
+      constraints: const BoxConstraints(minWidth: 160),
+      iconSize: desktop ? 20 : 24,
+      iconColor: desktop ? Theme.of(context).colorScheme.primary : null,
+      icon: Icon(
+        c.downloading.contains(track.id) ? Icons.downloading : Icons.more_horiz,
+      ),
+      onSelected: (value) {
+        if (value == 'download') unawaited(c.download(track));
+        if (value == 'remove') unawaited(c.removeDownload(track));
+        if (value == 'queue') c.enqueue(track);
+      },
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'queue', child: Text('加入播放列表')),
+        if (c.cache?.downloads.contains(track.id) == true)
+          const PopupMenuItem(value: 'remove', child: Text('删除下载'))
+        else
+          PopupMenuItem(
+            value: 'download',
+            enabled: !c.offline && !c.downloading.contains(track.id),
+            child: const Text('下载到本机'),
           ),
-        ),
-    ],
-  );
+      ],
+    ),
+  ];
+
   Widget songRow(Track track, int index) => Material(
     color: c.current?.id == track.id
         ? Theme.of(context).colorScheme.secondaryContainer
@@ -1090,14 +1751,6 @@ class _MusicPageState extends State<MusicPage> {
         padding: const EdgeInsets.fromLTRB(20, 10, 8, 10),
         child: Row(
           children: [
-            if (desktop)
-              SizedBox(
-                width: 32,
-                child: Text(
-                  '${index + 1}'.padLeft(2, '0'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
             Cover(controller: c, track: track, size: 46),
             const SizedBox(width: 12),
             Expanded(
@@ -1113,72 +1766,18 @@ class _MusicPageState extends State<MusicPage> {
                   const SizedBox(height: 4),
                   Text(
                     '${track.artist}${track.hasLyrics ? ' · 歌词' : ''}${c.cache?.downloads.contains(track.id) == true ? ' · 已下载' : ''}',
-                    style: desktop
-                        ? Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurfaceVariant,
-                          )
-                        : null,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
-            if (desktop && MediaQuery.sizeOf(context).width >= 1100)
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Text(
-                    track.album,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
             if (MediaQuery.sizeOf(context).width >= 500)
               Text(
                 clock(Duration(seconds: track.duration.round())),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
-            IconButton(
-              tooltip: track.favorite ? '取消喜欢' : '喜欢',
-              onPressed: c.offline ? null : () => c.favorite(track),
-              icon: Icon(
-                track.favorite ? Icons.favorite : Icons.favorite_outline,
-              ),
-              iconSize: 20,
-            ),
-            PopupMenuButton<String>(
-              tooltip: '下载与播放操作',
-              icon: Icon(
-                c.downloading.contains(track.id)
-                    ? Icons.downloading
-                    : Icons.more_horiz,
-              ),
-              onSelected: (value) {
-                if (value == 'download') unawaited(c.download(track));
-                if (value == 'remove') unawaited(c.removeDownload(track));
-                if (value == 'queue') {
-                  c.enqueue(track);
-                }
-              },
-              itemBuilder: (_) => [
-                const PopupMenuItem(value: 'queue', child: Text('加入播放列表')),
-                if (c.cache?.downloads.contains(track.id) == true)
-                  const PopupMenuItem(value: 'remove', child: Text('删除下载'))
-                else
-                  PopupMenuItem(
-                    value: 'download',
-                    enabled: !c.offline && !c.downloading.contains(track.id),
-                    child: const Text('下载到本机'),
-                  ),
-              ],
-            ),
+            ...songActions(track),
           ],
         ),
       ),

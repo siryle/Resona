@@ -12,6 +12,7 @@ class BulkController extends MusicController {
     Track track, {
     bool replaceQueue = true,
     Duration startPosition = Duration.zero,
+    List<Track>? fromTracks,
   }) async {
     selected = track;
     current = track;

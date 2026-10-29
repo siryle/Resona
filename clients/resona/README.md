@@ -7,8 +7,19 @@ The existing Swift clients remain the iOS / macOS implementation.
 
 - Android follows the iOS listening / library / downloads / search / settings
   structure, with a mini-player above the phone tab bar and a navigation rail on
-  tablets. Windows follows the macOS sidebar, search header and persistent
-  playback footer. Supports resizing, rotation, text scaling and light / dark themes.
+  tablets. Windows follows the macOS sidebar and playback footer. Supports
+  resizing, rotation, text scaling and light / dark themes.
+- Windows song lists share the macOS layout across music, album and artist
+  details, favorites and downloads: sequence number, 44px artwork, song title,
+  format/bitrate and artist/album, then duration and actions. Search and filters
+  sit above the list. Search scopes cover songs, albums and artists; favorites
+  and manual downloads can be intersected. Matching songs beyond the first page
+  are loaded before search, select-all or filtered playback completes.
+- Selection uses circular controls and a highlighted row. Search and filters
+  preserve selections; select-all toggles only the current results. Batch
+  download, favorite and enqueue controls replace the playback footer in the
+  same space. Done or Escape restores playback controls. Batch actions skip
+  existing downloads/favorites and stop on failure or account changes.
 - The Windows footer matches macOS: a top-edge seek bar, artwork and current/next
   lyric, playback controls, then volume/time, favorite, mode and queue. Hover,
   keyboard focus or pause reveals song/artist/album information. Narrow windows

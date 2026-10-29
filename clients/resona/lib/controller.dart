@@ -12,6 +12,8 @@ import 'package:path_provider/path_provider.dart';
 import 'api.dart';
 import 'cache.dart';
 
+enum TrackBatchAction { download, favorite }
+
 class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   static const _credentials = FlutterSecureStorage();
   final Directory? supportDirectory;
@@ -56,6 +58,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   bool _disposed = false;
   bool repeat = false;
   bool repeatOne = false;
+  bool batchBusy = false;
+  int batchCompleted = 0, batchTotal = 0;
   String get modeTitle => shuffle
       ? '随机循环'
       : repeatOne
@@ -387,7 +391,10 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     if (artist.isNotEmpty) 'artist': artist,
   };
 
-  Future<void> playAll({bool shuffled = false}) async {
+  Future<void> playAll({
+    bool shuffled = false,
+    List<Track>? matchingTracks,
+  }) async {
     if (busy || loading || queueLoading || tracks.isEmpty) return;
     final activeAPI = api;
     final request = _request, playRequest = _playRequest;
@@ -406,7 +413,9 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     try {
       final all = <Track>[];
-      if (offline || section == '缓存') {
+      if (matchingTracks != null) {
+        all.addAll(matchingTracks);
+      } else if (offline || section == '缓存') {
         all.addAll(tracks);
       } else {
         var offset = 0;
@@ -524,6 +533,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     Track track, {
     bool replaceQueue = true,
     Duration startPosition = Duration.zero,
+    List<Track>? fromTracks,
   }) async {
     if (busy) return;
     if (api == null ||
@@ -580,7 +590,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       _playWork = work.catchError((Object _) {});
       await work;
       if (request != _playRequest) return;
-      if (replaceQueue) queue = List.of(tracks);
+      if (replaceQueue) queue = List.of(fromTracks ?? tracks);
       if (!queue.any((t) => t.id == track.id)) queue = [track];
       current = track;
       lyricText = '';
@@ -691,9 +701,12 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  void enqueue(Track track) {
-    if (!queue.any((item) => item.id == track.id)) queue.add(track);
-    if (current == null) {
+  void enqueue(Track track) => enqueueAll([track]);
+
+  void enqueueAll(Iterable<Track> tracks) {
+    final seen = queue.map((track) => track.id).toSet();
+    queue.addAll(tracks.where((track) => seen.add(track.id)));
+    if (current == null && queue.isNotEmpty) {
       current = queue.first;
       position = Duration.zero;
       duration = Duration(milliseconds: (current!.duration * 1000).round());
@@ -703,6 +716,61 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     }
     unawaited(savePlaybackState());
     notifyListeners();
+  }
+
+  Future<bool> runTrackBatch(
+    TrackBatchAction action,
+    List<Track> chosen,
+  ) async {
+    if (batchBusy || busy || offline || !authenticated || chosen.isEmpty) {
+      return false;
+    }
+    final activeAPI = api, activeCache = cache;
+    batchBusy = true;
+    batchCompleted = 0;
+    batchTotal = chosen.length;
+    error = null;
+    notifyListeners();
+    try {
+      for (final track in chosen) {
+        // A batch must never continue against a different account or cache.
+        if (_disposed ||
+            api != activeAPI ||
+            cache != activeCache ||
+            offline ||
+            busy) {
+          return false;
+        }
+        final latest =
+            tracks.where((item) => item.id == track.id).firstOrNull ??
+            activeCache?.tracks[track.id] ??
+            track;
+        switch (action) {
+          case TrackBatchAction.favorite:
+            if (!latest.favorite) await favorite(latest);
+          case TrackBatchAction.download:
+            if (activeCache?.downloads.contains(track.id) != true) {
+              await download(latest);
+              if (activeCache?.downloads.contains(track.id) != true) {
+                return false;
+              }
+            }
+        }
+        if (_disposed ||
+            api != activeAPI ||
+            cache != activeCache ||
+            offline ||
+            error != null) {
+          return false;
+        }
+        batchCompleted++;
+        notifyListeners();
+      }
+      return true;
+    } finally {
+      batchBusy = false;
+      notifyListeners();
+    }
   }
 
   Future<void> favorite(Track track) async {
