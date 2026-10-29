@@ -754,9 +754,9 @@ func (c *Cloud115) publish(item CloudItem, t Track) error {
 			current := st.Cloud.Items[t.ID]
 			current.State, current.Error = "skipped", "同一音乐库已有同名同歌手歌曲，保留远端文件"
 			st.Cloud.Items[t.ID] = current
-			if old.ID != "" {
-				old.Unavailable = true
-				st.Tracks[t.ID] = old
+			if currentTrack, ok := st.Tracks[t.ID]; ok {
+				currentTrack.Unavailable = true
+				st.Tracks[t.ID] = currentTrack
 			}
 			return nil
 		})
@@ -767,18 +767,28 @@ func (c *Cloud115) publish(item CloudItem, t Track) error {
 		return c.setItemState(t.ID, "failed", "无法整理 STRM，原索引已保留")
 	}
 	err = c.server.store.updateEntry(t.ID, func(st *libraryState) error {
+		current, exists := st.Tracks[t.ID]
+		candidate := t
+		lyrics := (*SavedLyrics)(nil)
+		if exists {
+			candidate.Favorite, candidate.AddedAt = current.Favorite, current.AddedAt
+			lyrics = current.Lyrics
+			if current.MetadataLocked {
+				metadataOf(current.Track).apply(&candidate)
+				candidate.MetadataLocked = true
+			}
+		}
 		embedded, _ := makeLyrics(t.TagLyrics, "embedded")
 		remote := item.RemoteFile
-		lyrics := old.Lyrics
-		if old.ID != "" && lyricsIdentity(old.Track) != lyricsIdentity(t) {
+		if exists && lyricsIdentity(current.Track) != lyricsIdentity(candidate) {
 			lyrics = nil
 		}
-		t.Unavailable = st.Cloud.Cookie == ""
-		st.Tracks[t.ID] = DiskTrack{Track: t, File: move.destination, Remote: &remote, Lyrics: lyrics,
+		candidate.Unavailable = st.Cloud.Cookie == ""
+		st.Tracks[t.ID] = DiskTrack{Track: candidate, File: move.destination, Remote: &remote, Lyrics: lyrics,
 			EmbeddedLyrics: embedded, EmbeddedChecked: true}
-		current := st.Cloud.Items[t.ID]
-		current.State, current.Error = "ready", ""
-		st.Cloud.Items[t.ID] = current
+		cloudCurrent := st.Cloud.Items[t.ID]
+		cloudCurrent.State, cloudCurrent.Error = "ready", ""
+		st.Cloud.Items[t.ID] = cloudCurrent
 		return nil
 	})
 	if err != nil {

@@ -47,6 +47,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   Duration position = Duration.zero, duration = Duration.zero;
   String lyricText = '';
   Future<void> _cacheWork = Future.value();
+  Future<void> _playWork = Future.value();
   Future<void> _stateWork = Future.value();
   File? _stateFile;
   bool _restoringPlayback = false;
@@ -249,6 +250,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       );
       ++_request;
       ++_playRequest;
+      await _playWork;
       await _player?.stop();
       await relay?.close();
       final oldCache = cache;
@@ -500,6 +502,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         notifyListeners();
       }),
       instance.stream.duration.listen((value) {
+        if (opening || _needsPlaybackOpen) return;
         duration = value;
         notifyListeners();
       }),
@@ -530,37 +533,61 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     final request = ++_playRequest;
-    if (replaceQueue) queue = List.of(tracks);
-    if (!queue.any((t) => t.id == track.id)) queue = [track];
-    current = track;
-    lyricText = '';
-    duration = Duration(milliseconds: (track.duration * 1000).round());
-    position = startPosition >= duration ? Duration.zero : startPosition;
-    _needsPlaybackOpen = true;
     opening = true;
     error = null;
-    unawaited(savePlaybackState());
     notifyListeners();
     try {
       final local = cache?.contains(track) ?? false;
-      if (offline && !local) throw const APIException('此歌曲尚未缓存，请连接服务器后播放。');
+      if (offline && !local) {
+        throw const APIException('此歌曲尚未缓存，请连接服务器后播放。');
+      }
       final uri = local ? cache!.audio(track).uri : await relay!.url(track);
       if (request != _playRequest) return;
       if (activateAudio != null && !await activateAudio!()) {
         throw const APIException("无法取得音频焦点，请稍后重试。");
       }
+      final nextDuration = Duration(
+        milliseconds: (track.duration * 1000).round(),
+      );
+      final nextPosition = startPosition >= nextDuration
+          ? Duration.zero
+          : startPosition;
+      // Serialize decoder opens so a delayed older request cannot replace a newer song.
+      final work = _playWork.then((_) async {
+        if (request != _playRequest) return;
+        if (player.platform is NativePlayer) {
+          final native = player.platform as NativePlayer;
+          // Lyrics belong to our UI; mpv must not reopen cached sidecars as media.
+          await native.setProperty('sub-auto', 'no');
+          await native.setProperty('audio-file-auto', 'no');
+        }
+        await player.setVolume(volume * 100);
+        if (request != _playRequest) return;
+        try {
+          await player.open(Media(uri.toString(), start: nextPosition));
+          if (request != _playRequest) {
+            await player.stop();
+            playing = false;
+            _needsPlaybackOpen = current != null;
+          }
+        } catch (_) {
+          await player.stop();
+          playing = false;
+          _needsPlaybackOpen = current != null;
+          rethrow;
+        }
+      });
+      _playWork = work.catchError((Object _) {});
+      await work;
       if (request != _playRequest) return;
-      if (player.platform is NativePlayer) {
-        final native = player.platform as NativePlayer;
-        // Lyrics belong to our UI; mpv must not reopen the cached LRC as external media.
-        await native.setProperty('sub-auto', 'no');
-        await native.setProperty('audio-file-auto', 'no');
-      }
-      if (request != _playRequest) return;
-      await player.setVolume(volume * 100);
-      await player.open(Media(uri.toString(), start: position));
-      if (request != _playRequest) return;
+      if (replaceQueue) queue = List.of(tracks);
+      if (!queue.any((t) => t.id == track.id)) queue = [track];
+      current = track;
+      lyricText = '';
+      duration = nextDuration;
+      position = nextPosition;
       _needsPlaybackOpen = false;
+      unawaited(savePlaybackState());
       unawaited(_lyrics(track, request, local));
       if (!local) {
         final activeCache = cache!, activeAPI = api!;
@@ -579,11 +606,15 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (e) {
       if (request == _playRequest) {
         error = e is APIException ? e.message : '播放失败，请检查音源与网络。';
+        unawaited(savePlaybackState());
       }
     } finally {
       if (request == _playRequest) {
-        opening = false;
-        notifyListeners();
+        await _playWork;
+        if (request == _playRequest) {
+          opening = false;
+          notifyListeners();
+        }
       }
     }
   }
@@ -607,6 +638,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> stopPlayback() async {
     ++_playRequest;
+    await _playWork;
     await _player?.stop();
     current = null;
     opening = false;
@@ -679,12 +711,15 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
       return;
     }
+    final activeAPI = api!;
+    final activeCache = cache;
     try {
-      final updated = await api!.json(
+      final updated = await activeAPI.json(
         'PUT',
         'tracks/${Uri.encodeComponent(track.id)}/favorite',
         body: {'favorite': !track.favorite},
       );
+      if (api != activeAPI) return;
       final replacement = Track({
         ...track.json,
         'favorite': updated['favorite'] ?? !track.favorite,
@@ -692,6 +727,11 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       tracks = tracks.map((t) => t.id == track.id ? replacement : t).toList();
       queue = queue.map((t) => t.id == track.id ? replacement : t).toList();
       if (current?.id == track.id) current = replacement;
+      try {
+        await activeCache?.updateFavorite(replacement.id, replacement.favorite);
+      } catch (_) {
+        error = '收藏已保存，但本机缓存信息更新失败。';
+      }
       await savePlaybackState();
     } catch (e) {
       error = e is APIException ? e.message : '收藏保存失败，请重试。';
@@ -771,6 +811,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         : Session(session!.server, session!.username, '');
     try {
       if (!revoke) await savePlaybackState();
+      await _playWork;
       await _player?.stop();
       await relay?.close();
       final activeCache = cache;
@@ -899,10 +940,15 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
+    ++_playRequest;
     for (final sub in _subscriptions) {
       unawaited(sub.cancel());
     }
-    unawaited(_player?.dispose());
+    unawaited(
+      _playWork.then((_) async {
+        await _player?.dispose();
+      }),
+    );
     unawaited(relay?.close());
     unawaited(cache?.stop());
     api?.close();

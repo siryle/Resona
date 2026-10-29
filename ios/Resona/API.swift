@@ -114,6 +114,7 @@ final class LibraryModel: ObservableObject {
     private let cache: PlaybackCache
     private let persistsSession: Bool
     private var refreshGeneration = 0
+    private var favorites: [String: Bool] = [:]
 
     var libraryDownloads: [Track] {
         downloaded.filter { ($0.library ?? "local") == libraryScope }
@@ -136,6 +137,9 @@ final class LibraryModel: ObservableObject {
             self.cache.activate(session)
             serverInput = session.server.absoluteString
             username = session.username
+        } else if let identity = self.cache.identity {
+            serverInput = identity.server.absoluteString
+            username = identity.username
         }
         useDownloads()
     }
@@ -185,6 +189,7 @@ final class LibraryModel: ObservableObject {
             let newSession = Session(server: url, username: username, token: login.token)
             if persistsSession { try Credentials.save(newSession) }
             session = newSession
+            favorites = [:]
             cache.activate(newSession)
             password = ""
             await refresh()
@@ -264,6 +269,9 @@ final class LibraryModel: ObservableObject {
         defer { downloading.remove(track.id) }
         do {
             let complete = try await downloads.fetch(track, session: current)
+            if let favorite = favorites[track.id] {
+                try downloads.updateFavorite(track.id, favorite: favorite)
+            }
             downloaded = try downloads.tracks()
             if offline { useDownloads() }
             if !complete {
@@ -287,12 +295,22 @@ final class LibraryModel: ObservableObject {
 
     @discardableResult
     func favorite(_ track: Track) async -> Track? {
-        guard session != nil, !offline else { error = "连接服务器后可修改收藏。"; return nil }
+        guard let current = session, !offline else { error = "连接服务器后可修改收藏。"; return nil }
         do {
             let data = try await request("tracks/\(track.id)/favorite", method: "PUT",
                                          body: JSONSerialization.data(withJSONObject: ["favorite": !track.favorite]))
+            guard session?.token == current.token, session?.server == current.server,
+                  session?.username == current.username else { return nil }
             let updated = try decoder.decode(Track.self, from: data)
+            favorites[updated.id] = updated.favorite
             if let index = tracks.firstIndex(where: { $0.id == updated.id }) { tracks[index] = updated }
+            if let index = downloaded.firstIndex(where: { $0.id == updated.id }) { downloaded[index].favorite = updated.favorite }
+            do {
+                try downloads.updateFavorite(updated.id, favorite: updated.favorite)
+                try cache.updateFavorite(updated)
+            } catch {
+                self.error = "收藏已保存，但本机缓存信息更新失败。\(error.localizedDescription)"
+            }
             return updated
         } catch { self.error = error.localizedDescription }
         return nil

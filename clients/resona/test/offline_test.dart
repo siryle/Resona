@@ -79,6 +79,174 @@ void main() {
     await c.setVolume(0.35);
   }
 
+  Future<Track> addCached(MusicController c, String id) async {
+    final song = Track({
+      'id': id,
+      'title': id,
+      'format': 'mp3',
+      'duration': 60,
+      '_cache_bytes': 3,
+    });
+    await c.cache!.audio(song).writeAsBytes([1, 2, 3]);
+    c.cache!.tracks[id] = song;
+    return song;
+  }
+
+  for (final focusFailure in [false, true]) {
+    test(
+      'failed playback preflight preserves active song ($focusFailure)',
+      () async {
+        await prepare('http://127.0.0.1:1');
+        final engine = RecordingPlayer();
+        final c = PlaybackController(root, engine);
+        await c.initialize();
+        final first = c.tracks.single;
+        await c.play(first);
+        c.position = const Duration(seconds: 19);
+        c.playing = true;
+        final next = focusFailure
+            ? await addCached(c, 'next')
+            : Track({'id': 'missing'});
+        c.lyricText = 'Current lyrics';
+        if (focusFailure) c.activateAudio = () async => false;
+        c.tracks = [next];
+        await c.play(next);
+        expect(c.current?.id, first.id);
+        expect(c.queue.map((t) => t.id), [first.id]);
+        expect(c.position.inSeconds, 19);
+        expect(c.lyricText, 'Current lyrics');
+        expect(c.playing, isTrue);
+        expect(c.opening, isFalse);
+        expect(c.error, isNotNull);
+        expect(engine.opened.length, 1);
+        await c.savePlaybackState();
+        c.dispose();
+        final restored = MusicController(supportDirectory: root);
+        await restored.initialize();
+        expect(restored.current?.id, first.id);
+        expect(restored.position.inSeconds, 19);
+        restored.dispose();
+      },
+    );
+  }
+
+  test(
+    'decoder failure keeps previous selection paused and retryable',
+    () async {
+      await prepare('http://127.0.0.1:1');
+      final engine = RecordingPlayer();
+      final c = PlaybackController(root, engine);
+      await c.initialize();
+      final first = c.tracks.single;
+      await c.play(first);
+      c.position = const Duration(seconds: 19);
+      c.playing = true;
+      final next = await addCached(c, 'next');
+      engine.failOpen = true;
+      await c.play(next);
+      expect(c.current?.id, first.id);
+      expect(c.playing, isFalse);
+      expect(engine.stops, 1);
+      engine.failOpen = false;
+      await c.toggle();
+      expect(engine.opened.last.start?.inSeconds, 19);
+      expect(
+        engine.opened.last.uri,
+        Media(c.cache!.audio(first).uri.toString()).uri,
+      );
+      expect(c.current?.id, first.id);
+      await c.savePlaybackState();
+      c.dispose();
+    },
+  );
+
+  for (final nextCached in [false, true]) {
+    test(
+      'delayed decoder cannot publish a superseded song ($nextCached)',
+      () async {
+        await prepare('http://127.0.0.1:1');
+        final engine = RecordingPlayer();
+        final c = PlaybackController(root, engine);
+        await c.initialize();
+        final first = c.tracks.single;
+        await c.play(first);
+        final second = await addCached(c, 'second');
+        final third = nextCached
+            ? await addCached(c, 'third')
+            : Track({'id': 'missing'});
+        final gate = Completer<void>();
+        engine.nextOpenGate = gate.future;
+        engine.openStarted = Completer<void>();
+        final older = c.play(second);
+        await engine.openStarted!.future;
+        final newer = c.play(third);
+        gate.complete();
+        await Future.wait([older, newer]);
+        expect(c.current?.id, nextCached ? third.id : first.id);
+        expect(c.opening, isFalse);
+        expect(engine.stops, 1);
+        if (!nextCached) expect(c.playing, isFalse);
+        await c.savePlaybackState();
+        c.dispose();
+      },
+    );
+  }
+
+  test('favorite changes survive offline filtering and restart', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      if (request.method == 'PUT') {
+        final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
+        request.response.write(jsonEncode({'favorite': body['favorite']}));
+      } else if (request.uri.path.endsWith('tracks')) {
+        request.response.write('{"items":[],"total":0}');
+      } else {
+        request.response.write('{}');
+      }
+      await request.response.close();
+    });
+    try {
+      await prepare('http://127.0.0.1:${server.port}', token: 'valid');
+      final c = MusicController(supportDirectory: root);
+      await c.initialize();
+      final song = c.cache!.tracks.values.single;
+      await c.favorite(song);
+      expect(c.cache!.tracks[song.id]!.favorite, isTrue);
+      expect(c.cache!.downloads, contains(song.id));
+      await c.favorite(c.cache!.tracks[song.id]!);
+      expect(c.cache!.tracks[song.id]!.favorite, isFalse);
+      await c.favorite(c.cache!.tracks[song.id]!);
+      c.offline = true;
+      c.section = '喜欢';
+      await c.load();
+      expect(c.tracks.single.id, song.id);
+      await c.savePlaybackState();
+      c.dispose();
+      await server.close(force: true);
+      final restored = MusicController(supportDirectory: root);
+      await restored.initialize();
+      restored.section = '喜欢';
+      await restored.load();
+      expect(restored.tracks.single.id, song.id);
+      expect(restored.cache!.contains(song), isTrue);
+      restored.offline = false;
+      // Test the persisted un-favorite without requiring the closed server.
+      await restored.cache!.updateFavorite(song.id, false);
+      final reopened = PlaybackCache(
+        Directory('${root.path}/playback-cache'),
+        restored.session!,
+      );
+      await reopened.load();
+      expect(reopened.tracks[song.id]!.favorite, isFalse);
+      expect(reopened.downloads, contains(song.id));
+      expect(reopened.contains(song), isTrue);
+      restored.dispose();
+    } finally {
+      await server.close(force: true);
+    }
+  });
+
   test(
     'restart restores queue, current song and progress before connecting',
     () async {
@@ -370,9 +538,25 @@ class PlaybackController extends MusicController {
 
 class RecordingPlayer implements Player {
   final List<Media> opened = [];
+  bool failOpen = false;
+  int stops = 0;
+  Future<void>? nextOpenGate;
+  Completer<void>? openStarted;
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
+    final gate = nextOpenGate;
+    nextOpenGate = null;
+    if (gate != null) {
+      openStarted!.complete();
+      await gate;
+    }
+    if (failOpen) throw StateError('decoder failed');
     opened.add(playable as Media);
+  }
+
+  @override
+  Future<void> stop() async {
+    stops++;
   }
 
   @override

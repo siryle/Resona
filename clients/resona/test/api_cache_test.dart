@@ -209,6 +209,28 @@ void main() {
     expect(reopened.contains(revised), true);
   });
 
+  test(
+    'favorite set during download reaches persisted cache metadata',
+    () async {
+      final pending = cache.save(api, track);
+      await cache.updateFavorite(track.id, true);
+      await pending;
+      expect(cache.tracks[track.id]!.favorite, isTrue);
+      await cache.pin(track);
+      final reopened = PlaybackCache(directory, session);
+      await reopened.load();
+      expect(reopened.tracks[track.id]!.favorite, isTrue);
+      expect(reopened.contains(track), isTrue);
+      expect(reopened.downloads, {track.id});
+      await reopened.updateFavorite(track.id, false);
+      final restarted = PlaybackCache(directory, session);
+      await restarted.load();
+      expect(restarted.tracks[track.id]!.favorite, isFalse);
+      expect(restarted.contains(track), isTrue);
+      expect(restarted.downloads, {track.id});
+    },
+  );
+
   test('legacy cache migration verifies hashes before publishing', () async {
     await cache.save(api, track);
     await cache.pin(track);

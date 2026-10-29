@@ -9,6 +9,7 @@ class PlaybackCache {
   final Map<String, Track> tracks = {};
   final Set<String> downloads = {};
   final Map<String, Future<void>> _pending = {};
+  final Map<String, bool> _favorites = {};
   final Set<HttpClient> _clients = {};
   bool _clearing = false;
   PlaybackCache(Directory base, Session session)
@@ -111,6 +112,7 @@ class PlaybackCache {
     if (!contains(track) || _clearing) throw const APIException('歌曲尚未完成下载');
     final snapshot = Track({
       ...track.json,
+      'favorite': _favorites[track.id] ?? tracks[track.id]!.favorite,
       '_cache_bytes': tracks[track.id]!.json['_cache_bytes'],
       '_downloaded': true,
     });
@@ -119,6 +121,23 @@ class PlaybackCache {
     await partial.rename(_metadata(track).path);
     tracks[track.id] = snapshot;
     downloads.add(track.id);
+  }
+
+  Future<void> updateFavorite(String id, bool favorite) async {
+    _favorites[id] = favorite;
+    try {
+      await _pending[id];
+    } catch (_) {
+      /* A failed download may leave no metadata to update. */
+    }
+    if (_favorites[id] != favorite) return;
+    final saved = tracks[id];
+    if (saved == null || _clearing) return;
+    final snapshot = Track({...saved.json, 'favorite': favorite});
+    final partial = File('${_metadata(saved).path}.part');
+    await partial.writeAsString(jsonEncode(snapshot.json), flush: true);
+    await partial.rename(_metadata(saved).path);
+    tracks[id] = snapshot;
   }
 
   Future<void> remove(Track track) async {
@@ -185,6 +204,7 @@ class PlaybackCache {
       if (_clearing) return;
       final snapshot = Track({
         ...track.json,
+        'favorite': _favorites[track.id] ?? track.favorite,
         '_cache_bytes': count,
         if (downloads.contains(track.id)) '_downloaded': true,
       });

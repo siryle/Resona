@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,11 +38,12 @@ type Auth struct {
 	attempts map[string]attempt
 	secure   bool
 	path     string
+	trusted  []netip.Prefix
 }
 
 func NewAuth(c Config) (*Auth, error) {
 	a := &Auth{user: c.Username, secure: c.CookieSecure, path: filepath.Join(c.DataDir, "admin.json"),
-		sessions: map[[32]byte]session{}, attempts: map[string]attempt{}}
+		sessions: map[[32]byte]session{}, attempts: map[string]attempt{}, trusted: c.TrustedProxies}
 	data, err := os.ReadFile(a.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return a, nil
@@ -199,10 +201,7 @@ var errThrottled = errors.New("too many login attempts")
 var errCredentials = errors.New("invalid username or password")
 
 func (a *Auth) login(r *http.Request, user, password string) (string, error) {
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if host == "" {
-		host = r.RemoteAddr
-	}
+	host := a.clientAddress(r)
 	now := time.Now()
 	a.mu.Lock()
 	if len(a.hash) == 0 {
@@ -251,6 +250,42 @@ func (a *Auth) login(r *http.Request, user, password string) (string, error) {
 		return "", err
 	}
 	return token, nil
+}
+
+func (a *Auth) clientAddress(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	peer = peer.Unmap()
+	if !a.isTrusted(peer) {
+		return peer.String()
+	}
+	forwarded := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	for i := len(forwarded) - 1; i >= 0; i-- {
+		address, err := netip.ParseAddr(strings.TrimSpace(forwarded[i]))
+		if err != nil {
+			break
+		}
+		if !a.isTrusted(peer) {
+			break
+		}
+		peer = address.Unmap()
+	}
+	return peer.String()
+}
+
+func (a *Auth) isTrusted(address netip.Addr) bool {
+	for _, prefix := range a.trusted {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func requestToken(r *http.Request) string {

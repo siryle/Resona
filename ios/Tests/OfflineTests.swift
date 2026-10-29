@@ -75,6 +75,26 @@ struct OfflineTests {
         let saved = try Data(contentsOf: store.audio(track)!)
         let original = try Data(contentsOf: media)
         assert(saved == original)
+        let cachedFavorite = await library.favorite(track)!
+        let savedDownloads = try store.tracks()
+        let savedCache = try cache.store!.tracks()
+        assert(cachedFavorite.favorite && library.downloaded[0].favorite &&
+               savedDownloads[0].favorite && savedCache[0].favorite,
+               "Favorite must reach both downloaded and automatically cached metadata")
+        let freshCache = PlaybackCache(root: root.appendingPathComponent("playback-cache"))
+        let cachedOnly = LibraryModel(downloads: OfflineStore(root: root.appendingPathComponent("empty-downloads")),
+                                      persistsSession: false, cache: freshCache)
+        assert(cachedOnly.session == nil && cachedOnly.tracks.filter(\.favorite).count == 1,
+               "Offline restart lost automatically cached favorites")
+        let cachedUnfavorite = await library.favorite(cachedFavorite)!
+        let unlikedDownloads = try store.tracks()
+        let unlikedCache = try cache.store!.tracks()
+        assert(!cachedUnfavorite.favorite && !unlikedDownloads[0].favorite && !unlikedCache[0].favorite)
+        assert(store.audio(track) != nil && cache.audio(track) != nil,
+               "Favorite metadata update changed audio integrity")
+        let identityData = try Data(contentsOf: root.appendingPathComponent("playback-cache").appendingPathExtension("identity.json"))
+        assert(!String(decoding: identityData, as: UTF8.self).contains("test-session"),
+               "Offline identity must never persist an authentication token")
         let reloaded = LibraryModel(downloads: store, persistsSession: false, cache: cache)
         assert(reloaded.tracks.count == 1 && reloaded.albums.count == 1)
         await reloaded.refresh()
@@ -171,6 +191,11 @@ struct OfflineTests {
         _ = try await library.request("../../__expire", method: "POST")
         await library.refresh()
         assert(library.session == nil && library.offline && library.downloaded.count == 1)
+        let expiredCache = PlaybackCache(root: root.appendingPathComponent("playback-cache"))
+        let expiredRestart = LibraryModel(downloads: OfflineStore(root: root.appendingPathComponent("empty-downloads")),
+                                          persistsSession: false, cache: expiredCache)
+        assert(expiredRestart.session == nil && expiredRestart.tracks.count == 1,
+               "Expired credentials hid automatic cache after process restart")
         library.password = "test-password"
         await library.login()
         assert(library.session != nil && !library.offline)
@@ -227,5 +252,6 @@ struct OfflineTests {
         print("PASS: authenticated download, SHA-256 integrity, persisted catalog/artwork/lyrics, offline startup, actual local playback, pause, repeat, server outage, offline logout and deletion")
         print("PASS: separate cloud library, 302 download, SHA-1 content verification independent of track ID, corrupt cloud audio rejection and scoped offline library")
         print("PASS: automatic playback cache, persistence, account/server isolation, truncated cache rejection/repair, cached playback during outage, clearing preserves downloads and cancels pending writes")
+        print("PASS: favorite metadata persists in downloads and automatic cache; tokenless restart restores automatic cache after expired credentials")
     }
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -434,4 +435,78 @@ func (s *Store) putJob(j Job) error {
 		s.state.Jobs = next
 	}
 	return err
+}
+
+// putJobProgress updates only the job rows changed since changedFrom. Scans call
+// this for every file, so copying and comparing the complete history here would
+// make progress persistence quadratic in the number of files.
+func (s *Store) putJobProgress(j Job, changedFrom int) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	index := -1
+	for i := range s.state.Jobs {
+		if s.state.Jobs[i].ID == j.ID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return os.ErrNotExist
+	}
+	old := s.state.Jobs[index]
+	if changedFrom < 0 {
+		changedFrom = 0
+	}
+	if changedFrom > len(j.Items) {
+		changedFrom = len(j.Items)
+	}
+	if changedFrom > len(old.Items) {
+		changedFrom = len(old.Items)
+	}
+	err := s.transaction(func(tx *sql.Tx) error {
+		header := j
+		header.Items = nil
+		oldHeader := old
+		oldHeader.Items = nil
+		if !reflect.DeepEqual(header, oldHeader) {
+			if err := encodeRow(tx, "INSERT INTO jobs VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position,data=excluded.data",
+				header, j.ID, index); err != nil {
+				return err
+			}
+		}
+		for k := changedFrom; k < len(j.Items); k++ {
+			if k < len(old.Items) && old.Items[k] == j.Items[k] {
+				continue
+			}
+			if err := encodeRow(tx, "INSERT INTO job_items VALUES(?,?,?) ON CONFLICT(job_id,position) DO UPDATE SET data=excluded.data",
+				j.Items[k], j.ID, k); err != nil {
+				return err
+			}
+		}
+		if len(j.Items) < len(old.Items) {
+			_, err := tx.Exec("DELETE FROM job_items WHERE job_id=? AND position>=?", j.ID, len(j.Items))
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	stateJob := &s.state.Jobs[index]
+	items := stateJob.Items
+	if len(items) > len(j.Items) {
+		items = items[:len(j.Items)]
+	}
+	for len(items) < len(j.Items) {
+		items = append(items, JobItem{})
+	}
+	for k := changedFrom; k < len(j.Items); k++ {
+		items[k] = j.Items[k]
+	}
+	*stateJob = j
+	stateJob.Items = items
+	stateJob.Errors = append([]string{}, j.Errors...)
+	return nil
 }

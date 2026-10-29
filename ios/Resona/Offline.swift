@@ -89,6 +89,17 @@ struct OfflineStore: Sendable {
         try FileManager.default.removeItem(at: dir)
     }
 
+    func updateFavorite(_ id: String, favorite: Bool) throws {
+        guard let dir = directory(id),
+              let data = try? Data(contentsOf: dir.appendingPathComponent("track.json")),
+              var saved = try? JSONDecoder().decode(Track.self, from: data),
+              saved.id == id,
+              audio(saved) != nil else { return }
+        saved.favorite = favorite
+        let metadata = dir.appendingPathComponent("track.json")
+        try JSONEncoder().encode(saved).write(to: metadata, options: .atomic)
+    }
+
     func fetch(_ track: Track, session: Session) async throws -> Bool {
         var request = URLRequest(url: session.server.appendingPathComponent("api/v1/tracks/\(track.id)/stream"))
         request.timeoutInterval = 120
@@ -125,18 +136,34 @@ final class PlaybackCache: ObservableObject {
     @Published private(set) var clearing = false
     @Published private(set) var message: String?
     private let root: URL
+    private(set) var identity: Session?
     private(set) var store: OfflineStore?
     private var pending: [String: Task<Void, Never>] = [:]
     private var tail: Task<Void, Never>?
     private var generation = 0
+    private var favorites: [String: Bool] = [:]
 
-    init(root: URL) { self.root = root }
+    init(root: URL) {
+        self.root = root
+        if let data = try? Data(contentsOf: root.appendingPathExtension("identity.json")),
+           let saved = try? JSONDecoder().decode(Session.self, from: data) {
+            activate(saved)
+        }
+    }
 
     func activate(_ session: Session) {
         let scope = SHA256.hash(data: Data((session.server.absoluteString + "\0" + session.username).utf8))
             .map { String(format: "%02x", $0) }.joined()
         let scoped = root.appendingPathComponent(scope, isDirectory: true)
         guard store?.root != scoped else { return }
+        let identity = Session(server: session.server, username: session.username, token: "")
+        do {
+            try FileManager.default.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(identity).write(to: root.appendingPathExtension("identity.json"), options: .atomic)
+        } catch {
+            message = "无法保存本机缓存账户：\(error.localizedDescription)"
+        }
+        self.identity = identity
         store = OfflineStore(root: scoped)
     }
 
@@ -156,6 +183,9 @@ final class PlaybackCache: ObservableObject {
                 if let previous { await previous.value }
                 try Task.checkCancellation()
                 _ = try await store.fetch(track, session: session)
+                if let favorite = favorites[key] {
+                    try store.updateFavorite(track.id, favorite: favorite)
+                }
                 guard !Task.isCancelled, generation == self.generation else { return }
                 await refreshSize()
             } catch {
@@ -166,6 +196,12 @@ final class PlaybackCache: ObservableObject {
         }
         pending[key] = task
         tail = task
+    }
+
+    func updateFavorite(_ track: Track) throws {
+        guard let store else { return }
+        favorites[store.root.path + "/" + track.id] = track.favorite
+        try store.updateFavorite(track.id, favorite: track.favorite)
     }
 
     func refreshSize() async {

@@ -2,9 +2,12 @@ package resona
 
 import (
 	"errors"
+	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -13,6 +16,7 @@ type Config struct {
 	Username                            string
 	CookieSecure, Scrape                bool
 	ScanInterval                        time.Duration
+	TrustedProxies                      []netip.Prefix
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -31,6 +35,9 @@ func ConfigFromEnv() (Config, error) {
 	c.ScanInterval, err = time.ParseDuration(env("SCAN_INTERVAL", "15m"))
 	if err != nil || c.ScanInterval < 0 || (c.ScanInterval > 0 && c.ScanInterval < time.Minute) {
 		return c, errors.New("SCAN_INTERVAL must be 0 or a duration of at least 1m")
+	}
+	if c.TrustedProxies, err = parseTrustedProxies(os.Getenv("TRUSTED_PROXIES")); err != nil {
+		return c, err
 	}
 	if len(c.Username) == 0 || len(c.Username) > 128 {
 		return c, errors.New("ADMIN_USER must contain 1 to 128 bytes")
@@ -60,6 +67,30 @@ func ConfigFromEnv() (Config, error) {
 		return c, err
 	}
 	return c, nil
+}
+
+func parseTrustedProxies(value string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	var proxies []netip.Prefix
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return nil, errors.New("TRUSTED_PROXIES contains an empty entry")
+		}
+		if address, err := netip.ParseAddr(item); err == nil {
+			address = address.Unmap()
+			proxies = append(proxies, netip.PrefixFrom(address, address.BitLen()))
+			continue
+		}
+		prefix, err := netip.ParsePrefix(item)
+		if err != nil {
+			return nil, fmt.Errorf("TRUSTED_PROXIES contains an invalid IP or CIDR: %q", item)
+		}
+		proxies = append(proxies, prefix.Masked())
+	}
+	return proxies, nil
 }
 
 func within(root, path string) bool {

@@ -394,6 +394,12 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 	sources := s.store.SourceSettings()
 	seen := map[string]bool{}
 	lyricsAttempted := map[string]bool{}
+	dirtyFrom := len(j.Items)
+	markItems := func(index int) {
+		if index < dirtyFrom {
+			dirtyFrom = index
+		}
+	}
 	report := func(err error) {
 		if len(j.Errors) < 100 {
 			j.Errors = append(j.Errors, err.Error())
@@ -401,9 +407,11 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 		s.logger.Warn("scan", "job", j.ID, "error", err)
 	}
 	persist := func() {
-		if err := s.store.putJob(j); err != nil {
+		if err := s.store.putJobProgress(j, dirtyFrom); err != nil {
 			s.logger.Error("save scan progress", "error", err)
+			return
 		}
+		dirtyFrom = len(j.Items)
 	}
 	defer func() {
 		j.EndedAt = time.Now().UTC()
@@ -459,11 +467,13 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 			detail := JobItem{Filename: entry.Name(), State: "processing", Source: "local"}
 			index := len(j.Items)
 			j.Items = append(j.Items, detail)
+			markItems(index)
 			defer func() {
 				if ctx.Err() != nil && detail.State == "processing" {
 					detail.State, detail.Message = "interrupted", "扫描已中断"
 				}
 				j.Items[index] = detail
+				markItems(index)
 				persist()
 			}()
 			reportItem := func(err error) {
@@ -500,6 +510,7 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 							j.Items[k].TrackID = updated.ID
 						}
 					}
+					markItems(0)
 				}
 				return updated
 			}
@@ -551,6 +562,7 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 				j.Phase = "刮削 · " + t.Title
 				describe(t)
 				j.Items[index] = detail
+				markItems(index)
 				persist()
 				if err := s.enrich(ctx, &t, sources.Metadata); err != nil {
 					reportItem(fmt.Errorf("%s: 刮削未成功，保留本地标签 (%w)", entry.Name(), err))

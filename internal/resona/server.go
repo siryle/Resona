@@ -24,6 +24,7 @@ import (
 type Server struct {
 	config              Config
 	store               *Store
+	libraryRoot         *os.Root
 	auth                *Auth
 	scanner             *Scanner
 	ctx                 context.Context
@@ -40,10 +41,16 @@ func NewServer(ctx context.Context, c Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	libraryRoot, err := os.OpenRoot(c.LibraryDir)
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
 	ready := false
 	defer func() {
 		if !ready {
 			store.Close()
+			libraryRoot.Close()
 		}
 	}()
 	auth, err := NewAuth(c)
@@ -57,7 +64,7 @@ func NewServer(ctx context.Context, c Config) (*Server, error) {
 	}
 	book.registerSecrets(store.pluginSettings())
 	logger := slog.New(&logHandler{book: book, console: slog.Default().Handler()})
-	s := &Server{config: c, store: store, auth: auth, scanner: NewScanner(c, store), ctx: ctx, logger: logger, logbook: book,
+	s := &Server{config: c, store: store, libraryRoot: libraryRoot, auth: auth, scanner: NewScanner(c, store), ctx: ctx, logger: logger, logbook: book,
 		scanScheduleChanged: make(chan struct{}, 1), artistArtworkGate: make(chan struct{}, 1)}
 	s.scanner.logger = logger.With("category", "scan")
 	if err := s.recoverFileOperation(); err != nil {
@@ -73,7 +80,7 @@ func NewServer(ctx context.Context, c Config) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) Close() error { return s.store.Close() }
+func (s *Server) Close() error { return errors.Join(s.store.Close(), s.libraryRoot.Close()) }
 
 func (s *Server) Schedule() {
 	s.plugins.Start()
@@ -489,12 +496,18 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path, err := filepath.EvalSymlinks(disk.File)
-	if err != nil || !within(s.config.LibraryDir, path) {
+	if err != nil {
 		s.store.mu.RUnlock()
 		apiError(w, 404, "audio file unavailable")
 		return
 	}
-	f, err := os.Open(path)
+	rel, err := filepath.Rel(s.config.LibraryDir, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		s.store.mu.RUnlock()
+		apiError(w, 404, "audio file unavailable")
+		return
+	}
+	f, err := s.libraryRoot.Open(rel)
 	s.store.mu.RUnlock()
 	if err != nil {
 		apiError(w, 404, "audio file unavailable")

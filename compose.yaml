@@ -9,6 +9,7 @@ services:
     environment:
       ADMIN_USER: ${ADMIN_USER:-admin}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       SCRAPE_ENABLED: ${SCRAPE_ENABLED:-true}
       SCAN_INTERVAL: ${SCAN_INTERVAL:-15m}
       TZ: ${TZ:-Asia/Shanghai}

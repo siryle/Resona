@@ -60,11 +60,14 @@ Compose 默认使用公开的 `ghcr.io/siryle/resona:latest`，自动选择 Linu
 | `MUSIC_INBOX` | `./music/inbox` | 宿主机导入目录 |
 | `MUSIC_LIBRARY` | `./music/library` | 宿主机音乐库目录 |
 | `COOKIE_SECURE` | `false` | HTTPS 反向代理部署时设为 `true` |
+| `TRUSTED_PROXIES` | 空 | 允许提供 `X-Forwarded-For` 的反向代理 IP/CIDR，逗号分隔；留空则按直连地址限流 |
 | `SCRAPE_ENABLED` | `true` | 是否启用在线元数据和在线封面 |
 | `SCAN_INTERVAL` | `15m` | 兼容旧配置：`0` 表示仅手动，正值迁移为每天 `03:00`；网页保存的执行计划优先 |
 | `TZ` | `Asia/Shanghai` | 容器时区 |
 
 直接运行二进制时还可设置 `LISTEN_ADDR`、`DATA_PATH`、`INBOX_PATH`、`LIBRARY_PATH`。服务端会检查 FFmpeg / FFprobe 是否可用。
+
+反向代理部署时，将代理与 Resona 直连的来源地址加入 `TRUSTED_PROXIES`，例如 `127.0.0.1,::1`；Docker 部署应按实际代理来源填写 IP 或 CIDR。代理须覆盖或追加真实来源到 `X-Forwarded-For`。Resona 从右向左跳过已信任代理，按第一个未信任地址独立计算登录限流；未配置或直连来源未被信任时忽略该请求头。
 
 服务生成到音乐库的目录、音频和 LRC，以及插件收件目录中的目录和文件均显式设置为 `0777`，不受进程 umask 收紧。文件管理复制或移动到这两个目录时也应用该权限。导入来源仅在成功入库并校验后删除。
 
