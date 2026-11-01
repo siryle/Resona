@@ -9,8 +9,11 @@ private final class DesktopTestWindow: NSWindow {
 
 @main
 struct DesktopTests {
-    @MainActor static func settle() {
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15))
+    @MainActor static func settle(until condition: () -> Bool = { true }) {
+        let deadline = Date(timeIntervalSinceNow: 3)
+        repeat {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15))
+        } while !condition() && Date() < deadline
     }
 
     static func placementTests() {
@@ -196,7 +199,7 @@ struct DesktopTests {
         settle()
         let popup = NSApp.windows.first { $0.isVisible && !existingWindows.contains($0.windowNumber) }!
         desktop.menuIconEnabled = false
-        settle()
+        settle(until: { !popup.isVisible })
         assert(!desktop.statusItem.isVisible && desktop.statusItem.length == 0,
                "Disabling all menu bar content must remove the entire status item")
         assert(!popup.isVisible, "Hiding the entire status item must dismiss its popover")
@@ -644,7 +647,7 @@ struct DesktopTests {
             assert(popup.isVisible, "The icon must reopen the same popover after being restored")
             try capture(popup, "popover")
             status.performClick(nil)
-            settle()
+            settle(until: { !popup.isVisible })
             assert(!popup.isVisible, "The native menu bar item must support keyboard activation")
             main.setContentSize(NSSize(width: 920, height: 620))
             player.expanded = false
