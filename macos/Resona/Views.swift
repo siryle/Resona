@@ -575,7 +575,8 @@ struct ServerSettings: View {
                     Divider()
                     Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
                     Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
-                    explanation("歌词在左、播控在右，默认整组放在无线等系统图标左侧，可独立开关。歌词区域固定，短句居中，长句随播放进度向左滚动。按住 ⌘ 可整体拖动，系统会记住位置。关闭播控后仍保留 Resona 图标，可打开播放面板。")
+                    Toggle("菜单栏图标", isOn: $desktop.menuIconEnabled)
+                    explanation("歌词在左、播控在右，默认整组放在无线等系统图标左侧。歌词、播控与 Resona 图标可独立开关。歌词区域固定，短句居中，长句随播放进度向左滚动。按住 ⌘ 可整体拖动，系统会记住位置。点击歌词或图标可打开播放面板；全部关闭后，可从此处或「播放」菜单重新开启。")
                 }.toggleStyle(.switch)
                 settingsSection("离线音乐") {
                     HStack {

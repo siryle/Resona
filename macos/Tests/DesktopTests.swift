@@ -180,7 +180,7 @@ struct DesktopTests {
         assert(buttons[0...2].allSatisfy { !$0.isEnabled }, "Empty player controls must be disabled")
         assert(!buttons[3].isEnabled, "Favorite must be disabled without a song and server connection")
         assert(desktop.lyricLines == ["Resona · 此刻想听什么？"])
-        assert(!desktop.desktopLyricsEnabled && desktop.menuLyricsEnabled && desktop.menuControlsEnabled)
+        assert(!desktop.desktopLyricsEnabled && desktop.menuLyricsEnabled && desktop.menuControlsEnabled && desktop.menuIconEnabled)
         assert(desktop.statusItem.autosaveName == "ResonaMenuBar")
         assert(lyrics.window === status.window && buttons.allSatisfy { $0.window === status.window },
                "Lyrics and every playback control must occupy the same native status item")
@@ -191,6 +191,43 @@ struct DesktopTests {
         assert(!lyrics.isHidden && desktop.statusItem.isVisible, "Lyrics can remain visible with playback controls off")
         desktop.menuLyricsEnabled = false
         assert(lyrics.isHidden && desktop.statusItem.length == 24, "The app logo remains when both switches are off")
+        let existingWindows = Set(NSApp.windows.map(\.windowNumber))
+        buttons[4].performClick(nil)
+        settle()
+        let popup = NSApp.windows.first { $0.isVisible && !existingWindows.contains($0.windowNumber) }!
+        desktop.menuIconEnabled = false
+        settle()
+        assert(!desktop.statusItem.isVisible && desktop.statusItem.length == 0,
+               "Disabling all menu bar content must remove the entire status item")
+        assert(!popup.isVisible, "Hiding the entire status item must dismiss its popover")
+        let saved = DesktopIntegration(player: player, library: library, defaults: defaults)
+        assert(!saved.menuIconEnabled && !saved.statusItem.isVisible,
+               "The hidden icon and status item must stay hidden after reopening")
+        saved.menuIconEnabled = true
+        assert(saved.statusItem.isVisible && saved.statusItem.length == 24,
+               "The icon must be recoverable when all menu bar content was hidden")
+        NSStatusBar.system.removeStatusItem(saved.statusItem)
+        for showLyrics in [false, true] {
+            for showControls in [false, true] {
+                for showIcon in [false, true] {
+                    desktop.menuLyricsEnabled = showLyrics
+                    desktop.menuControlsEnabled = showControls
+                    desktop.menuIconEnabled = showIcon
+                    settle()
+                    assert(lyrics.isHidden == !showLyrics && buttons[4].isHidden == !showIcon)
+                    assert(buttons[0...3].allSatisfy { $0.isHidden == !showControls })
+                    assert(desktop.statusItem.isVisible == (showLyrics || showControls || showIcon))
+                    if desktop.statusItem.isVisible {
+                        assert(abs(stack.fittingSize.width - desktop.statusItem.length) <= 1,
+                               "Every combination must allocate only the visible menu bar content")
+                    }
+                    if !showLyrics {
+                        assert(desktop.statusItem.length == CGFloat((showControls ? 96 : 0) + (showIcon ? 24 : 0)))
+                    }
+                    assert(defaults.bool(forKey: "menuIconEnabled") == showIcon)
+                }
+            }
+        }
         desktop.menuLyricsEnabled = true
         desktop.menuControlsEnabled = true
         assert(defaults.object(forKey: "menuControlsEnabled") as? Bool == true)
@@ -602,10 +639,9 @@ struct DesktopTests {
             }
             try capture(main, "desktop")
             try capture(panel, "lyrics")
-            let existing = Set(NSApp.windows.map(\.windowNumber))
             buttons[4].performClick(nil)
             settle()
-            let popup = NSApp.windows.first { $0.isVisible && !existing.contains($0.windowNumber) }!
+            assert(popup.isVisible, "The icon must reopen the same popover after being restored")
             try capture(popup, "popover")
             status.performClick(nil)
             settle()

@@ -71,6 +71,7 @@ struct ResonaDesktopApp: App {
                     .disabled(!desktop.desktopLyricsEnabled)
                 Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
                 Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
+                Toggle("菜单栏图标", isOn: $desktop.menuIconEnabled)
             }
         }
     }

@@ -110,6 +110,12 @@ final class DesktopIntegration: NSObject, ObservableObject {
             updateStatus()
         }
     }
+    @Published var menuIconEnabled: Bool {
+        didSet {
+            defaults.set(menuIconEnabled, forKey: "menuIconEnabled")
+            updateStatus()
+        }
+    }
     @Published var lyricsLocked: Bool {
         didSet {
             defaults.set(lyricsLocked, forKey: "desktopLyricsLocked")
@@ -138,6 +144,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
     private let playButton = MenuBarIconButton()
     private let nextButton = MenuBarIconButton()
     private let favoriteButton = MenuBarIconButton()
+    private let menuButton = MenuBarIconButton()
     private var lyricWidth: NSLayoutConstraint?
     private var reservedMenuBarLength: CGFloat?
 
@@ -165,6 +172,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
         desktopLyricsEnabled = defaults.bool(forKey: "desktopLyricsEnabled")
         menuLyricsEnabled = defaults.object(forKey: "menuLyricsEnabled") as? Bool ?? true
         menuControlsEnabled = defaults.object(forKey: "menuControlsEnabled") as? Bool ?? true
+        menuIconEnabled = defaults.object(forKey: "menuIconEnabled") as? Bool ?? true
         lyricsLocked = defaults.bool(forKey: "desktopLyricsLocked")
         let size = defaults.object(forKey: "desktopLyricsFontSize") as? Double ?? 28
         fontSize = size.isFinite ? min(48, max(18, size)) : 28
@@ -181,7 +189,6 @@ final class DesktopIntegration: NSObject, ObservableObject {
             self.updateStatus()
         }.store(in: &subscriptions)
         updateStatus()
-        statusItem.isVisible = true
         updatePanel()
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in
@@ -197,8 +204,9 @@ final class DesktopIntegration: NSObject, ObservableObject {
         button.action = #selector(togglePopover(_:))
         button.toolTip = "Resona · 歌词与播放设置"
         button.setAccessibilityLabel("Resona 菜单栏播控")
-        let menuButton = MenuBarIconButton(image: MenuBarLogo.image(),
-                                          target: self, action: #selector(togglePopover(_:)))
+        menuButton.image = MenuBarLogo.image()
+        menuButton.target = self
+        menuButton.action = #selector(togglePopover(_:))
         menuButton.toolTip = "Resona · 歌词与播放设置"
         menuButton.setAccessibilityLabel("歌词与播放设置")
         for (control, symbol, title, action) in [
@@ -269,18 +277,21 @@ final class DesktopIntegration: NSObject, ObservableObject {
         let line = currentLyric
         lyricButton.toolTip = lyricLines.joined(separator: "\n")
         lyricButton.setAccessibilityLabel("菜单栏歌词：\(line)")
-        let controls: CGFloat = menuControlsEnabled ? 120 : 24
+        let controls: CGFloat = (menuControlsEnabled ? 96 : 0) + (menuIconEnabled ? 24 : 0)
         let width = reservedMenuBarLength.map { max(40, $0 - controls) } ?? MenuBarLyricButton.maximumWidth
         lyricWidth?.constant = width
         lyricButton.isHidden = !menuLyricsEnabled
         [previousButton, playButton, nextButton, favoriteButton].forEach { $0.isHidden = !menuControlsEnabled }
+        menuButton.isHidden = !menuIconEnabled
         let active = Lyrics.playbackLines(player.lyrics, at: player.position).first
         let end = active.flatMap { current in player.lyrics.first { $0.time > current.time }?.time } ??
             max(player.duration, player.current?.duration ?? 0)
         lyricButton.update(text: line, elapsed: active.map { player.position - $0.time },
                            duration: active.map { end - $0.time }, playing: player.playing)
         let length = controls + (menuLyricsEnabled ? width : 0)
+        if length == 0 { popover.performClose(nil) }
         if abs(statusItem.length - length) > 0.5 { statusItem.length = length }
+        statusItem.isVisible = length > 0
     }
 
     func makeDockMenu() -> NSMenu {
@@ -429,6 +440,7 @@ private struct MenuPlaybackView: View {
             Toggle("锁定桌面歌词（鼠标穿透）", isOn: $desktop.lyricsLocked).disabled(!desktop.desktopLyricsEnabled)
             Toggle("菜单栏歌词", isOn: $desktop.menuLyricsEnabled)
             Toggle("菜单栏播控", isOn: $desktop.menuControlsEnabled)
+            Toggle("菜单栏图标", isOn: $desktop.menuIconEnabled)
             HStack {
                 Text("歌词字号").font(.caption)
                 Slider(value: $desktop.fontSize, in: 18...48, step: 1).accessibilityLabel("桌面歌词字号")
