@@ -71,6 +71,15 @@ def main():
         actual = windows_product_version(exe)
         if actual != f'{v["version"]}+{v["build"]}':
             raise SystemExit(f'Windows version mismatch: {actual}')
+        build = CLIENT / 'build/windows/x64'
+        cmake = next(line.split('=', 1)[1] for line in
+                     (build / 'CMakeCache.txt').read_text().splitlines()
+                     if line.startswith('CMAKE_COMMAND:INTERNAL='))
+        subprocess.run([cmake, '--build', str(build),
+                        '--config', 'Release', '--target', 'resona_desktop_tests'], check=True)
+        subprocess.run([str(build / 'tests/Release/resona_desktop_tests.exe')],
+                       env={**os.environ, 'PATH': str(bundle) + os.pathsep + os.environ.get('PATH', '')},
+                       check=True)
         with exe.open('rb') as binary:
             binary.seek(0x3C)
             offset = int.from_bytes(binary.read(4), 'little')

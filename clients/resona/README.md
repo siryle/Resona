@@ -31,6 +31,25 @@ The existing Swift clients remain the iOS / macOS implementation.
 - Windows opens playback details within the main workspace: a record and album
   information beside synchronized, clickable lyrics, with the sidebar and
   playback footer still available. Narrow windows stack artwork above lyrics.
+- Windows queues open in a bounded right-hand column with artwork, the current
+  song indicator and independent scrolling. Opening the queue centers the current
+  song; changing songs keeps the queue open without replacing it. Escape, the
+  close button or the footer queue button dismisses it. At narrow widths the
+  queue occupies the workspace above the still-available playback footer.
+- A native Windows tray icon uses the same monochrome record/R/wave outline as
+  macOS, adapts to the taskbar theme and returns after Explorer restarts. Clicking
+  it restores the main window. Its right-click menu offers playback, favorites,
+  playback modes, desktop lyrics, font size, opening the window and quitting.
+  The title-bar close button minimizes without stopping audio; taskbar Close
+  window, Alt+F4 and the tray Quit command save playback state and exit.
+- Windows desktop lyrics use a non-activating, transparent floating window.
+  They show the current synchronized line, or the track title when no timed line
+  is active. Hover reveals playback, lock and close controls; drag empty space
+  to move the window. Locking enables mouse pass-through; unlock from the tray
+  menu or Settings. Visibility, locking, font size (18-48, default 28) and position
+  persist per Windows user. Monitor changes clamp lyrics to a visible work area.
+  Settings and the tray share the same lyric preferences. Closing lyrics does
+  not stop playback or quit the application.
 - Launch directly into music, with server connection in Settings. Tokenless
   account identity restores local audio after logout; expired credentials or an
   unreachable server never block access to cached music.
@@ -92,6 +111,10 @@ installed files, tests repair and downgrade rejection, and uninstalls the app.
 and build to Flutter, verifies the APK manifest / EXE version and writes versioned
 packages and SHA-256 files under `dist/`. `pubspec.yaml` contains only a development
 placeholder; do not increment it for releases. Use the build script for delivery.
+Windows packaging also builds and runs `resona_desktop_tests` before creating
+the installer. These native checks isolate their registry preferences and cover
+window lifecycle, mouse pass-through, font limits, persistence and monitor bounds;
+the test executable is outside the packaged application directory.
 
 Without signing credentials, Android builds use a development certificate and
 are named `-preview.apk`. They can be sideloaded but different build machines
@@ -134,3 +157,6 @@ Before a production rollout, also test Android phone and tablet rotation,
 background playback, headset unplugging, process restart / login persistence,
 cache cleanup and Windows resizing / actual device audio. Emulator and widget
 tests do not substitute for hardware audio and power-management tests.
+On Windows also verify the caption close button versus taskbar Close window,
+tray activation and menu commands, Explorer restarts, desktop-lyrics hover/drag,
+locked click-through to other apps, multiple monitors and 100/150/200 percent DPI.

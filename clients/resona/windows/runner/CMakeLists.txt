@@ -8,6 +8,7 @@ project(runner LANGUAGES CXX)
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
+  "desktop_integration.cpp"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
@@ -34,7 +35,21 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "gdiplus.lib" "shell32.lib" "advapi32.lib")
+target_compile_options(${BINARY_NAME} PRIVATE /utf-8)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+add_executable(resona_desktop_tests EXCLUDE_FROM_ALL
+  "desktop_integration_test.cpp"
+  "desktop_integration.cpp"
+)
+apply_standard_settings(resona_desktop_tests)
+set_target_properties(resona_desktop_tests PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+target_compile_definitions(resona_desktop_tests PRIVATE "NOMINMAX")
+target_compile_options(resona_desktop_tests PRIVATE /utf-8)
+target_link_libraries(resona_desktop_tests PRIVATE flutter flutter_wrapper_app
+  "gdiplus.lib" "shell32.lib" "advapi32.lib")

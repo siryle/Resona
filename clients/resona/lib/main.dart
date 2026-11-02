@@ -10,13 +10,19 @@ import 'api.dart';
 import 'controller.dart';
 import 'android_audio.dart';
 import 'track_selection.dart';
+import 'lyrics.dart';
+import 'windows_desktop.dart';
+
+export 'lyrics.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   final controller = MusicController();
-  runApp(ResonaApp(controller: controller));
+  final desktop = Platform.isWindows ? WindowsDesktop(controller) : null;
+  runApp(ResonaApp(controller: controller, desktopIntegration: desktop));
   unawaited(() async {
+    if (desktop != null) await desktop.initialize();
     if (Platform.isAndroid) {
       try {
         await initializeAndroidAudio(controller);
@@ -49,7 +55,12 @@ String clock(Duration value) =>
 
 class ResonaApp extends StatelessWidget {
   final MusicController controller;
-  const ResonaApp({super.key, required this.controller});
+  final WindowsDesktop? desktopIntegration;
+  const ResonaApp({
+    super.key,
+    required this.controller,
+    this.desktopIntegration,
+  });
   ThemeData theme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
     final windows = defaultTargetPlatform == TargetPlatform.windows;
@@ -174,8 +185,11 @@ class ResonaApp extends StatelessWidget {
     theme: theme(Brightness.light),
     darkTheme: theme(Brightness.dark),
     home: AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) => MusicPage(controller: controller),
+      animation: Listenable.merge([controller, desktopIntegration]),
+      builder: (context, _) => MusicPage(
+        controller: controller,
+        desktopIntegration: desktopIntegration,
+      ),
     ),
   );
 }
@@ -450,7 +464,12 @@ Widget brand(BuildContext context) => Text(
 
 class MusicPage extends StatefulWidget {
   final MusicController controller;
-  const MusicPage({super.key, required this.controller});
+  final WindowsDesktop? desktopIntegration;
+  const MusicPage({
+    super.key,
+    required this.controller,
+    this.desktopIntegration,
+  });
   @override
   State<MusicPage> createState() => _MusicPageState();
 }
@@ -465,7 +484,7 @@ class _MusicPageState extends State<MusicPage> {
   int selectionEpoch = 0;
   late Object collectionContext;
   int tab = 0;
-  bool listening = false;
+  bool listening = false, queueVisible = false;
   MusicController get c => widget.controller;
   bool get desktop => Theme.of(context).platform == TargetPlatform.windows;
   Object get collectionKey =>
@@ -576,6 +595,7 @@ class _MusicPageState extends State<MusicPage> {
       resetSelection();
       tab = index;
       listening = false;
+      queueVisible = false;
     });
     c.navigate(
       desktop
@@ -589,6 +609,7 @@ class _MusicPageState extends State<MusicPage> {
       resetSelection();
       tab = desktop ? -1 : 4;
       listening = false;
+      queueVisible = false;
     });
     c.navigate('设置');
   }
@@ -601,6 +622,7 @@ class _MusicPageState extends State<MusicPage> {
     setState(() {
       resetSelection();
       listening = expand;
+      if (expand) queueVisible = false;
     });
   }
 
@@ -641,6 +663,7 @@ class _MusicPageState extends State<MusicPage> {
           ),
           DismissIntent: CallbackAction<DismissIntent>(
             onInvoke: (_) {
+              if (queueVisible) setState(() => queueVisible = false);
               if (selecting) {
                 cancelSelection();
               } else if (listeningNow) {
@@ -683,6 +706,9 @@ class _MusicPageState extends State<MusicPage> {
                           controller: c,
                           expanded: listeningNow,
                           onExpand: toggleListening,
+                          queueVisible: queueVisible,
+                          onQueue: () =>
+                              setState(() => queueVisible = !queueVisible),
                         ),
                       ),
                       if (selecting) Positioned.fill(child: selectionActions()),
@@ -697,70 +723,102 @@ class _MusicPageState extends State<MusicPage> {
                       child: MiniPlayer(controller: c),
                     ),
                   ),
-            child: Column(
-              children: [
-                Padding(
-                  padding: EdgeInsets.fromLTRB(desktop ? 28 : 20, 16, 12, 8),
-                  child: Row(
-                    children: [
-                      if (listeningNow)
-                        IconButton(
-                          tooltip: '收起播放页',
-                          onPressed: toggleListening,
-                          icon: const Icon(Icons.expand_more),
-                        )
-                      else if (c.album.isNotEmpty || c.artist.isNotEmpty)
-                        IconButton(
-                          tooltip: '返回列表',
-                          onPressed: () => c.navigate(c.section),
-                          icon: const Icon(Icons.arrow_back),
-                        ),
-                      Expanded(
-                        child: Text(
-                          listeningNow ? '正在播放' : title,
-                          style: Theme.of(context).textTheme.titleLarge,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+            child: LayoutBuilder(
+              builder: (context, bounds) => Row(
+                children: [
+                  if (!desktop || !queueVisible || bounds.maxWidth >= 850)
+                    Expanded(
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              desktop ? 28 : 20,
+                              16,
+                              12,
+                              8,
+                            ),
+                            child: Row(
+                              children: [
+                                if (listeningNow)
+                                  IconButton(
+                                    tooltip: '收起播放页',
+                                    onPressed: toggleListening,
+                                    icon: const Icon(Icons.expand_more),
+                                  )
+                                else if (c.album.isNotEmpty ||
+                                    c.artist.isNotEmpty)
+                                  IconButton(
+                                    tooltip: '返回列表',
+                                    onPressed: () => c.navigate(c.section),
+                                    icon: const Icon(Icons.arrow_back),
+                                  ),
+                                Expanded(
+                                  child: Text(
+                                    listeningNow ? '正在播放' : title,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleLarge,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (desktop && songCollection)
+                                  SizedBox(width: 140, child: scope())
+                                else if (desktop && c.section != '设置')
+                                  SizedBox(width: 255, child: searchField()),
+                                if (c.section != '设置')
+                                  IconButton(
+                                    tooltip: '刷新音乐库',
+                                    onPressed: c.loading
+                                        ? null
+                                        : () => c.load(),
+                                    icon: const Icon(Icons.refresh),
+                                  ),
+                                if (desktop)
+                                  IconButton(
+                                    tooltip: '设置与服务器登录',
+                                    onPressed: settingsPage,
+                                    icon: const Icon(Icons.settings_outlined),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (c.error != null)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                              ),
+                              child: ErrorNotice(
+                                text: c.error!,
+                                dismiss: () {
+                                  c.error = null;
+                                  c.notifyListeners();
+                                },
+                              ),
+                            ),
+                          if (c.loading)
+                            const LinearProgressIndicator(minHeight: 2),
+                          Expanded(
+                            child: listeningNow
+                                ? DesktopListening(controller: c)
+                                : c.section == '设置'
+                                ? settings(context)
+                                : library(context),
+                          ),
+                        ],
                       ),
-                      if (desktop && songCollection)
-                        SizedBox(width: 140, child: scope())
-                      else if (desktop && c.section != '设置')
-                        SizedBox(width: 255, child: searchField()),
-                      if (c.section != '设置')
-                        IconButton(
-                          tooltip: '刷新音乐库',
-                          onPressed: c.loading ? null : () => c.load(),
-                          icon: const Icon(Icons.refresh),
-                        ),
-                      if (desktop)
-                        IconButton(
-                          tooltip: '设置与服务器登录',
-                          onPressed: settingsPage,
-                          icon: const Icon(Icons.settings_outlined),
-                        ),
-                    ],
-                  ),
-                ),
-                if (c.error != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: ErrorNotice(
-                      text: c.error!,
-                      dismiss: () {
-                        c.error = null;
-                        c.notifyListeners();
-                      },
                     ),
-                  ),
-                if (c.loading) const LinearProgressIndicator(minHeight: 2),
-                Expanded(
-                  child: listeningNow
-                      ? DesktopListening(controller: c)
-                      : c.section == '设置'
-                      ? settings(context)
-                      : library(context),
-                ),
-              ],
+                  if (desktop && queueVisible) ...[
+                    const VerticalDivider(width: 1),
+                    SizedBox(
+                      width: bounds.maxWidth < 850 ? bounds.maxWidth - 1 : 290,
+                      child: DesktopQueue(
+                        controller: c,
+                        onClose: () => setState(() => queueVisible = false),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
         ),
@@ -959,7 +1017,10 @@ class _MusicPageState extends State<MusicPage> {
                   Icons.checklist,
                   enabled && tracks.isNotEmpty
                       ? () {
-                          setState(() => selecting = true);
+                          setState(() {
+                            selecting = true;
+                            queueVisible = false;
+                          });
                         }
                       : null,
                 ),
@@ -1171,6 +1232,47 @@ class _MusicPageState extends State<MusicPage> {
                     },
             ),
         ]),
+        if (desktop && widget.desktopIntegration != null)
+          settingsGroup('歌词与托盘', [
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('桌面歌词'),
+              subtitle: const Text('在桌面上单行显示当前歌词，可拖动位置。'),
+              value: widget.desktopIntegration!.lyricsEnabled,
+              onChanged: (value) =>
+                  widget.desktopIntegration!.setPreferences(enabled: value),
+            ),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('锁定桌面歌词（鼠标穿透）'),
+              value: widget.desktopIntegration!.lyricsLocked,
+              onChanged: widget.desktopIntegration!.lyricsEnabled
+                  ? (value) =>
+                        widget.desktopIntegration!.setPreferences(locked: value)
+                  : null,
+            ),
+            Row(
+              children: [
+                const Text('歌词字号'),
+                Expanded(
+                  child: Slider(
+                    value: widget.desktopIntegration!.fontSize,
+                    min: 18,
+                    max: 48,
+                    divisions: 30,
+                    semanticFormatterCallback: (value) => '${value.round()}',
+                    onChanged: widget.desktopIntegration!.lyricsEnabled
+                        ? (value) => widget.desktopIntegration!.setPreferences(
+                            size: value,
+                          )
+                        : null,
+                  ),
+                ),
+                Text('${widget.desktopIntegration!.fontSize.round()}'),
+              ],
+            ),
+            const Text('关闭主窗口会最小化并继续播放。通过任务栏右键关闭窗口，或从托盘菜单退出 Resona。'),
+          ]),
         settingsGroup('离线音乐', [
           Text('本机下载 · ${c.cache?.downloads.length ?? 0} 首'),
           const Text('通过歌曲右侧菜单下载音频、封面和歌词。退出登录后仍可从「已下载」播放和删除。'),
@@ -1942,11 +2044,15 @@ class DesktopPlayer extends StatefulWidget {
   final MusicController controller;
   final bool expanded;
   final VoidCallback onExpand;
+  final VoidCallback? onQueue;
+  final bool queueVisible;
   const DesktopPlayer({
     super.key,
     required this.controller,
     required this.onExpand,
     this.expanded = false,
+    this.onQueue,
+    this.queueVisible = false,
   });
   @override
   State<DesktopPlayer> createState() => _DesktopPlayerState();
@@ -2110,7 +2216,12 @@ class _DesktopPlayerState extends State<DesktopPlayer> {
           color: c.shuffle || c.repeat || c.repeatOne ? scheme.primary : null,
         ),
         const SizedBox(width: 8),
-        control('播放列表', Icons.queue_music, () => showQueue(context, c)),
+        control(
+          '播放列表',
+          Icons.queue_music,
+          widget.onQueue ?? () => showQueue(context, c),
+          color: widget.queueVisible ? scheme.primary : null,
+        ),
       ],
     );
     final info = track == null
@@ -2261,6 +2372,160 @@ class _DesktopPlayerState extends State<DesktopPlayer> {
               );
             },
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class DesktopQueue extends StatefulWidget {
+  final MusicController controller;
+  final VoidCallback onClose;
+  const DesktopQueue({
+    super.key,
+    required this.controller,
+    required this.onClose,
+  });
+
+  @override
+  State<DesktopQueue> createState() => _DesktopQueueState();
+}
+
+class _DesktopQueueState extends State<DesktopQueue> {
+  final scroll = ScrollController();
+  bool positioned = false;
+
+  @override
+  void dispose() {
+    scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller, scheme = Theme.of(context).colorScheme;
+    final rowHeight = (MediaQuery.textScalerOf(context).scale(29) * 1.6 + 24)
+        .clamp(64.0, double.infinity);
+    if (!positioned && c.queue.any((track) => track.id == c.current?.id)) {
+      positioned = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !scroll.hasClients) return;
+        final index = c.queue.indexWhere((track) => track.id == c.current?.id);
+        if (index >= 0) {
+          scroll.jumpTo(
+            (index * rowHeight -
+                    (scroll.position.viewportDimension - rowHeight) / 2)
+                .clamp(0, scroll.position.maxScrollExtent),
+          );
+        }
+      });
+    }
+    return ColoredBox(
+      color: scheme.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '播放列表',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                IconButton(
+                  tooltip: '关闭播放列表',
+                  onPressed: widget.onClose,
+                  icon: const Icon(Icons.close, size: 20),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 6, bottom: 12),
+              child: Text(
+                '${c.queue.length} 首 · 点击切换播放',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            Expanded(
+              child: c.queue.isEmpty
+                  ? const Center(child: Text('播放列表为空'))
+                  : Scrollbar(
+                      controller: scroll,
+                      child: ListView.builder(
+                        controller: scroll,
+                        itemExtent: rowHeight,
+                        itemCount: c.queue.length,
+                        itemBuilder: (context, index) {
+                          final track = c.queue[index];
+                          final active = track.id == c.current?.id;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Material(
+                              color: active
+                                  ? scheme.secondaryContainer
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(8),
+                                onTap: () => c.play(track, replaceQueue: false),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(8),
+                                  child: Row(
+                                    children: [
+                                      Cover(
+                                        controller: c,
+                                        track: track,
+                                        size: 36,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              track.title,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: active
+                                                    ? scheme.primary
+                                                    : null,
+                                              ),
+                                            ),
+                                            Text(
+                                              track.artist,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.bodySmall,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (active)
+                                        Icon(
+                                          Icons.volume_up,
+                                          size: 18,
+                                          color: scheme.primary,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+            ),
+          ],
         ),
       ),
     );
@@ -2623,46 +2888,6 @@ Future<void> showPlayer(
     },
   ),
 );
-
-class LyricLine {
-  final double? seconds;
-  final String text;
-  LyricLine(this.seconds, this.text);
-}
-
-List<LyricLine> parseLyrics(String text) {
-  final lines = <LyricLine>[];
-  final pattern = RegExp(r'\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]');
-  final offsetMatch = RegExp(
-    r'\[offset:([+-]?\d+)\]',
-    caseSensitive: false,
-  ).firstMatch(text);
-  final offset = (int.tryParse(offsetMatch?.group(1) ?? '') ?? 0) / 1000;
-  var timed = false;
-  for (final row in text.split('\n')) {
-    final matches = pattern.allMatches(row).toList();
-    if (matches.isEmpty) continue;
-    timed = true;
-    final body = row.replaceAll(pattern, '').trim();
-    for (final match in matches) {
-      final seconds =
-          int.parse(match[1]!) * 60 +
-          int.parse(match[2]!) +
-          double.parse('0.${match[3] ?? '0'}') +
-          offset;
-      lines.add(LyricLine(seconds, body));
-    }
-  }
-  if (timed) {
-    lines.sort((a, b) => a.seconds!.compareTo(b.seconds!));
-    return lines;
-  }
-  return text
-      .split('\n')
-      .where((row) => row.trim().isNotEmpty)
-      .map((row) => LyricLine(null, row.trim()))
-      .toList();
-}
 
 class LyricView extends StatefulWidget {
   final String text;
