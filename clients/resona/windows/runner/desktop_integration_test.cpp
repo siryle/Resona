@@ -72,6 +72,36 @@ Map Settings(bool enabled, bool locked, double size) {
 int FontSize(const Result& result) {
   return static_cast<int>(std::get<double>(std::get<Map>(result.value).at(Value("fontSize"))));
 }
+
+HWND LyricsWindow() {
+  HWND found = nullptr;
+  EnumThreadWindows(GetCurrentThreadId(), [](HWND window, LPARAM context) -> BOOL {
+    wchar_t name[64]{};
+    GetClassName(window, name, 64);
+    if (std::wstring(name) != L"ResonaDesktopLyrics") return TRUE;
+    *reinterpret_cast<HWND*>(context) = window;
+    return FALSE;
+  }, reinterpret_cast<LPARAM>(&found));
+  return found;
+}
+
+bool TrayPresent(HWND owner) {
+  NOTIFYICONIDENTIFIER id{};
+  id.cbSize = sizeof(id);
+  id.hWnd = owner;
+  id.uID = 1;
+  RECT rect{};
+  return SUCCEEDED(Shell_NotifyIconGetRect(&id, &rect));
+}
+
+void RemoveTray(HWND owner) {
+  NOTIFYICONDATA icon{};
+  icon.cbSize = sizeof(icon);
+  icon.hWnd = owner;
+  icon.uID = 1;
+  Check(Shell_NotifyIcon(NIM_DELETE, &icon) != FALSE, "simulate a lost tray icon");
+  Check(!TrayPresent(owner), "Explorer no longer has the removed icon");
+}
 }  // namespace
 
 int main() {
@@ -87,12 +117,35 @@ int main() {
   HWND owner = CreateWindowEx(0, L"STATIC", L"Resona desktop test", WS_OVERLAPPEDWINDOW,
                               0, 0, 920, 620, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
   Check(owner != nullptr, "create owner window");
+  const bool has_explorer = FindWindow(L"Shell_TrayWnd", nullptr) != nullptr;
   Messenger messenger;
   {
     DesktopIntegration desktop(owner, &messenger);
+    constexpr UINT register_tray = WM_APP + 22;
+    desktop.HandleMessage(register_tray, 0, 0);
     const auto initial = messenger.Call("initialize");
     Check(initial.success && FontSize(initial) == 28, "default font size");
-    HWND lyrics = FindWindow(L"ResonaDesktopLyrics", nullptr);
+    if (has_explorer) {
+      Check(std::get<bool>(std::get<Map>(initial.value).at(Value("trayAvailable"))) &&
+                TrayPresent(owner), "Explorer can locate the registered tray icon");
+      RemoveTray(owner);
+      desktop.HandleMessage(WM_THEMECHANGED, 0, 0);
+      Check(TrayPresent(owner), "failed tray modification falls back to registration");
+      RemoveTray(owner);
+      messenger.Call("update", {{Value("title"), Value("Recovered track")}});
+      Check(TrayPresent(owner), "playback updates recover a missing tray icon");
+      RemoveTray(owner);
+      desktop.HandleMessage(WM_TIMER, register_tray, 0);
+      Check(TrayPresent(owner), "registration timer recovers a missing tray icon");
+      Check(!desktop.HandleMessage(WM_TIMER, register_tray + 1, 0),
+            "unrelated timers remain available to other handlers");
+      RemoveTray(owner);
+      desktop.HandleMessage(RegisterWindowMessage(L"TaskbarCreated"), 0, 0);
+      Check(TrayPresent(owner), "Explorer restart restores the tray icon");
+    } else {
+      std::cout << "Explorer is absent; live tray registration checks skipped.\n";
+    }
+    HWND lyrics = LyricsWindow();
     Check(lyrics && !IsWindowVisible(lyrics), "lyrics initially hidden");
     Check(messenger.Call("preferences", Settings(true, false, 32)).success,
           "enable lyrics");
@@ -163,7 +216,8 @@ int main() {
       }
     }
   }
-  Check(!FindWindow(L"ResonaDesktopLyrics", nullptr), "lyrics window released");
+  Check(!TrayPresent(owner), "tray icon released");
+  Check(!LyricsWindow(), "lyrics window released");
   Check(!messenger.handler, "channel handler released");
   {
     DesktopIntegration restored(owner, &messenger);

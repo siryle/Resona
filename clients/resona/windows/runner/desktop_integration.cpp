@@ -13,6 +13,7 @@
 namespace {
 constexpr UINT kTray = WM_APP + 20;
 constexpr UINT kExit = WM_APP + 21;
+constexpr UINT kRegisterTray = WM_APP + 22;
 constexpr wchar_t kSettings[] = L"Software\\Resona\\Desktop";
 constexpr wchar_t kLyricsClass[] = L"ResonaDesktopLyrics";
 enum Command : UINT {
@@ -106,7 +107,8 @@ DesktopIntegration::DesktopIntegration(HWND owner,
                               WS_EX_NOACTIVATE,
                           kLyricsClass, L"Resona Desktop Lyrics", WS_POPUP,
                           0, 0, 760, 112, nullptr, nullptr, wc.hInstance, this);
-  AddTrayIcon();
+  // Register after the owner has finished installing its message handler.
+  PostMessage(owner_, kRegisterTray, 0, 0);
   channel_ = std::make_unique<flutter::MethodChannel<Value>>(
       messenger, "app.resona/desktop", &flutter::StandardMethodCodec::GetInstance());
   channel_->SetMethodCallHandler(
@@ -118,9 +120,11 @@ DesktopIntegration::DesktopIntegration(HWND owner,
             return;
           }
           initialized_ = true;
+          if (!tray_added_) AddTrayIcon();
           UpdateLyrics();
           auto preferences = Preferences();
           preferences[Value("trayAvailable")] = Value(tray_added_);
+          preferences[Value("trayError")] = Value(static_cast<int32_t>(tray_error_));
           result->Success(Value(preferences));
         } else if (call.method_name() == "update") {
           const auto map = call.arguments() ? std::get_if<Map>(call.arguments()) : nullptr;
@@ -153,6 +157,7 @@ DesktopIntegration::DesktopIntegration(HWND owner,
 
 DesktopIntegration::~DesktopIntegration() {
   if (channel_) channel_->SetMethodCallHandler(nullptr);
+  KillTimer(owner_, kRegisterTray);
   if (tray_added_) Shell_NotifyIcon(NIM_DELETE, &tray_);
   if (tray_.hIcon) DestroyIcon(tray_.hIcon);
   if (lyrics_) DestroyWindow(lyrics_);
@@ -164,6 +169,10 @@ void DesktopIntegration::AddTrayIcon() {
   const HWND taskbar = FindWindow(L"Shell_TrayWnd", nullptr);
   const UINT dpi = GetDpiForWindow(taskbar ? taskbar : owner_);
   HICON icon = CreateTrayLogo(GetSystemMetricsForDpi(SM_CXSMICON, dpi), LightTaskbar());
+  if (!icon) {
+    SetTimer(owner_, kRegisterTray, 1000, nullptr);
+    return;
+  }
   const HICON previous = tray_.hIcon;
   tray_.cbSize = sizeof(tray_);
   tray_.hWnd = owner_;
@@ -173,10 +182,17 @@ void DesktopIntegration::AddTrayIcon() {
   tray_.hIcon = icon;
   const std::wstring tip = title_.empty() ? L"Resona" : L"Resona - " + title_;
   wcsncpy_s(tray_.szTip, tip.c_str(), _TRUNCATE);
-  tray_added_ = Shell_NotifyIcon(tray_added_ ? NIM_MODIFY : NIM_ADD, &tray_) != FALSE;
+  // Explorer may lose an icon while our cached registration still says it exists.
+  SetLastError(ERROR_SUCCESS);
+  tray_added_ = Shell_NotifyIcon(NIM_MODIFY, &tray_) != FALSE ||
+                Shell_NotifyIcon(NIM_ADD, &tray_) != FALSE;
+  tray_error_ = tray_added_ ? ERROR_SUCCESS : GetLastError();
   if (tray_added_) {
     tray_.uVersion = NOTIFYICON_VERSION_4;
     Shell_NotifyIcon(NIM_SETVERSION, &tray_);
+    KillTimer(owner_, kRegisterTray);
+  } else {
+    SetTimer(owner_, kRegisterTray, 1000, nullptr);
   }
   if (previous) DestroyIcon(previous);
 }
@@ -214,6 +230,15 @@ std::optional<LRESULT> DesktopIntegration::HandleMessage(UINT message,
     return 0;
   }
   switch (message) {
+    case kRegisterTray:
+      AddTrayIcon();
+      return 0;
+    case WM_TIMER:
+      if (wparam == kRegisterTray) {
+        AddTrayIcon();
+        return 0;
+      }
+      break;
     case WM_NCLBUTTONDOWN:
     case WM_NCLBUTTONDBLCLK:
       if (wparam == HTCLOSE) {
@@ -339,7 +364,7 @@ void DesktopIntegration::Update(const Map& state) {
   }
   tray_.uFlags = NIF_TIP;
   wcsncpy_s(tray_.szTip, (L"Resona - " + title_).c_str(), _TRUNCATE);
-  if (tray_added_) Shell_NotifyIcon(NIM_MODIFY, &tray_);
+  if (!tray_added_ || !Shell_NotifyIcon(NIM_MODIFY, &tray_)) AddTrayIcon();
   if (changed || hovered_) PaintLyrics();
 }
 

@@ -37,8 +37,9 @@ The existing Swift clients remain the iOS / macOS implementation.
   close button or the footer queue button dismisses it. At narrow widths the
   queue occupies the workspace above the still-available playback footer.
 - A native Windows tray icon uses the same monochrome record/R/wave outline as
-  macOS, adapts to the taskbar theme and returns after Explorer restarts. Clicking
-  it restores the main window. Its right-click menu offers playback, favorites,
+  macOS, adapts to the taskbar theme and returns after Explorer restarts. Failed
+  registrations retry automatically, and playback updates recover missing icons.
+  Clicking it restores the main window. Its right-click menu offers playback, favorites,
   playback modes, desktop lyrics, font size, opening the window and quitting.
   The title-bar close button minimizes without stopping audio; taskbar Close
   window, Alt+F4 and the tray Quit command save playback state and exit.
@@ -102,7 +103,10 @@ python scripts/build-clients.py windows
 Windows packaging also requires Inno Setup **6.7.1** or newer. The installer has
 a stable application ID, a Start menu entry, an optional desktop shortcut and an
 uninstaller. It reuses the previous installation directory, supports same-version
-repair and rejects downgrades. Its wizard uses the compiler's bundled English
+repair and rejects downgrades. Its optional post-install launch retains the
+installer's current privileges only when the desktop shell is already elevated,
+so Windows does not block tray registration across integrity levels. Otherwise
+the client launches as the original user. Its wizard uses the compiler's bundled English
 messages. On disposable GitHub Actions runners, packaging tests an older
 registered fixture followed by an upgrade without a directory argument, verifies
 installed files, tests repair and downgrade rejection, and uninstalls the app.
@@ -113,8 +117,11 @@ packages and SHA-256 files under `dist/`. `pubspec.yaml` contains only a develop
 placeholder; do not increment it for releases. Use the build script for delivery.
 Windows packaging also builds and runs `resona_desktop_tests` before creating
 the installer. These native checks isolate their registry preferences and cover
-window lifecycle, mouse pass-through, font limits, persistence and monitor bounds;
-the test executable is outside the packaged application directory.
+window lifecycle, mouse pass-through, font limits, persistence and monitor bounds.
+When Explorer is running, they also verify actual tray registration and recovery
+after the shell loses an icon; these shell checks are skipped on headless runners.
+Lyric-window lookups are restricted to the test thread so an open client is unaffected.
+The test executable is outside the packaged application directory.
 
 Without signing credentials, Android builds use a development certificate and
 are named `-preview.apk`. They can be sideloaded but different build machines

@@ -43,6 +43,7 @@ class DesktopIntegration {
   std::unique_ptr<flutter::MethodChannel<Value>> channel_;
   ULONG_PTR graphics_token_ = 0;
   NOTIFYICONDATA tray_{};
+  DWORD tray_error_ = ERROR_SUCCESS;
   UINT taskbar_created_ = 0;
   bool tray_added_ = false;
   bool initialized_ = false;

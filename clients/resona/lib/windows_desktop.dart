@@ -33,7 +33,9 @@ class WindowsDesktop extends ChangeNotifier {
       controller.addListener(_update);
       _update();
       if (preferences?['trayAvailable'] == false) {
-        controller.error = '系统托盘暂不可用，可从任务栏恢复或退出程序。';
+        controller.error = preferences?['trayError'] == 5
+            ? 'Windows 阻止了系统托盘注册，请以与资源管理器相同的权限启动 Resona。'
+            : '系统托盘暂不可用，正在自动重试，可从任务栏恢复或退出程序。';
         controller.notifyListeners();
       }
     } on PlatformException {

@@ -115,6 +115,18 @@ void main() {
     expect(desktop.fontSize, 28);
   });
 
+  test('tray permission failures explain how to restore access', () async {
+    messenger.setMockMethodCallHandler(WindowsDesktop.channel, (call) async {
+      if (call.method == 'initialize') {
+        return {'trayAvailable': false, 'trayError': 5};
+      }
+      return null;
+    });
+    await desktop.initialize();
+    expect(c.error, contains('与资源管理器相同的权限'));
+    expect(desktop.currentLyric, contains('Resona'));
+  });
+
   test('native controls guard unavailable actions and persist modes', () async {
     await desktop.initialize();
     await native('toggle');
