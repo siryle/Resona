@@ -54,6 +54,19 @@ public sealed class Track
 
     [JsonPropertyName("unavailable")]
     public bool Unavailable { get; set; }
+
+    public string ArtistAlbum => string.IsNullOrWhiteSpace(Album)
+        ? Artist
+        : $"{Artist} · {Album}";
+
+    public string DurationText
+    {
+        get
+        {
+            var totalSeconds = Math.Max(0, (int)Math.Round(Duration));
+            return $"{totalSeconds / 60}:{totalSeconds % 60:00}";
+        }
+    }
 }
 
 public sealed class PagedTracks

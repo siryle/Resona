@@ -2,6 +2,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Resona.Windows.Models;
 using Resona.Windows.Native;
 using Resona.Windows.Services;
@@ -18,14 +19,15 @@ public sealed partial class MainWindow : Window
 
     private CancellationTokenSource? _searchCts;
     private IReadOnlyList<LyricLine> _lyrics = [];
+    private List<Track> _tracks = [];
     private Track? _current;
     private bool _quitting;
     private bool _lyricsVisible;
-    private bool _updatingSeek;
 
     public MainWindow()
     {
         InitializeComponent();
+        NavList.SelectedIndex = 0;
         _player = new PlayerService(_api);
         _player.MediaEnded += (_, _) => UpdatePlayIcon();
 
@@ -93,6 +95,7 @@ public sealed partial class MainWindow : Window
     private async Task LoadTracksAsync(string search)
     {
         var result = await _api.GetTracksAsync(search: string.IsNullOrWhiteSpace(search) ? null : search, limit: 200);
+        _tracks = result.Items;
         TrackList.ItemsSource = result.Items;
     }
 
@@ -146,6 +149,7 @@ public sealed partial class MainWindow : Window
             await _player.DisposeAsync();
             SessionStore.Delete();
             TrackList.ItemsSource = null;
+            _tracks = [];
             _current = null;
             _lyrics = [];
             NowPlaying.Text = "Resona · 此刻想听什么？";
@@ -176,6 +180,23 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    private static readonly string[] NavTitles =
+    [
+        "全部音乐",
+        "专辑",
+        "艺术家",
+        "我喜欢的",
+        "已下载",
+    ];
+
+    private void OnNavSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (NavList.SelectedIndex >= 0 && NavList.SelectedIndex < NavTitles.Length)
+        {
+            PageTitle.Text = NavTitles[NavList.SelectedIndex];
         }
     }
 
@@ -213,11 +234,13 @@ public sealed partial class MainWindow : Window
         var position = _player.Position;
         TimeLabel.Text = $"{FormatDuration(position)} / {FormatDuration(duration)}";
 
-        if (!_updatingSeek && duration.TotalSeconds > 0)
+        if (duration.TotalSeconds > 0)
         {
-            _updatingSeek = true;
             SeekBar.Value = position.TotalSeconds / duration.TotalSeconds;
-            _updatingSeek = false;
+        }
+        else
+        {
+            SeekBar.Value = 0;
         }
 
         UpdateLyric(position.TotalSeconds);
@@ -236,18 +259,22 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnSeekChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    private void OnSeekBarTapped(object sender, TappedRoutedEventArgs e)
     {
-        if (_updatingSeek || _current is null)
+        if (_current is null)
         {
             return;
         }
 
         var duration = _player.Duration;
-        if (duration.TotalSeconds > 0)
+        if (duration.TotalSeconds <= 0 || SeekBar.ActualWidth <= 0)
         {
-            _player.Position = TimeSpan.FromSeconds(SeekBar.Value * duration.TotalSeconds);
+            return;
         }
+
+        var position = e.GetPosition(SeekBar).X;
+        var fraction = Math.Clamp(position / SeekBar.ActualWidth, 0, 1);
+        _player.Position = TimeSpan.FromSeconds(fraction * duration.TotalSeconds);
     }
 
     private void OnPlayPauseClick(object sender, RoutedEventArgs e)
@@ -259,6 +286,30 @@ public sealed partial class MainWindow : Window
 
         _player.Toggle();
         UpdatePlayIcon();
+    }
+
+    private void OnPreviousClick(object sender, RoutedEventArgs e)
+    {
+        _ = StepTrackAsync(-1);
+    }
+
+    private void OnNextClick(object sender, RoutedEventArgs e)
+    {
+        _ = StepTrackAsync(1);
+    }
+
+    private Task StepTrackAsync(int delta)
+    {
+        if (_tracks.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var currentIndex = _current is null ? -1 : _tracks.IndexOf(_current);
+        var nextIndex = currentIndex < 0
+            ? 0
+            : (currentIndex + delta + _tracks.Count) % _tracks.Count;
+        return PlayTrackAsync(_tracks[nextIndex]);
     }
 
     private void OnToggleLyricsClick(object sender, RoutedEventArgs e)
