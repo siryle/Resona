@@ -2,7 +2,9 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using Windows.Graphics;
 using Resona.Windows.Models;
 using Resona.Windows.Native;
 using Resona.Windows.Services;
@@ -20,23 +22,25 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? _searchCts;
     private IReadOnlyList<LyricLine> _lyrics = [];
     private List<Track> _tracks = [];
+    private List<TrackRow> _trackRows = [];
     private Track? _current;
     private bool _quitting;
-    private bool _lyricsVisible;
 
     public MainWindow()
     {
         InitializeComponent();
+        AppWindow.Resize(new SizeInt32(1200, 800));
         NavList.SelectedIndex = 0;
         _player = new PlayerService(_api);
         _player.MediaEnded += (_, _) => UpdatePlayIcon();
+        VolumeSlider.Value = _player.Volume;
 
         _tray.OpenRequested += () => DispatcherQueue.TryEnqueue(Restore);
         _tray.ExitRequested += () => DispatcherQueue.TryEnqueue(() => { _ = QuitAsync(); });
         _tray.Start();
 
         _desktopLyrics.Start();
-        _desktopLyrics.SetLyric("Resona · 此刻想听什么？");
+        _desktopLyrics.SetLyric("选一首，此刻想听的歌");
 
         _timer = DispatcherQueue.CreateTimer();
         _timer.Interval = TimeSpan.FromMilliseconds(250);
@@ -61,17 +65,15 @@ public sealed partial class MainWindow : Window
 
     private void ShowLogin()
     {
-        LoginOverlay.Visibility = Visibility.Visible;
-        LoginButton.Visibility = Visibility.Collapsed;
-        LogoutButton.Visibility = Visibility.Collapsed;
+        LoginRoot.Visibility = Visibility.Visible;
+        MainShell.Visibility = Visibility.Collapsed;
         LoginStatus.Text = string.Empty;
     }
 
     private void ShowLibrary()
     {
-        LoginOverlay.Visibility = Visibility.Collapsed;
-        LoginButton.Visibility = Visibility.Collapsed;
-        LogoutButton.Visibility = Visibility.Visible;
+        LoginRoot.Visibility = Visibility.Collapsed;
+        MainShell.Visibility = Visibility.Visible;
     }
 
     private async Task TryConnectAsync(Session session)
@@ -96,21 +98,41 @@ public sealed partial class MainWindow : Window
     {
         var result = await _api.GetTracksAsync(search: string.IsNullOrWhiteSpace(search) ? null : search, limit: 200);
         _tracks = result.Items;
-        TrackList.ItemsSource = result.Items;
+        _trackRows = result.Items
+            .Select((track, index) => new TrackRow(index + 1, track))
+            .ToList();
+        TrackList.ItemsSource = _trackRows;
+        TotalLabel.Text = $"（共 {_tracks.Count} 首）";
     }
 
-    private void OnLoginClick(object sender, RoutedEventArgs e)
+    private void OnSettingsClick(object sender, RoutedEventArgs e)
     {
         ShowLogin();
     }
 
+    private async void OnRefreshClick(object sender, RoutedEventArgs e)
+    {
+        RefreshButton.IsEnabled = false;
+        try
+        {
+            await LoadTracksAsync(SearchBox.Text);
+        }
+        finally
+        {
+            RefreshButton.IsEnabled = true;
+        }
+    }
+
+    private void OnPlayAllClick(object sender, RoutedEventArgs e)
+    {
+        if (_tracks.Count > 0)
+        {
+            _ = PlayTrackAsync(_tracks[0]);
+        }
+    }
+
     private async void OnSubmitLoginClick(object sender, RoutedEventArgs e)
     {
-        if (SubmitLoginButton is null)
-        {
-            return;
-        }
-
         SubmitLoginButton.IsEnabled = false;
         LoginStatus.Text = string.Empty;
         try
@@ -138,28 +160,6 @@ public sealed partial class MainWindow : Window
         finally
         {
             SubmitLoginButton.IsEnabled = true;
-        }
-    }
-
-    private async void OnLogoutClick(object sender, RoutedEventArgs e)
-    {
-        LogoutButton.IsEnabled = false;
-        try
-        {
-            await _player.DisposeAsync();
-            SessionStore.Delete();
-            TrackList.ItemsSource = null;
-            _tracks = [];
-            _current = null;
-            _lyrics = [];
-            NowPlaying.Text = "Resona · 此刻想听什么？";
-            TimeLabel.Text = "0:00 / 0:00";
-            UpdatePlayIcon();
-            ShowLogin();
-        }
-        finally
-        {
-            LogoutButton.IsEnabled = true;
         }
     }
 
@@ -202,16 +202,18 @@ public sealed partial class MainWindow : Window
 
     private void OnTrackItemClick(object sender, ItemClickEventArgs e)
     {
-        if (e.ClickedItem is Track track)
+        if (e.ClickedItem is TrackRow row)
         {
-            _ = PlayTrackAsync(track);
+            _ = PlayTrackAsync(row.Track);
         }
     }
 
     private async Task PlayTrackAsync(Track track)
     {
         _current = track;
-        NowPlaying.Text = $"{track.Title} · {track.Artist}";
+        NowPlaying.Text = track.Title;
+        NowPlayingSubtitle.Text = string.Join(" · ", new[] { track.Artist, track.Album }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
         _desktopLyrics.SetLyric($"{track.Title} · {track.Artist}");
         UpdatePlayIcon();
 
@@ -277,6 +279,11 @@ public sealed partial class MainWindow : Window
         _player.Position = TimeSpan.FromSeconds(fraction * duration.TotalSeconds);
     }
 
+    private void OnVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        _player.Volume = VolumeSlider.Value;
+    }
+
     private void OnPlayPauseClick(object sender, RoutedEventArgs e)
     {
         if (_current is null)
@@ -310,12 +317,6 @@ public sealed partial class MainWindow : Window
             ? 0
             : (currentIndex + delta + _tracks.Count) % _tracks.Count;
         return PlayTrackAsync(_tracks[nextIndex]);
-    }
-
-    private void OnToggleLyricsClick(object sender, RoutedEventArgs e)
-    {
-        _lyricsVisible = !_lyricsVisible;
-        _desktopLyrics.SetVisible(_lyricsVisible);
     }
 
     private void UpdatePlayIcon()

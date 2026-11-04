@@ -5,356 +5,480 @@
     xmlns:models="using:Resona.Windows.Models"
     Title="Resona">
     <Grid Background="{ThemeResource ResonaSurfaceBrush}">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="204" />
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
 
-        <Border
-            Grid.Column="0"
-            Background="{ThemeResource ResonaSurfaceContainerLowBrush}">
-            <Grid Padding="14,36,14,20">
+        <Grid
+            x:Name="LoginRoot"
+            Background="{ThemeResource ResonaSurfaceBrush}"
+            Visibility="Visible">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Border
+                Grid.Row="0"
+                Background="{ThemeResource ResonaSurfaceBrush}"
+                BorderBrush="{ThemeResource ResonaOutlineVariantBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="16,10">
+                <TextBlock
+                    FontSize="22"
+                    FontWeight="Medium"
+                    Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                    Text="连接服务器" />
+            </Border>
+            <ScrollViewer Grid.Row="1">
+                <StackPanel
+                    MaxWidth="420"
+                    Width="420"
+                    Margin="24,48"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="12">
+                    <TextBlock
+                        FontFamily="Georgia"
+                        FontSize="45"
+                        FontWeight="Bold"
+                        Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                        Text="Resona." />
+                    <TextBlock
+                        FontSize="24"
+                        FontWeight="Medium"
+                        Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                        Text="连接你的音乐空间" />
+                    <TextBlock
+                        Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                        Text="登录自托管服务器，聆听本地与网盘收藏。" />
+                    <TextBox
+                        x:Name="ServerBox"
+                        Margin="0,20,0,0"
+                        CornerRadius="12"
+                        Header="服务器地址"
+                        PlaceholderText="https://music.example.com" />
+                    <TextBox
+                        x:Name="UsernameBox"
+                        Margin="0,4,0,0"
+                        CornerRadius="12"
+                        Header="用户名"
+                        Text="admin" />
+                    <PasswordBox
+                        x:Name="PasswordBox"
+                        Margin="0,4,0,0"
+                        CornerRadius="12"
+                        Header="密码"
+                        PlaceholderText="密码" />
+                    <Button
+                        x:Name="SubmitLoginButton"
+                        Height="48"
+                        Margin="0,16,0,0"
+                        HorizontalAlignment="Stretch"
+                        Background="{ThemeResource ResonaAccentBrush}"
+                        Click="OnSubmitLoginClick"
+                        Content="连接服务器"
+                        CornerRadius="20"
+                        Foreground="{ThemeResource ResonaOnPrimaryBrush}" />
+                    <TextBlock
+                        x:Name="LoginStatus"
+                        Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                        TextWrapping="Wrap" />
+                    <TextBlock
+                        Margin="0,16,0,0"
+                        FontSize="13"
+                        Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                        Text="凭据保存在设备安全存储中。首次使用请先在服务端网页设置管理员密码；公网连接建议使用 HTTPS。"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <Grid
+            x:Name="MainShell"
+            Background="{ThemeResource ResonaSurfaceBrush}"
+            Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="204" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border
+                Grid.Column="0"
+                Background="{ThemeResource ResonaSurfaceContainerLowBrush}">
+                <Grid Padding="14,36,14,20">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock
+                        Margin="12,0,0,32"
+                        FontFamily="Georgia"
+                        FontSize="28"
+                        FontWeight="Bold"
+                        Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                        Text="Resona." />
+                    <ListView
+                        x:Name="NavList"
+                        Grid.Row="1"
+                        SelectionChanged="OnNavSelectionChanged"
+                        SelectionMode="Single">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="VerticalContentAlignment" Value="Center" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0,0,0,6" />
+                                <Setter Property="MinHeight" Value="48" />
+                                <Setter Property="CornerRadius" Value="9" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <SymbolIcon Width="21" Height="21" Symbol="Library" />
+                                <TextBlock Foreground="{ThemeResource ResonaOnSurfaceBrush}" Text="全部音乐" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <SymbolIcon Width="21" Height="21" Symbol="MusicInfo" />
+                                <TextBlock Foreground="{ThemeResource ResonaOnSurfaceBrush}" Text="专辑" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <SymbolIcon Width="21" Height="21" Symbol="People" />
+                                <TextBlock Foreground="{ThemeResource ResonaOnSurfaceBrush}" Text="艺术家" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <SymbolIcon Width="21" Height="21" Symbol="Favorite" />
+                                <TextBlock Foreground="{ThemeResource ResonaOnSurfaceBrush}" Text="我喜欢的" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <SymbolIcon Width="21" Height="21" Symbol="Download" />
+                                <TextBlock Foreground="{ThemeResource ResonaOnSurfaceBrush}" Text="已下载" />
+                            </StackPanel>
+                        </ListViewItem>
+                    </ListView>
+                    <StackPanel Grid.Row="2" Spacing="8">
+                        <TextBlock
+                            FontSize="13"
+                            Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                            Text="已连接音乐服务器" />
+                        <TextBlock
+                            FontSize="13"
+                            Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                            Text="0 首已下载 · 随时聆听" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Column="1">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <TextBlock
-                    Margin="12,0,0,32"
-                    FontFamily="Georgia"
-                    FontSize="28"
-                    FontWeight="Bold"
-                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                    Text="Resona." />
+
+                <Grid
+                    Grid.Row="0"
+                    Padding="28,16,12,8"
+                    ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock
+                        x:Name="PageTitle"
+                        Grid.Column="0"
+                        VerticalAlignment="Center"
+                        FontSize="22"
+                        FontWeight="Medium"
+                        Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                        Text="全部音乐"
+                        TextTrimming="CharacterEllipsis" />
+                    <TextBox
+                        x:Name="SearchBox"
+                        Grid.Column="1"
+                        Width="255"
+                        VerticalAlignment="Center"
+                        CornerRadius="8"
+                        PlaceholderText="搜索歌曲、专辑、艺术家"
+                        TextChanged="OnSearchChanged" />
+                    <Button
+                        x:Name="RefreshButton"
+                        Grid.Column="2"
+                        Width="36"
+                        Height="36"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Click="OnRefreshClick"
+                        ToolTipService.ToolTip="刷新音乐库">
+                        <SymbolIcon Symbol="Refresh" />
+                    </Button>
+                    <Button
+                        x:Name="SettingsButton"
+                        Grid.Column="3"
+                        Width="36"
+                        Height="36"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Click="OnSettingsClick"
+                        ToolTipService.ToolTip="设置与服务器登录">
+                        <SymbolIcon Symbol="Setting" />
+                    </Button>
+                </Grid>
+
+                <Grid Grid.Row="1" Margin="30,0,30,0" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Button
+                        x:Name="PlayAllButton"
+                        Grid.Column="0"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Click="OnPlayAllClick"
+                        Padding="0">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Border
+                                Width="28"
+                                Height="28"
+                                Background="{ThemeResource ResonaAccentBrush}"
+                                CornerRadius="14">
+                                <SymbolIcon Foreground="{ThemeResource ResonaOnPrimaryBrush}" Symbol="Play" />
+                            </Border>
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                                Text="全部播放" />
+                        </StackPanel>
+                    </Button>
+                    <TextBlock
+                        x:Name="TotalLabel"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Margin="10,0,0,0"
+                        FontSize="13"
+                        Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                        Text="（共 0 首）" />
+                </Grid>
+
                 <ListView
-                    x:Name="NavList"
-                    Grid.Row="1"
-                    SelectionChanged="OnNavSelectionChanged"
+                    x:Name="TrackList"
+                    Grid.Row="2"
+                    Margin="30,16,30,0"
+                    IsItemClickEnabled="True"
+                    ItemClick="OnTrackItemClick"
                     SelectionMode="Single">
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem">
                             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                             <Setter Property="VerticalContentAlignment" Value="Center" />
                             <Setter Property="Padding" Value="0" />
-                            <Setter Property="MinHeight" Value="48" />
+                            <Setter Property="MinHeight" Value="72" />
                             <Setter Property="CornerRadius" Value="9" />
                         </Style>
                     </ListView.ItemContainerStyle>
-                    <ListViewItem>
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <SymbolIcon Width="21" Height="21" Symbol="Library" />
-                            <TextBlock Text="全部音乐" />
-                        </StackPanel>
-                    </ListViewItem>
-                    <ListViewItem>
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <SymbolIcon Width="21" Height="21" Symbol="MusicInfo" />
-                            <TextBlock Text="专辑" />
-                        </StackPanel>
-                    </ListViewItem>
-                    <ListViewItem>
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <SymbolIcon Width="21" Height="21" Symbol="People" />
-                            <TextBlock Text="艺术家" />
-                        </StackPanel>
-                    </ListViewItem>
-                    <ListViewItem>
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <SymbolIcon Width="21" Height="21" Symbol="Favorite" />
-                            <TextBlock Text="我喜欢的" />
-                        </StackPanel>
-                    </ListViewItem>
-                    <ListViewItem>
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <SymbolIcon Width="21" Height="21" Symbol="Download" />
-                            <TextBlock Text="已下载" />
-                        </StackPanel>
-                    </ListViewItem>
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="models:TrackRow">
+                            <Grid Padding="12,14">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="1" />
+                                </Grid.RowDefinitions>
+                                <Grid Grid.Row="0" ColumnSpacing="14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="24" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center"
+                                        HorizontalAlignment="Center"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                                        Text="{x:Bind IndexText}" />
+                                    <Border
+                                        Grid.Column="1"
+                                        Width="44"
+                                        Height="44"
+                                        Background="{ThemeResource ResonaSecondaryContainerBrush}"
+                                        CornerRadius="8">
+                                        <SymbolIcon
+                                            Foreground="{ThemeResource ResonaOnSecondaryContainerBrush}"
+                                            Symbol="MusicInfo" />
+                                    </Border>
+                                    <StackPanel
+                                        Grid.Column="2"
+                                        VerticalAlignment="Center"
+                                        Spacing="6">
+                                        <TextBlock
+                                            FontSize="14"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                                            Text="{x:Bind Track.Title}"
+                                            TextTrimming="CharacterEllipsis" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Border
+                                                Padding="5,1"
+                                                Background="Transparent"
+                                                BorderBrush="{ThemeResource ResonaOutlineBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="4">
+                                                <TextBlock
+                                                    FontSize="10"
+                                                    Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                                                    Text="{x:Bind Track.FormatBitrate}" />
+                                            </Border>
+                                            <TextBlock
+                                                VerticalAlignment="Center"
+                                                FontSize="12"
+                                                Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                                                Text="{x:Bind Track.ArtistAlbum}"
+                                                TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <TextBlock
+                                        Grid.Column="3"
+                                        VerticalAlignment="Center"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                                        Text="{x:Bind Track.DurationText}" />
+                                </Grid>
+                                <Rectangle
+                                    Grid.Row="1"
+                                    Grid.ColumnSpan="4"
+                                    Fill="{ThemeResource ResonaOutlineVariantBrush}"
+                                    Height="1"
+                                    Opacity="0.5" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
                 </ListView>
-                <StackPanel Grid.Row="2" Spacing="6">
-                    <TextBlock
-                        Opacity="0.7"
-                        FontSize="12"
-                        Text="已连接音乐服务器" />
-                    <TextBlock
-                        Opacity="0.7"
-                        FontSize="12"
-                        Text="0 首已下载 · 随时聆听" />
-                </StackPanel>
-            </Grid>
-        </Border>
 
-        <Grid Grid.Column="1">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-
-            <Grid
-                Grid.Row="0"
-                Padding="28,16,16,8"
-                ColumnSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock
-                    x:Name="PageTitle"
-                    Grid.Column="0"
-                    VerticalAlignment="Center"
-                    FontSize="28"
-                    FontWeight="Medium"
-                    Text="全部音乐"
-                    TextTrimming="CharacterEllipsis" />
-                <TextBox
-                    x:Name="SearchBox"
-                    Grid.Column="1"
-                    Width="255"
-                    VerticalAlignment="Center"
-                    CornerRadius="12"
-                    PlaceholderText="搜索歌曲、专辑、艺术家"
-                    TextChanged="OnSearchChanged" />
-                <Button
-                    x:Name="LoginButton"
-                    Grid.Column="2"
-                    VerticalAlignment="Center"
-                    Click="OnLoginClick"
-                    ToolTipService.ToolTip="连接服务器">
-                    <SymbolIcon Symbol="Contact" />
-                </Button>
-                <Button
-                    x:Name="LogoutButton"
-                    Grid.Column="3"
-                    VerticalAlignment="Center"
-                    Click="OnLogoutClick"
-                    ToolTipService.ToolTip="退出登录"
-                    Visibility="Collapsed">
-                    <FontIcon Glyph="&#xE7E8;" />
-                </Button>
-            </Grid>
-
-            <ListView
-                x:Name="TrackList"
-                Grid.Row="1"
-                Padding="16,0,16,12"
-                IsItemClickEnabled="True"
-                ItemClick="OnTrackItemClick"
-                SelectionMode="Single">
-                <ListView.ItemContainerStyle>
-                    <Style TargetType="ListViewItem">
-                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                        <Setter Property="VerticalContentAlignment" Value="Center" />
-                        <Setter Property="Padding" Value="0" />
-                        <Setter Property="MinHeight" Value="72" />
-                        <Setter Property="CornerRadius" Value="9" />
-                    </Style>
-                </ListView.ItemContainerStyle>
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="models:Track">
-                        <Grid Padding="12,14" ColumnSpacing="14">
+                <Border
+                    Grid.Row="3"
+                    Background="{ThemeResource ResonaSurfaceContainerLowBrush}">
+                    <Grid>
+                        <ProgressBar
+                            x:Name="SeekBar"
+                            Margin="0,-6,0,0"
+                            Height="2"
+                            Minimum="0"
+                            Maximum="1"
+                            Foreground="{ThemeResource ResonaAccentBrush}"
+                            Background="{ThemeResource ResonaSurfaceContainerHighestBrush}"
+                            Tapped="OnSeekBarTapped" />
+                        <Grid Height="79" Padding="20,3,20,0">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Border
+                            <StackPanel
                                 Grid.Column="0"
-                                Width="44"
-                                Height="44"
-                                Background="{ThemeResource ResonaSecondaryContainerBrush}"
-                                CornerRadius="8">
-                                <SymbolIcon
-                                    Foreground="{ThemeResource ResonaOnSecondaryContainerBrush}"
-                                    Symbol="MusicInfo" />
-                            </Border>
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Spacing="12">
+                                <Border
+                                    Width="46"
+                                    Height="46"
+                                    Background="{ThemeResource ResonaSecondaryContainerBrush}"
+                                    CornerRadius="7">
+                                    <SymbolIcon
+                                        Foreground="{ThemeResource ResonaOnSecondaryContainerBrush}"
+                                        Symbol="MusicInfo" />
+                                </Border>
+                                <StackPanel VerticalAlignment="Center" Spacing="5">
+                                    <TextBlock
+                                        x:Name="NowPlaying"
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource ResonaOnSurfaceBrush}"
+                                        Text="选一首，此刻想听的歌"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        x:Name="NowPlayingSubtitle"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                                        TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </StackPanel>
                             <StackPanel
                                 Grid.Column="1"
+                                Orientation="Horizontal"
                                 VerticalAlignment="Center"
-                                Spacing="4">
-                                <TextBlock
-                                    FontSize="14"
-                                    FontWeight="SemiBold"
-                                    Text="{x:Bind Title}"
-                                    TextTrimming="CharacterEllipsis" />
-                                <TextBlock
-                                    Opacity="0.7"
-                                    FontSize="12"
-                                    Text="{x:Bind ArtistAlbum}"
-                                    TextTrimming="CharacterEllipsis" />
+                                Spacing="12">
+                                <Button
+                                    x:Name="PreviousButton"
+                                    Width="32"
+                                    Height="36"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Click="OnPreviousClick"
+                                    ToolTipService.ToolTip="上一首">
+                                    <SymbolIcon Symbol="Previous" />
+                                </Button>
+                                <Button
+                                    x:Name="PlayButton"
+                                    Width="40"
+                                    Height="40"
+                                    Background="{ThemeResource ResonaAccentBrush}"
+                                    BorderThickness="0"
+                                    Click="OnPlayPauseClick"
+                                    CornerRadius="20"
+                                    Foreground="{ThemeResource ResonaOnPrimaryBrush}"
+                                    ToolTipService.ToolTip="播放 / 暂停">
+                                    <SymbolIcon Symbol="Play" />
+                                </Button>
+                                <Button
+                                    x:Name="NextButton"
+                                    Width="32"
+                                    Height="36"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Click="OnNextClick"
+                                    ToolTipService.ToolTip="下一首">
+                                    <SymbolIcon Symbol="Next" />
+                                </Button>
                             </StackPanel>
-                            <TextBlock
+                            <StackPanel
                                 Grid.Column="2"
+                                Width="108"
                                 VerticalAlignment="Center"
-                                Opacity="0.7"
-                                FontSize="12"
-                                Text="{x:Bind DurationText}" />
+                                Spacing="2">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <SymbolIcon Width="14" Height="14" Symbol="Volume" />
+                                    <Slider
+                                        x:Name="VolumeSlider"
+                                        Minimum="0"
+                                        Maximum="1"
+                                        StepFrequency="0.01"
+                                        VerticalAlignment="Center"
+                                        ValueChanged="OnVolumeChanged" />
+                                </StackPanel>
+                                <TextBlock
+                                    x:Name="TimeLabel"
+                                    HorizontalAlignment="Center"
+                                    FontSize="10"
+                                    Foreground="{ThemeResource ResonaOnSurfaceVariantBrush}"
+                                    Text="0:00 / 0:00" />
+                            </StackPanel>
                         </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
-
-            <Border
-                x:Name="LoginOverlay"
-                Grid.Row="1"
-                Background="{ThemeResource ResonaSurfaceBrush}"
-                Visibility="Collapsed">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel
-                        Width="420"
-                        MaxWidth="420"
-                        Padding="24,48"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        Spacing="12">
-                        <TextBlock
-                            FontFamily="Georgia"
-                            FontSize="40"
-                            FontWeight="Bold"
-                            Text="Resona." />
-                        <TextBlock
-                            Style="{ThemeResource SubtitleTextBlockStyle}"
-                            Text="连接你的音乐空间" />
-                        <TextBlock
-                            Opacity="0.7"
-                            Text="登录自托管服务器，聆听本地与网盘收藏。"
-                            TextWrapping="Wrap" />
-                        <TextBox
-                            x:Name="ServerBox"
-                            CornerRadius="12"
-                            Header="服务器地址"
-                            PlaceholderText="https://music.example.com" />
-                        <TextBox
-                            x:Name="UsernameBox"
-                            CornerRadius="12"
-                            Header="用户名"
-                            Text="admin" />
-                        <PasswordBox
-                            x:Name="PasswordBox"
-                            CornerRadius="12"
-                            Header="密码"
-                            PlaceholderText="密码" />
-                        <Button
-                            x:Name="SubmitLoginButton"
-                            Margin="0,12,0,0"
-                            Height="48"
-                            HorizontalAlignment="Stretch"
-                            CornerRadius="12"
-                            Click="OnSubmitLoginClick"
-                            Content="连接服务器"
-                            Style="{ThemeResource AccentButtonStyle}" />
-                        <TextBlock
-                            x:Name="LoginStatus"
-                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                            TextWrapping="Wrap" />
-                        <TextBlock
-                            Opacity="0.7"
-                            FontSize="12"
-                            Text="凭据保存在设备安全存储中。首次使用请先在服务端网页设置管理员密码；公网连接建议使用 HTTPS。"
-                            TextWrapping="Wrap" />
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
-
-            <Border
-                Grid.Row="2"
-                Background="{ThemeResource ResonaSecondaryContainerBrush}"
-                BorderBrush="{ThemeResource ResonaOutlineVariantBrush}"
-                BorderThickness="0,1,0,0">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="2" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <ProgressBar
-                        x:Name="SeekBar"
-                        Grid.Row="0"
-                        Height="2"
-                        Minimum="0"
-                        Maximum="1"
-                        Background="{ThemeResource ResonaSurfaceContainerHighestBrush}"
-                        Foreground="{ThemeResource ResonaAccentBrush}"
-                        Tapped="OnSeekBarTapped" />
-                    <Grid
-                        Grid.Row="1"
-                        Padding="12,8"
-                        ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Border
-                            Grid.Column="0"
-                            Width="48"
-                            Height="48"
-                            Background="{ThemeResource ResonaSurfaceContainerHighestBrush}"
-                            CornerRadius="8">
-                            <SymbolIcon
-                                Foreground="{ThemeResource ResonaOnSecondaryContainerBrush}"
-                                Symbol="MusicInfo" />
-                        </Border>
-                        <StackPanel
-                            Grid.Column="1"
-                            VerticalAlignment="Center"
-                            Spacing="2">
-                            <TextBlock
-                                x:Name="NowPlaying"
-                                FontSize="15"
-                                FontWeight="SemiBold"
-                                Text="Resona · 此刻想听什么？"
-                                TextTrimming="CharacterEllipsis" />
-                            <TextBlock
-                                x:Name="TimeLabel"
-                                Opacity="0.7"
-                                FontSize="12"
-                                Text="0:00 / 0:00" />
-                        </StackPanel>
-                        <StackPanel
-                            Grid.Column="2"
-                            VerticalAlignment="Center"
-                            Orientation="Horizontal"
-                            Spacing="2">
-                            <Button
-                                x:Name="PreviousButton"
-                                Width="36"
-                                Height="36"
-                                Click="OnPreviousClick"
-                                ToolTipService.ToolTip="上一首">
-                                <SymbolIcon Symbol="Previous" />
-                            </Button>
-                            <Button
-                                x:Name="PlayButton"
-                                Width="36"
-                                Height="36"
-                                Click="OnPlayPauseClick"
-                                ToolTipService.ToolTip="播放 / 暂停">
-                                <SymbolIcon Symbol="Play" />
-                            </Button>
-                            <Button
-                                x:Name="NextButton"
-                                Width="36"
-                                Height="36"
-                                Click="OnNextClick"
-                                ToolTipService.ToolTip="下一首">
-                                <SymbolIcon Symbol="Next" />
-                            </Button>
-                        </StackPanel>
-                        <Button
-                            Grid.Column="3"
-                            Width="36"
-                            Height="36"
-                            VerticalAlignment="Center"
-                            Click="OnToggleLyricsClick"
-                            ToolTipService.ToolTip="桌面歌词">
-                            <SymbolIcon Symbol="Comment" />
-                        </Button>
                     </Grid>
-                </Grid>
-            </Border>
+                </Border>
+            </Grid>
         </Grid>
     </Grid>
 </Window>

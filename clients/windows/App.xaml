@@ -7,35 +7,43 @@
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
                     <SolidColorBrush x:Key="ResonaAccentBrush" Color="#FFB397" />
+                    <SolidColorBrush x:Key="ResonaOnPrimaryBrush" Color="#4A1605" />
                     <SolidColorBrush x:Key="ResonaSurfaceBrush" Color="#201F1C" />
                     <SolidColorBrush x:Key="ResonaSurfaceContainerLowBrush" Color="#262722" />
                     <SolidColorBrush x:Key="ResonaSurfaceContainerHighestBrush" Color="#393D33" />
+                    <SolidColorBrush x:Key="ResonaOutlineBrush" Color="#7A7F6E" />
                     <SolidColorBrush x:Key="ResonaOutlineVariantBrush" Color="#55594F" />
                     <SolidColorBrush x:Key="ResonaSecondaryContainerBrush" Color="#3C4434" />
                     <SolidColorBrush x:Key="ResonaOnSecondaryContainerBrush" Color="#DCE7CD" />
-                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#FFB397" />
+                    <SolidColorBrush x:Key="ResonaOnSurfaceBrush" Color="#E7E2D9" />
+                    <SolidColorBrush x:Key="ResonaOnSurfaceVariantBrush" Color="#B9B7AD" />
                     <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#3C4434" />
                     <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#3C4434" />
                     <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="#393D33" />
                     <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="#393D33" />
                     <FontFamily x:Key="ContentControlThemeFontFamily">Microsoft YaHei UI</FontFamily>
                     <CornerRadius x:Key="ListViewItemCornerRadius">9</CornerRadius>
+                    <x:Boolean x:Key="ListViewItemSelectionIndicatorVisualEnabled">False</x:Boolean>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="ResonaAccentBrush" Color="#A83F22" />
+                    <SolidColorBrush x:Key="ResonaOnPrimaryBrush" Color="#FFFFFF" />
                     <SolidColorBrush x:Key="ResonaSurfaceBrush" Color="#F6F4EE" />
                     <SolidColorBrush x:Key="ResonaSurfaceContainerLowBrush" Color="#FBFAF7" />
                     <SolidColorBrush x:Key="ResonaSurfaceContainerHighestBrush" Color="#EAECE2" />
+                    <SolidColorBrush x:Key="ResonaOutlineBrush" Color="#7C7970" />
                     <SolidColorBrush x:Key="ResonaOutlineVariantBrush" Color="#DFDFD6" />
                     <SolidColorBrush x:Key="ResonaSecondaryContainerBrush" Color="#E5EADB" />
                     <SolidColorBrush x:Key="ResonaOnSecondaryContainerBrush" Color="#34432E" />
-                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#A83F22" />
+                    <SolidColorBrush x:Key="ResonaOnSurfaceBrush" Color="#1C1B18" />
+                    <SolidColorBrush x:Key="ResonaOnSurfaceVariantBrush" Color="#494F44" />
                     <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#E5EADB" />
                     <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#E5EADB" />
                     <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="#EAECE2" />
                     <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="#EAECE2" />
                     <FontFamily x:Key="ContentControlThemeFontFamily">Microsoft YaHei UI</FontFamily>
                     <CornerRadius x:Key="ListViewItemCornerRadius">9</CornerRadius>
+                    <x:Boolean x:Key="ListViewItemSelectionIndicatorVisualEnabled">False</x:Boolean>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
             <ResourceDictionary.MergedDictionaries>

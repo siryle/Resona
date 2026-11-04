@@ -67,6 +67,15 @@ public sealed class Track
             return $"{totalSeconds / 60}:{totalSeconds % 60:00}";
         }
     }
+
+    public string FormatBitrate
+    {
+        get
+        {
+            var format = string.IsNullOrWhiteSpace(Format) ? "AUDIO" : Format.ToUpperInvariant();
+            return Bitrate is > 0 ? $"{format} {(int)Math.Round(Bitrate.Value / 1000.0)}K" : format;
+        }
+    }
 }
 
 public sealed class PagedTracks
