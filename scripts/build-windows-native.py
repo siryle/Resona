@@ -78,14 +78,13 @@ def main():
 
     stage = ROOT / ".build/windows-stage"
     shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir(parents=True)
 
     version_quad = f"{v['version']}.{v['build']}"
     command = [
         str(msbuild),
         str(CLIENT / "Resona.Windows.csproj"),
         "/restore",
-        "/t:Publish",
+        "/t:Build",
         "/p:Configuration=Release",
         "/p:Platform=x64",
         "/p:RuntimeIdentifier=win-x64",
@@ -94,10 +93,15 @@ def main():
         f"/p:AssemblyVersion={version_quad}",
         f"/p:FileVersion={version_quad}",
         f"/p:InformationalVersion={v['version']}+{v['build']}",
-        f"/p:PublishDir={stage}\\",
         "/v:minimal",
     ]
     subprocess.run(command, cwd=ROOT, env=env, check=True)
+
+    bundle = (
+        CLIENT
+        / "bin/x64/Release/net8.0-windows10.0.19041.0/win-x64"
+    )
+    shutil.copytree(bundle, stage)
 
     for name in ("LICENSE", "THIRD_PARTY.md"):
         shutil.copy2(ROOT / name, stage / name)
