@@ -1,0 +1,163 @@
+<Window
+    x:Class="Resona.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:models="using:Resona.Windows.Models"
+    Title="Resona">
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid
+            Grid.Row="0"
+            Padding="16,12"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+            ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button
+                x:Name="LoginButton"
+                Grid.Column="0"
+                Click="OnLoginClick">
+                <SymbolIcon Symbol="Contact" />
+            </Button>
+            <TextBox
+                x:Name="SearchBox"
+                Grid.Column="1"
+                PlaceholderText="搜索歌曲、艺术家或专辑"
+                TextChanged="OnSearchChanged" />
+            <Button
+                x:Name="LogoutButton"
+                Grid.Column="2"
+                Click="OnLogoutClick"
+                Visibility="Collapsed">
+                <FontIcon Glyph="&#xE7E8;" />
+            </Button>
+        </Grid>
+
+        <ListView
+            x:Name="TrackList"
+            Grid.Row="1"
+            IsItemClickEnabled="True"
+            ItemClick="OnTrackItemClick"
+            SelectionMode="Single">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="models:Track">
+                    <Grid Padding="0,8" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <SymbolIcon Grid.Column="0" Symbol="MusicInfo" />
+                        <StackPanel Grid.Column="1">
+                            <TextBlock
+                                Text="{x:Bind Title}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Opacity="0.7"
+                                Text="{x:Bind Artist}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <TextBlock
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            Opacity="0.6"
+                            Text="{x:Bind Album}"
+                            TextTrimming="CharacterEllipsis" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <Border
+            x:Name="LoginOverlay"
+            Grid.Row="1"
+            Padding="24"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Visibility="Collapsed">
+            <StackPanel Width="360" Spacing="12">
+                <TextBlock
+                    Style="{ThemeResource SubtitleTextBlockStyle}"
+                    Text="连接到 Resona" />
+                <TextBox
+                    x:Name="ServerBox"
+                    PlaceholderText="服务器地址，如 http://192.168.1.10:8080" />
+                <TextBox
+                    x:Name="UsernameBox"
+                    PlaceholderText="用户名"
+                    Text="admin" />
+                <PasswordBox
+                    x:Name="PasswordBox"
+                    PlaceholderText="密码" />
+                <Button
+                    x:Name="SubmitLoginButton"
+                    Click="OnSubmitLoginClick"
+                    Content="登录"
+                    Style="{ThemeResource AccentButtonStyle}" />
+                <TextBlock
+                    x:Name="LoginStatus"
+                    Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <Grid
+            Grid.Row="2"
+            Padding="16,8"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="0,1,0,0"
+            ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button
+                x:Name="PlayButton"
+                Grid.Column="0"
+                Click="OnPlayPauseClick">
+                <SymbolIcon Symbol="Play" />
+            </Button>
+            <StackPanel
+                Grid.Column="1"
+                VerticalAlignment="Center">
+                <TextBlock
+                    x:Name="NowPlaying"
+                    Text="Resona · 此刻想听什么？"
+                    TextTrimming="CharacterEllipsis" />
+                <TextBlock
+                    x:Name="TimeLabel"
+                    Opacity="0.7"
+                    Text="0:00 / 0:00" />
+            </StackPanel>
+            <Slider
+                x:Name="SeekBar"
+                Grid.Column="2"
+                Width="180"
+                Maximum="1"
+                Minimum="0"
+                StepFrequency="0.001"
+                ValueChanged="OnSeekChanged" />
+            <Button
+                Grid.Column="3"
+                Click="OnToggleLyricsClick"
+                ToolTipService.ToolTip="桌面歌词">
+                <SymbolIcon Symbol="Comment" />
+            </Button>
+        </Grid>
+    </Grid>
+</Window>
