@@ -16,14 +16,16 @@ class InstallerTests(unittest.TestCase):
     def test_expected_installer_failure_logs_work_on_a_windows_console(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / 'downgrade.log'
-            log.write_text('Downgrade was prevented.\n', encoding='utf-8-sig')
+            message = '已安装更高版本的 Resona。'
+            log.write_text(message + '\n', encoding='utf-8-sig')
             output = io.BytesIO()
             console = io.TextIOWrapper(output, encoding='cp1252')
             with patch.object(build_clients.subprocess, 'run',
                               return_value=subprocess.CompletedProcess([], 1)), patch('sys.stdout', console):
                 self.assertEqual(build_clients.run_installer(Path('setup.exe'), log), 1)
             console.flush()
-            self.assertEqual(output.getvalue().decode('cp1252').strip(), 'Downgrade was prevented.')
+            expected = message.encode('cp1252', errors='backslashreplace').decode('cp1252')
+            self.assertEqual(output.getvalue().decode('cp1252').strip(), expected)
 
 
 if __name__ == '__main__':

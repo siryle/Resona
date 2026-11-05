@@ -1,4 +1,4 @@
-#ifndef AppVersion
+﻿#ifndef AppVersion
   #error AppVersion is required
 #endif
 #ifndef SourceDir
@@ -29,6 +29,8 @@ UninstallDisplayIcon={app}\Resona.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+ShowLanguageDialog=no
+LanguageDetectionMethod=none
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -39,10 +41,10 @@ SetupMutex=ResonaSetup
 VersionInfoVersion={#AppVersion}
 VersionInfoProductVersion={#AppVersion}
 VersionInfoProductTextVersion={#AppVersion}
-VersionInfoDescription=Resona Setup
+VersionInfoDescription=Resona 安装程序
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -109,13 +111,13 @@ begin
   begin
     if not StrToVersion(Installed, InstalledVersion) then
     begin
-      SuppressibleMsgBox('Cannot read the installed Resona version. Repair or uninstall it before continuing.', mbError, MB_OK, IDOK);
+      SuppressibleMsgBox('无法读取已安装的 Resona 版本。请先修复或卸载现有版本，然后重试。', mbError, MB_OK, IDOK);
       Result := False;
     end
     else if StrToVersion('{#AppVersion}', PackageVersion) and
       (ComparePackedVersion(InstalledVersion, PackageVersion) > 0) then
     begin
-      SuppressibleMsgBox('A newer Resona version is already installed. Please use a newer installer.', mbError, MB_OK, IDOK);
+      SuppressibleMsgBox('已安装更高版本的 Resona。请使用更新版本的安装程序。', mbError, MB_OK, IDOK);
       Result := False;
     end;
   end;

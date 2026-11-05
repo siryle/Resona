@@ -1,0 +1,2 @@
+scripts/patches/*.patch text eol=lf -whitespace
+clients/resona/windows/languages/ChineseSimplified.isl -whitespace

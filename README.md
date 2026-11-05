@@ -204,7 +204,7 @@ Windows 播放列表采用右侧独立滚动栏，显示封面与当前播放标
 
 Windows 桌面歌词单行显示当前同步歌词，前奏、无歌词或非同步歌词时显示歌名；悬停显示播控、锁定和关闭按钮，拖动空白区域移动。锁定后鼠标穿透，可从托盘或「设置 → 歌词与托盘」解锁；显示、锁定、字号（18–48，默认 28）及位置会保存，多显示器变化时自动限制在可见工作区。关闭歌词不停止播放，也不退出程序。
 
-GitHub Actions 在对应系统构建 Android APK、Windows x64 EXE 安装包、iOS IPA 和 macOS DMG，并提供 SHA-256。Android 默认产出开发证书签名的预览 APK，正式签名可配置 Secrets；Windows 安装包暂无 Authenticode 签名，包含所需的 Visual C++ 运行库，支持原目录升级、同版本修复和阻止降级，保留登录、下载与播放状态。以前解压的 ZIP 不属于已注册安装，需要先用 EXE 安装一次。Windows 播放详情在主窗口显示，采用与 macOS 一致的唱片封面和歌词布局，保留侧栏与底部播放控制。正式产物从 GitHub Release 获取，构建期间也可在 Actions 运行记录的 Artifacts 中下载。详细环境、签名与验证说明见 [客户端文档](clients/resona/README.md)。
+GitHub Actions 在对应系统构建 Android APK、Windows x64 EXE 安装包、iOS IPA 和 macOS DMG，并提供 SHA-256。Android 默认产出开发证书签名的预览 APK，正式签名可配置 Secrets；Windows 安装包使用简体中文向导，暂无 Authenticode 签名，包含所需的 Visual C++ 运行库，支持原目录升级、同版本修复和阻止降级，保留登录、下载与播放状态。以前解压的 ZIP 不属于已注册安装，需要先用 EXE 安装一次。Windows 构建回移 Flutter 上游的浮层语义树修复，保留无障碍支持，并运行开启语义树的原生回归测试。Windows 播放详情在主窗口显示，采用与 macOS 一致的唱片封面和歌词布局，保留侧栏与底部播放控制。正式产物从 GitHub Release 获取，构建期间也可在 Actions 运行记录的 Artifacts 中下载。详细环境、签名与验证说明见 [客户端文档](clients/resona/README.md)。
 
 ## 开发与测试
 

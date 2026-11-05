@@ -7,7 +7,10 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from version import ROOT, stem, version
+from windows_flutter import prepare_windows_flutter
+from windows_accessibility import run_accessibility_smoke
 
 CLIENT = ROOT / 'clients/resona'
 
@@ -36,6 +39,13 @@ def main():
     if out.exists():
         raise SystemExit(f'{out.name} already exists; verify and reuse it, or bump VERSION.json.')
 
+    if args.target == 'windows':
+        sdk = prepare_windows_flutter(flutter)
+        subprocess.run(
+            [flutter, 'test', 'test/semantics/semantics_update_test.dart'],
+            cwd=sdk / 'packages/flutter', check=True,
+        )
+
     def run(*args):
         subprocess.run([flutter, *args], cwd=CLIENT, check=True)
 
@@ -48,6 +58,13 @@ def main():
     run('pub', 'get', '--enforce-lockfile')
     run('analyze', '--fatal-infos')
     run('test')
+    if args.target == 'windows':
+        run('build', 'windows', '--release',
+            '--target=test/windows_accessibility_smoke.dart',
+            f'--build-name={v["version"]}', f'--build-number={v["build"]}')
+        run_accessibility_smoke(
+            CLIENT / 'build/windows/x64/runner/Release/Resona.exe', CLIENT,
+        )
     command = ['build', 'apk' if args.target == 'android' else 'windows', '--release',
                f'--build-name={v["version"]}', f'--build-number={v["build"]}']
     run(*command)
@@ -140,7 +157,9 @@ def run_installer(installer, log, directory=None):
         command.append(f'/DIR={directory}')
     completed = subprocess.run(command, timeout=180)
     if completed.returncode and log.is_file():
-        print('\n'.join(log.read_text(encoding='utf-8-sig', errors='replace').splitlines()[-30:]))
+        text = '\n'.join(log.read_text(encoding='utf-8-sig', errors='replace').splitlines()[-30:])
+        encoding = sys.stdout.encoding or 'utf-8'
+        print(text.encode(encoding, errors='backslashreplace').decode(encoding))
     return completed.returncode
 
 

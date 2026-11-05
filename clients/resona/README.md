@@ -106,8 +106,9 @@ uninstaller. It reuses the previous installation directory, supports same-versio
 repair and rejects downgrades. Its optional post-install launch retains the
 installer's current privileges only when the desktop shell is already elevated,
 so Windows does not block tray registration across integrity levels. Otherwise
-the client launches as the original user. Its wizard uses the compiler's bundled English
-messages. On disposable GitHub Actions runners, packaging tests an older
+the client launches as the original user. Its installation and uninstallation
+wizards use the bundled Simplified Chinese translation, including upgrade errors.
+On disposable GitHub Actions runners, packaging tests an older
 registered fixture followed by an upgrade without a directory argument, verifies
 installed files, tests repair and downgrade rejection, and uninstalls the app.
 
@@ -122,6 +123,21 @@ When Explorer is running, they also verify actual tray registration and recovery
 after the shell loses an icon; these shell checks are skipped on headless runners.
 Lyric-window lookups are restricted to the test thread so an open client is unaffected.
 The test executable is outside the packaged application directory.
+
+Windows builds apply the source backport of
+[Flutter #193372](https://github.com/flutter/flutter/pull/193372) to the pinned
+3.47.8 SDK before compiling. This prevents detached OverlayPortal semantics nodes
+from reaching the native accessibility tree during route and visibility changes,
+without disabling accessibility. The patch and upstream regression tests are
+under `scripts/patches/`; an incompatible SDK or conflicting local SDK changes
+stop the build. Repeated builds reuse the verified patch.
+
+Packaging runs the upstream semantics regression suite and a separate native
+Windows smoke application with semantics enabled. The smoke application exercises
+the Resona workspace, route and dialog transitions, tooltips, sliders and hidden
+overlay anchors, and rejects accessibility-bridge errors as well as crashes.
+It uses fixture data without loading credentials or audio. The production
+application is rebuilt afterwards, so the smoke application is never packaged.
 
 Without signing credentials, Android builds use a development certificate and
 are named `-preview.apk`. They can be sideloaded but different build machines

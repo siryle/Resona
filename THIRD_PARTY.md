@@ -116,7 +116,7 @@ v1.61.0 (BSD-3-Clause):
 
 ## Android / Windows client
 
-The shared client in `clients/resona` uses unmodified Flutter packages, pinned
+The shared client in `clients/resona` uses unmodified Dart packages, pinned
 in `pubspec.lock`:
 
 - Flutter and Dart: https://github.com/flutter/flutter (BSD-3-Clause)
@@ -126,6 +126,19 @@ in `pubspec.lock`:
 - crypto: https://github.com/dart-lang/core/tree/main/pkgs/crypto (BSD-3-Clause)
 - audio_service: https://github.com/ryanheise/audio_service (MIT)
 - audio_session: https://github.com/ryanheise/audio_session (MIT)
+
+Windows builds backport Flutter's BSD-3-Clause OverlayPortal semantics fix
+from https://github.com/flutter/flutter/pull/193372, merged upstream as
+`b304cf18b6864d141cf08e26a07898901cddb4b5`, to Flutter 3.47.8.
+The source patch and its upstream regression tests are preserved in
+`scripts/patches/flutter-3.47.8-semantics.patch`; the SDK's original copyright
+and license remain intact.
+
+The Windows installer includes the unmodified Simplified Chinese translation
+from Inno Setup 6.7.1:
+https://github.com/jrsoftware/issrc/blob/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl.
+Its source notices and Inno Setup license are retained under
+`clients/resona/windows/languages/`.
 
 Flutter includes package notices in its generated license registry, available
 from the client Settings page. Delivery packages also include this file and
