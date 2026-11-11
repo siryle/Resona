@@ -186,6 +186,37 @@ func (s *Scanner) localLyrics(t Track) (*SavedLyrics, error) {
 	return &SavedLyrics{Text: string(data), Source: "local", Synced: true}, nil
 }
 
+func (s *Scanner) hasLocalLyrics(t Track) bool {
+	path := strings.TrimSuffix(t.Path, filepath.Ext(t.Path)) + ".lrc"
+	real, err := filepath.EvalSymlinks(path)
+	root := s.config.LibraryDir
+	if t.Library == "cloud" {
+		root = filepath.Join(s.config.DataDir, "cloud115", "strm")
+	}
+	if err != nil || !within(root, real) {
+		return false
+	}
+	f, err := os.Open(real)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > maxLyricsSize {
+		return false
+	}
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := f.Read(buf)
+		if strings.TrimSpace(string(buf[:n])) != "" {
+			return true
+		}
+		if readErr != nil {
+			return false
+		}
+	}
+}
+
 func (s *Scanner) readLyrics(ctx context.Context, t Track) (*SavedLyrics, error) {
 	s.store.mu.RLock()
 	disk := s.store.state.Tracks[t.ID]

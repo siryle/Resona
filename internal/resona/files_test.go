@@ -200,3 +200,27 @@ func TestManagedFilesOutsideShortcuts(t *testing.T) {
 		t.Fatal("external copy lost content", got)
 	}
 }
+
+func TestFileOperationBodyLimit(t *testing.T) {
+	s := testServer(t)
+	token := loginToken(t, s)
+	h := s.Handler()
+	wide := `{"action":"delete","root":"library","paths":["` + strings.Repeat("a", 20<<10) + `"]}`
+	if w := request(h, "POST", "/api/v1/files/operations", wide, token); w.Code == 400 && strings.Contains(w.Body.String(), "invalid JSON") {
+		t.Fatal("local file operation rejected a body under 512 KiB", w.Body.String())
+	}
+	cloud := `{"action":"delete","paths":["/` + strings.Repeat("a", 20<<10) + `"]}`
+	if w := request(h, "POST", "/api/v1/cloud115/files/operations", cloud, token); w.Code == 400 && strings.Contains(w.Body.String(), "invalid JSON") {
+		t.Fatal("115 file operation rejected a body under 512 KiB", w.Body.String())
+	}
+	huge := `{"action":"delete","root":"library","paths":["` + strings.Repeat("b", 600<<10) + `"]}`
+	for _, path := range []string{"/api/v1/files/operations", "/api/v1/cloud115/files/operations"} {
+		if w := request(h, "POST", path, huge, token); w.Code != 400 || !strings.Contains(w.Body.String(), "invalid JSON") {
+			t.Fatal("oversized file operation accepted", path, w.Code, w.Body.String())
+		}
+	}
+	login := `{"username":"` + strings.Repeat("u", 20<<10) + `","password":"x"}`
+	if w := request(h, "POST", "/api/v1/auth/login", login, ""); w.Code != 400 || !strings.Contains(w.Body.String(), "invalid JSON") {
+		t.Fatal("login body limit raised", w.Code, w.Body.String())
+	}
+}

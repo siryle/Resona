@@ -383,7 +383,9 @@ func (c *Cloud115) syncTree(ctx context.Context) error {
 			seen[id] = true
 			fingerprint := strings.ToLower(f.SHA1) + ":" + string(f.Size)
 			item, exists := st.Cloud.Items[id]
+			prevSHA, prevSize, prevState := item.SHA1, item.Size, item.State
 			item.RemoteFile = RemoteFile{Account: settings.Account, FileID: string(f.ID), PickCode: f.PickCode, SHA1: strings.ToLower(f.SHA1), Size: size}
+			audioChanged := !exists || prevState == "missing" || prevSHA != item.SHA1 || prevSize != item.Size
 			item.TrackID, item.Name, item.Path, item.UpdatedAt = id, f.Name, f.Path, time.Now().UTC()
 			item.Cover, item.LRC = nil, nil
 			for _, name := range []string{"cover.jpg", "folder.jpg", "cover.png", "folder.png"} {
@@ -404,9 +406,11 @@ func (c *Cloud115) syncTree(ctx context.Context) error {
 			}
 			if !exists || item.Fingerprint != fingerprint || item.State == "missing" {
 				item.State, item.Error = "pending", ""
-				if old, ok := st.Tracks[id]; ok {
-					old.Unavailable = true
-					st.Tracks[id] = old
+				if audioChanged {
+					if old, ok := st.Tracks[id]; ok {
+						old.Unavailable = true
+						st.Tracks[id] = old
+					}
 				}
 			}
 			item.Fingerprint = fingerprint

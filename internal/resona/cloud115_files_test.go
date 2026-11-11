@@ -81,6 +81,7 @@ func TestCloudFileManagerBoundariesAndReferenceOperations(t *testing.T) {
 		if w.Code != 200 {
 			t.Fatal("operation failed", w.Code, w.Body.String())
 		}
+		s.cloud.wg.Wait()
 		last := mutations[len(mutations)-1]
 		if last.path != tc.endpoint || last.form.Get(tc.field) != tc.value {
 			t.Fatal("wrong reference request", last)
@@ -90,6 +91,18 @@ func TestCloudFileManagerBoundariesAndReferenceOperations(t *testing.T) {
 				t.Fatal("wrong target directory")
 			}
 		}
+	}
+	if s.cloud.snapshot().LastSync.IsZero() {
+		t.Fatal("115 file operation did not start STRM generation")
+	}
+	if err := s.store.updateCloud(func(st *libraryState) error {
+		st.Cloud.Settings.Enabled = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := request(s.Handler(), "POST", "/api/v1/cloud115/files/operations", `{"action":"delete","paths":["/Music/Song.lrc"]}`, token); w.Code != 409 || !strings.Contains(w.Body.String(), "启用") {
+		t.Fatal("sync start failure was hidden", w.Code, w.Body.String())
 	}
 	w = request(s.Handler(), "GET", "/api/v1/files?root=strm", "", token)
 	var listing struct{ Path string }

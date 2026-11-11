@@ -146,7 +146,7 @@ Content-Type: application/json
 
 `GET /api/v1/files?root=filesystem&path=/` 浏览任意服务器可访问路径；`root` 可为 `filesystem`、`library`、`inbox`、`plugins`。路径为空时进入所选快捷目录，绝对路径不受快捷目录范围限制，支持上级路径和目录链接。响应 `{"items":[{"name":"song.flac","path":"/music/library/song.flac","type":"FLAC","size":123,"modified":"...","blocked":false}],"path":"/music/library"}`。目录在前、按名称排序，设备与套接字等特殊条目标记不可操作。
 
-`POST /api/v1/files/operations` 接受 `{"action":"move","root":"filesystem","paths":["/music/inbox/song.flac"],"target_root":"filesystem","target":"/music/library"}`。`action` 为 `copy` / `move` / `rename` / `delete`；`rename` 仅选择一个条目，`target` 是新文件全路径；复制 / 移动的 `target` 为已有目录；删除无需目标。相对路径基于 `root` 快捷目录解析；目标来源省略时沿用 `root`。最多单次 100 项，禁止同时选择父目录及其子条目，递归复制最多 10000 条目，目标同名时不覆盖。
+`POST /api/v1/files/operations` 接受 `{"action":"move","root":"filesystem","paths":["/music/inbox/song.flac"],"target_root":"filesystem","target":"/music/library"}`。`action` 为 `copy` / `move` / `rename` / `delete`；`rename` 仅选择一个条目，`target` 是新文件全路径；复制 / 移动的 `target` 为已有目录；删除无需目标。相对路径基于 `root` 快捷目录解析；目标来源省略时沿用 `root`。最多单次 100 项，禁止同时选择父目录及其子条目，递归复制最多 10000 条目，目标同名时不覆盖。本地与 115 文件操作的 JSON 上限为 512 KiB；其他 JSON 接口仍为 16 KiB。
 
 成功返回 `200 {"completed":2}`；部分失败返回 `409 {"error":"已完成 1 项；…","completed":1}`，已完成项保留。移动 / 重命名 / 删除同步更新音乐库路径或移除已离库的索引，复制不自动入库。扫描 / 写入标签期间返回 `409`。操作有磁盘与索引失败回滚及启动恢复记录；删除由 Web 明确确认后提交。不支持对文件系统根目录本身执行批量修改。仅管理员可访问；Docker 内权限与挂载决定实际可操作范围。
 

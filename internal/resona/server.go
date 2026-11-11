@@ -103,11 +103,15 @@ func apiError(w http.ResponseWriter, status int, msg string) {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, body any) bool {
+	return decodeLimitedBody(w, r, body, 16<<10)
+}
+
+func decodeLimitedBody(w http.ResponseWriter, r *http.Request, body any, limit int64) bool {
 	if media, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); media != "application/json" {
 		apiError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(body); err != nil {
@@ -406,8 +410,7 @@ func (s *Server) tracks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) trackWithLRC(t Track) Track {
 	// Only inspect sidecars on the requested page; never probe audio or contact 115.
 	if local, ok := s.store.Track(t.ID); ok {
-		_, err := s.scanner.localLyrics(local)
-		t.HasLRCLyrics = err == nil
+		t.HasLRCLyrics = s.scanner.hasLocalLyrics(local)
 	}
 	return t
 }

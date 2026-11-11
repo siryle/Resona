@@ -2,6 +2,7 @@ package resona
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,15 +51,57 @@ func (c *Cloud115) pruneMissingSTRMs() error {
 		return nil
 	}
 	defer c.dataMu.Unlock()
-	files := make(map[string]string)
+	root := filepath.Join(c.server.config.DataDir, "cloud115", "strm")
+	present := map[string]struct{}{}
+	blocked := map[string]struct{}{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			blocked[filepath.Clean(path)] = struct{}{}
+			return fs.SkipDir
+		}
+		if d == nil || d.IsDir() {
+			return nil
+		}
+		clean := filepath.Clean(path)
+		if d.Type()&os.ModeSymlink != 0 && c.missingSTRM(clean) {
+			return nil
+		}
+		present[clean] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	files := map[string]string{}
 	c.server.store.mu.RLock()
 	for id, disk := range c.server.store.state.Tracks {
-		if disk.Remote != nil {
-			files[id] = disk.File
+		if disk.Remote == nil || !within(root, disk.File) {
+			continue
 		}
+		file := filepath.Clean(disk.File)
+		if _, ok := present[file]; ok || strmWalkBlocked(file, blocked) {
+			continue
+		}
+		files[id] = disk.File
 	}
 	c.server.store.mu.RUnlock()
 	return c.pruneSTRMFiles(files)
+}
+
+func strmWalkBlocked(path string, blocked map[string]struct{}) bool {
+	for {
+		if _, ok := blocked[path]; ok {
+			return true
+		}
+		dir := filepath.Dir(path)
+		if dir == path {
+			return false
+		}
+		path = dir
+	}
 }
 
 func (c *Cloud115) pruneProbeSTRM(id string) error {

@@ -260,3 +260,38 @@ func TestCloudTreeIncrementalSyncAndMissingFiles(t *testing.T) {
 		t.Fatal("reappearing file not queued")
 	}
 }
+
+func TestCloudTreeSidecarChangeStaysPlayable(t *testing.T) {
+	s := testServer(t)
+	seedCloud(t, s)
+	files := []any{treeFile("1", "0", "Song.mp3")}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse(w, 200, map[string]any{"state": true, "cid": 0, "path": []any{map[string]any{"cid": 0}}, "count": len(files), "data": files})
+	}))
+	defer api.Close()
+	s.cloud.webURL, s.cloud.apiURL = api.URL, api.URL
+	ctx := context.Background()
+	if err := s.cloud.syncTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := cloudTrackID("42", "1")
+	if err := s.store.update(func(st *libraryState) error {
+		item := st.Cloud.Items[id]
+		item.State = "ready"
+		st.Cloud.Items[id] = item
+		remote := item.RemoteFile
+		st.Tracks[id] = DiskTrack{Track: Track{ID: id, Favorite: true}, Remote: &remote}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, treeFile("3", "0", "cover.jpg"), treeFile("4", "0", "folder.jpg"))
+	if err := s.cloud.syncTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	item := s.cloud.snapshot().Items[id]
+	track, ok := s.store.Track(id)
+	if !ok || item.State != "pending" || item.Cover == nil || item.Cover.FileID != "3" || track.Unavailable || !track.Favorite {
+		t.Fatal("cover or folder art blocked playback", item.State, item.Cover, track.Unavailable, track.Favorite)
+	}
+}

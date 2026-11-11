@@ -112,7 +112,7 @@ func (c *Cloud115) files(w http.ResponseWriter, r *http.Request) {
 
 func (c *Cloud115) operateFiles(w http.ResponseWriter, r *http.Request) {
 	var body fileOperation
-	if !decodeBody(w, r, &body) {
+	if !decodeLimitedBody(w, r, &body, 512<<10) {
 		return
 	}
 	if (body.Action != "copy" && body.Action != "move" && body.Action != "rename" && body.Action != "delete") ||
@@ -147,7 +147,15 @@ func (c *Cloud115) operateFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	c.fileBusy = true
 	c.mu.Unlock()
-	defer func() { c.mu.Lock(); c.fileBusy = false; c.mu.Unlock() }()
+	owned := true
+	defer func() {
+		if !owned {
+			return
+		}
+		c.mu.Lock()
+		c.fileBusy = false
+		c.mu.Unlock()
+	}()
 	browser := cloudBrowser{c, r.Context(), map[string][]cloudFile{}}
 	completed := 0
 	for _, source := range body.Paths {
@@ -158,6 +166,15 @@ func (c *Cloud115) operateFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		completed++
 		c.server.logger.Info("115 文件操作已完成", "action", body.Action, "file", source)
+	}
+	c.mu.Lock()
+	c.fileBusy = false
+	owned = false
+	c.mu.Unlock()
+	if err := c.start("sync", ""); err != nil {
+		c.server.logger.Warn("115 文件操作后未能重新生成 STRM", "reason", err)
+		jsonResponse(w, 409, map[string]any{"error": err.Error(), "completed": completed})
+		return
 	}
 	jsonResponse(w, 200, map[string]int{"completed": completed})
 }

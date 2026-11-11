@@ -30,9 +30,6 @@ func (c *Cloud115) routes(mux *http.ServeMux) {
 }
 
 func (c *Cloud115) status(w http.ResponseWriter, r *http.Request) {
-	if err := c.pruneMissingSTRMs(); err != nil {
-		c.server.logger.Warn("清理已删除的 STRM 索引失败", "error", err)
-	}
 	settings := c.summary()
 	schedule := settings.Settings.syncSchedule()
 	settings.Settings.SyncSchedule = &schedule

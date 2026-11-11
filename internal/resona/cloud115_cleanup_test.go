@@ -186,6 +186,48 @@ func TestCloudFileRecoveryRestoresItemsAndQueue(t *testing.T) {
 	}
 }
 
+func TestCloudStatusLeavesDeletedSTRMUntilPrune(t *testing.T) {
+	s := testServer(t)
+	seedCloud(t, s)
+	id, path := seedCloudSTRM(t, s, "7")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	token := loginToken(t, s)
+	if w := request(s.Handler(), "GET", "/api/v1/cloud115", "", token); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if _, ok := s.store.Track(id); !ok {
+		t.Fatal("opening 115 status removed a deleted STRM")
+	}
+	if err := s.cloud.pruneMissingSTRMs(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.store.Track(id); ok {
+		t.Fatal("prune kept a deleted STRM")
+	}
+}
+
+func TestCloudUnreadableSTRMDirectoryIsKept(t *testing.T) {
+	s := testServer(t)
+	seedCloud(t, s)
+	id, path := seedCloudSTRM(t, s, "7")
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("process can read mode 000 directories")
+	}
+	if err := s.cloud.pruneMissingSTRMs(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.store.Track(id); !ok {
+		t.Fatal("permission error removed a track")
+	}
+}
+
 func TestCloudSTRMUsesMainServiceAddress(t *testing.T) {
 	for _, base := range []string{"http://resona.lan:35280", "https://music.example.com"} {
 		t.Run(base, func(t *testing.T) {

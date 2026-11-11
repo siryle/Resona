@@ -249,7 +249,7 @@ func (s *Server) recoverFileOperation() error {
 
 func (s *Server) operateFiles(w http.ResponseWriter, r *http.Request) {
 	var body fileOperation
-	if !decodeBody(w, r, &body) {
+	if !decodeLimitedBody(w, r, &body, 512<<10) {
 		return
 	}
 	if (body.Action != "copy" && body.Action != "move" && body.Action != "rename" && body.Action != "delete") || len(body.Paths) == 0 || len(body.Paths) > 100 ||
