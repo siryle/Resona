@@ -120,6 +120,8 @@ function authMode(status) {
   state.setup = !status.initialized;
   $("username").readOnly = state.setup;
   $("username").value = status.username;
+  $("setup-code-wrap").hidden = !state.setup;
+  $("setup-code").required = state.setup;
   $("confirm-password-wrap").hidden = !state.setup;
   $("confirm-password").required = state.setup;
   $("password").minLength = state.setup ? 8 : 1;
@@ -136,7 +138,7 @@ function authMode(status) {
     ? "为音乐空间，设一把钥匙。"
     : "每一首，都有归处。";
   $("auth-subtitle").textContent = state.setup
-    ? "首次使用，请先设置管理员密码。密码将安全保存在服务器。"
+    ? "首次使用，请填写服务端启动日志中的初始化码，并设置管理员密码。"
     : "登录，回到你的私人音乐库。";
   $("login-button").textContent = state.setup
     ? "设置密码并进入 ↗"
@@ -149,6 +151,7 @@ async function enter() {
   $("app").hidden = false;
   $("password").value = "";
   $("confirm-password").value = "";
+  $("setup-code").value = "";
   await Promise.all([loadSystem(), loadAlbums(), loadJobs(), loadSources()]);
   clearInterval(pollTimer);
   pollTimer = setInterval(() => {
@@ -175,7 +178,10 @@ $("login-form").addEventListener("submit", async (event) => {
         throw new Error("两次输入的密码不一致");
       await api("/auth/setup", {
         method: "POST",
-        body: JSON.stringify({ password: $("password").value }),
+        body: JSON.stringify({
+          password: $("password").value,
+          code: $("setup-code").value.trim(),
+        }),
       });
       authMode({ initialized: true, username: $("username").value });
       $("login-button").disabled = true;

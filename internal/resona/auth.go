@@ -30,15 +30,16 @@ type attempt struct {
 }
 
 type Auth struct {
-	mu       sync.Mutex
-	user     string
-	hash     []byte
-	salt     []byte
-	sessions map[[32]byte]session
-	attempts map[string]attempt
-	secure   bool
-	path     string
-	trusted  []netip.Prefix
+	mu        sync.Mutex
+	user      string
+	hash      []byte
+	salt      []byte
+	sessions  map[[32]byte]session
+	attempts  map[string]attempt
+	secure    bool
+	path      string
+	setupCode string
+	trusted   []netip.Prefix
 }
 
 func NewAuth(c Config) (*Auth, error) {
@@ -46,6 +47,7 @@ func NewAuth(c Config) (*Auth, error) {
 		sessions: map[[32]byte]session{}, attempts: map[string]attempt{}, trusted: c.TrustedProxies}
 	data, err := os.ReadFile(a.path)
 	if errors.Is(err, os.ErrNotExist) {
+		a.setupCode = randomID(4)
 		return a, nil
 	}
 	if err != nil {
@@ -136,6 +138,7 @@ type credentials struct {
 
 var errAlreadyConfigured = errors.New("administrator password is already configured")
 var errSetupRequired = errors.New("请先在服务端网页设置管理员密码")
+var errSetupCode = errors.New("初始化码不正确，请查看服务端启动日志")
 var errPasswordPolicy = errors.New("密码至少需要 8 个字符，且不能超过 1024 字节")
 
 func (a *Auth) initialized() bool {
@@ -144,7 +147,7 @@ func (a *Auth) initialized() bool {
 	return len(a.hash) != 0
 }
 
-func (a *Auth) setup(password string) error {
+func (a *Auth) setup(password, code string) error {
 	if utf8.RuneCountInString(password) < 8 || len(password) > 1024 {
 		return errPasswordPolicy
 	}
@@ -152,6 +155,9 @@ func (a *Auth) setup(password string) error {
 	defer a.mu.Unlock()
 	if len(a.hash) != 0 {
 		return errAlreadyConfigured
+	}
+	if subtle.ConstantTimeCompare([]byte(code), []byte(a.setupCode)) != 1 {
+		return errSetupCode
 	}
 	salt := secureRandom(32)
 	hash, err := pbkdf2.Key(sha256.New, password, salt, 600000, 32)
@@ -215,9 +221,20 @@ func (a *Auth) login(r *http.Request, user, password string) (string, error) {
 		}
 	}
 	at := a.attempts[host]
-	if at.Count >= 8 || (len(a.attempts) >= 4096 && at.Count == 0) {
+	if at.Count >= 8 {
 		a.mu.Unlock()
 		return "", errThrottled
+	}
+	if len(a.attempts) >= 4096 && at.Count == 0 {
+		var oldestKey string
+		var oldest time.Time
+		first := true
+		for key, v := range a.attempts {
+			if first || v.Since.Before(oldest) {
+				oldestKey, oldest, first = key, v.Since, false
+			}
+		}
+		delete(a.attempts, oldestKey)
 	}
 	if at.Count == 0 {
 		at.Since = now

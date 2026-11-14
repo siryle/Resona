@@ -203,14 +203,18 @@ func (s *Scanner) embedTrackLyrics(ctx context.Context, id string, replace bool)
 		if current.Artwork != "" {
 			old := filepath.Join(s.config.DataDir, "artwork", id+".jpg")
 			art := filepath.Join(s.config.DataDir, "artwork", newID+".jpg")
-			if err := os.Link(old, art); err != nil {
-				if !errors.Is(err, os.ErrExist) {
-					return err
-				}
+			if _, statErr := os.Stat(old); statErr != nil {
+				current.Artwork = ""
 			} else {
-				createdArtwork = art
+				if err := os.Link(old, art); err != nil {
+					if !errors.Is(err, os.ErrExist) {
+						return err
+					}
+				} else {
+					createdArtwork = art
+				}
+				current.Artwork = "/api/v1/tracks/" + newID + "/cover"
 			}
-			current.Artwork = "/api/v1/tracks/" + newID + "/cover"
 		}
 		delete(st.Tracks, id)
 		st.Tracks[newID] = current

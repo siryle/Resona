@@ -83,6 +83,16 @@ void main() {
     await server.close(force: true);
   });
 
+  test('sequential playback stays put at either end', () async {
+    c.queue = [Track({'id': 'a'}), Track({'id': 'b'})];
+    c.current = c.queue.first;
+    await c.next(delta: -1);
+    expect(c.current?.id, 'a');
+    c.current = c.queue.last;
+    await c.next();
+    expect(c.current?.id, 'b');
+  });
+
   test(
     'single repeat replays completed audio and manual next still skips',
     () async {

@@ -118,7 +118,8 @@ const fileManager = {
       this.selected.clear();
       this.breadcrumbs();
       const folders = data.items.filter(item => item.type === "文件夹").length;
-      $("files-summary").textContent = `${folders} 个文件夹 · ${data.items.length - folders} 个文件`;
+      $("files-summary").textContent = `${folders} 个文件夹 · ${data.items.length - folders} 个文件${data.truncated ? " · 只显示前 5000 项" : ""}`;
+
       $("files-path").value = data.path;
       $("files-error").textContent = "";
       const rows = data.items.map((item) => {

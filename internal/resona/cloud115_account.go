@@ -146,7 +146,7 @@ func (c *Cloud115) account(w http.ResponseWriter, r *http.Request) {
 		var response struct {
 			Data json.RawMessage `json:"data"`
 		}
-		if err := c.raw(ctx, "GET", base+path, query, state.Cookie, "", &response); err != nil {
+		if err := c.limitedRaw(ctx, "GET", base+path, query, state.Cookie, "", &response); err != nil {
 			return false
 		}
 		var data cloudObject

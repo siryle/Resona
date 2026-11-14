@@ -237,7 +237,7 @@ func (c *Cloud115) authorize(w http.ResponseWriter, r *http.Request) {
 			QRCode string      `json:"qrcode"`
 		} `json:"data"`
 	}
-	if err := c.raw(r.Context(), "GET", c.qrURL+"/api/1.0/web/1.0/token/", nil, "", "", &result); err != nil {
+	if err := c.limitedRaw(r.Context(), "GET", c.qrURL+"/api/1.0/web/1.0/token/", nil, "", "", &result); err != nil {
 		apiError(w, 502, err.Error())
 		return
 	}
@@ -314,7 +314,7 @@ func (c *Cloud115) authStatus(w http.ResponseWriter, r *http.Request) {
 		} `json:"data"`
 	}
 	// Bind the device to the QR session, never to a later polling query.
-	if err := c.raw(r.Context(), "POST", c.qrURL+"/app/1.0/"+auth.ClientType+"/1.0/login/qrcode/",
+	if err := c.limitedRaw(r.Context(), "POST", c.qrURL+"/app/1.0/"+auth.ClientType+"/1.0/login/qrcode/",
 		url.Values{"account": {auth.UID}}, "", "", &result); err != nil {
 		apiError(w, 502, err.Error())
 		return
@@ -330,7 +330,7 @@ func (c *Cloud115) authStatus(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 502, "115 未返回有效的登录 Cookie")
 		return
 	}
-	if err := c.raw(r.Context(), "GET", c.userURL+"/", url.Values{"ct": {"ajax"}, "ac": {"nav"}}, cookie, "", &user); err != nil {
+	if err := c.limitedRaw(r.Context(), "GET", c.userURL+"/", url.Values{"ct": {"ajax"}, "ac": {"nav"}}, cookie, "", &user); err != nil {
 		apiError(w, 502, err.Error())
 		return
 	}

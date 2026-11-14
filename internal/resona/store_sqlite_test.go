@@ -13,6 +13,38 @@ import (
 	"time"
 )
 
+func TestOldJobDetailsAreDropped(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < jobDetailKeep+1; i++ {
+		if err := store.putJob(Job{ID: fmt.Sprintf("job-%d", i), State: "completed", Items: []JobItem{{Filename: "a", State: "imported"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(store.state.Jobs[0].Items) != 1 || len(store.state.Jobs[jobDetailKeep].Items) != 0 {
+		t.Fatal("oldest job kept per-file details")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var items int
+	if err := store.db.QueryRow("SELECT count(*) FROM job_items WHERE job_id='job-0'").Scan(&items); err != nil || items != 0 {
+		t.Fatal("old job details remained in the database", items, err)
+	}
+	newest, _ := store.Job(fmt.Sprintf("job-%d", jobDetailKeep))
+	if len(newest.Items) != 1 {
+		t.Fatal("newest job details were dropped")
+	}
+}
+
 func TestDatabaseMigratesLegacyLibrary(t *testing.T) {
 	dir := t.TempDir()
 	local := DiskTrack{

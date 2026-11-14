@@ -144,6 +144,10 @@ func OpenStore(dir string) (*Store, error) {
 				}
 			}
 		}
+		if i >= jobDetailKeep && j.State != "running" && len(j.Items) > 0 {
+			changed = true
+			j.Items = nil
+		}
 	}
 	// Old Open API credentials cannot be reused as Cookies; preserve the index for re-login.
 	if recovered.Cloud.Account != "" && recovered.Cloud.Cookie == "" {
@@ -407,6 +411,8 @@ func (s *Store) deleteJobs(ids []string, all bool) (int, int, error) {
 	return deleted, running, err
 }
 
+const jobDetailKeep = 3
+
 func (s *Store) putJob(j Job) error {
 	j.Items = append([]JobItem{}, j.Items...)
 	j.Errors = append([]string{}, j.Errors...)
@@ -426,6 +432,11 @@ func (s *Store) putJob(j Job) error {
 		next = append([]Job{j}, next...)
 		if len(next) > 30 {
 			next = next[:30]
+		}
+	}
+	for i := jobDetailKeep; i < len(next); i++ {
+		if next[i].State != "running" {
+			next[i].Items = nil
 		}
 	}
 	err := s.transaction(func(tx *sql.Tx) error {

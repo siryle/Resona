@@ -10,16 +10,16 @@ GET /api/v1/auth/status
 
 响应示例：`{"initialized": false, "username": "admin"}`。
 
-首次访问须先设置密码，部署不需要密码环境变量：
+首次访问须先设置密码。服务启动日志会打印一次性初始化码，部署不需要密码环境变量：
 
 ```http
 POST /api/v1/auth/setup
 Content-Type: application/json
 
-{"password": "a-strong-password-you-choose"}
+{"password": "a-strong-password-you-choose", "code": "初始化码"}
 ```
 
-成功返回 `201 {"initialized":true}`。仅能成功一次；密码少于 8 个字符或超过 1024 字节返回 `400`；已初始化返回 `409`。密码设置和登录为两个独立操作。
+成功返回 `201 {"initialized":true}`。仅能成功一次；密码少于 8 个字符或超过 1024 字节返回 `400`；初始化码不正确返回 `403`；已初始化返回 `409`。密码设置和登录为两个独立操作。
 
 ```http
 POST /api/v1/auth/login
@@ -28,7 +28,7 @@ Content-Type: application/json
 {"username":"admin","password":"a-strong-password-you-choose"}
 ```
 
-响应包含 `token`、`username`、`expires_in`（604800 秒）并设置浏览器 Cookie。未初始化返回 `428`，凭据不正确返回 `401`。同一直接连接 IP 在 15 分钟内最多 8 次登录尝试，成功登录重置计数，超限返回 `429`。最多同时保留 128 个活跃会话。会话持久化，服务重启不使其失效；过期或主动退出后需重新登录。
+响应包含 `token`、`username`、`expires_in`（604800 秒）并设置浏览器 Cookie。未初始化返回 `428`，凭据不正确返回 `401`。同一来源地址在 15 分钟内最多 8 次登录尝试，成功登录重置计数，超限返回 `429`。地址表满时丢掉最旧的记录，不拒绝还没失败过的地址。最多同时保留 128 个活跃会话。会话持久化，服务重启不使其失效；过期或主动退出后需重新登录。
 
 `GET /api/v1/auth/session` 查询当前账号，`POST /api/v1/auth/logout` 注销当前会话。
 
@@ -144,7 +144,7 @@ Content-Type: application/json
 
 ## 文件管理（服务端 Web）
 
-`GET /api/v1/files?root=filesystem&path=/` 浏览任意服务器可访问路径；`root` 可为 `filesystem`、`library`、`inbox`、`plugins`。路径为空时进入所选快捷目录，绝对路径不受快捷目录范围限制，支持上级路径和目录链接。响应 `{"items":[{"name":"song.flac","path":"/music/library/song.flac","type":"FLAC","size":123,"modified":"...","blocked":false}],"path":"/music/library"}`。目录在前、按名称排序，设备与套接字等特殊条目标记不可操作。
+`GET /api/v1/files?root=filesystem&path=/` 浏览任意服务器可访问路径；`root` 可为 `filesystem`、`library`、`inbox`、`plugins`。路径为空时进入所选快捷目录，绝对路径不受快捷目录范围限制，支持上级路径和目录链接。响应 `{"items":[{"name":"song.flac","path":"/music/library/song.flac","type":"FLAC","size":123,"modified":"...","blocked":false}],"path":"/music/library","truncated":false}`。目录在前、按名称排序，最多返回 5000 项，超出时 `truncated` 为 `true`。设备与套接字等特殊条目标记不可操作。
 
 `POST /api/v1/files/operations` 接受 `{"action":"move","root":"filesystem","paths":["/music/inbox/song.flac"],"target_root":"filesystem","target":"/music/library"}`。`action` 为 `copy` / `move` / `rename` / `delete`；`rename` 仅选择一个条目，`target` 是新文件全路径；复制 / 移动的 `target` 为已有目录；删除无需目标。相对路径基于 `root` 快捷目录解析；目标来源省略时沿用 `root`。最多单次 100 项，禁止同时选择父目录及其子条目，递归复制最多 10000 条目，目标同名时不覆盖。本地与 115 文件操作的 JSON 上限为 512 KiB；其他 JSON 接口仍为 16 KiB。
 

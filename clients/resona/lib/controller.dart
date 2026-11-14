@@ -665,11 +665,11 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     final index = queue.indexWhere((t) => t.id == current!.id);
+    if (index < 0) return;
     final next = shuffle && delta > 0 && queue.length > 1
         ? (index + 1 + Random().nextInt(queue.length - 1)) % queue.length
         : index + delta;
-    if (next >= queue.length && !repeat && !repeatOne && !shuffle) {
-      await _player?.pause();
+    if ((next < 0 || next >= queue.length) && !repeat && !repeatOne && !shuffle) {
       return;
     }
     await play(

@@ -126,10 +126,27 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer dir.Close()
-	entries, err := dir.ReadDir(-1)
-	if err != nil {
-		apiError(w, 500, "读取目录失败")
-		return
+	const maxFileList = 5000
+	var entries []fs.DirEntry
+	truncated := false
+	for {
+		batch, readErr := dir.ReadDir(256)
+		if len(entries)+len(batch) > maxFileList {
+			entries = append(entries, batch[:maxFileList-len(entries)]...)
+			truncated = true
+			break
+		}
+		entries = append(entries, batch...)
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			apiError(w, 500, "读取目录失败")
+			return
+		}
+		if len(batch) == 0 {
+			break
+		}
 	}
 	items := []fileEntry{}
 	for _, entry := range entries {
@@ -161,7 +178,7 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 		}
 		return items[i].Name < items[j].Name
 	})
-	jsonResponse(w, 200, map[string]any{"items": items, "path": filepath.ToSlash(filepath.Join("/", path))})
+	jsonResponse(w, 200, map[string]any{"items": items, "path": filepath.ToSlash(filepath.Join("/", path)), "truncated": truncated})
 }
 
 type fileOperation struct {

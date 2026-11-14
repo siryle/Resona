@@ -182,6 +182,41 @@ func TestCloudTreeFailuresPreserveIndex(t *testing.T) {
 	}
 }
 
+func TestCloudSyncSkipsIncompleteAudio(t *testing.T) {
+	s := testServer(t)
+	seedCloud(t, s)
+	badID := cloudTrackID("42", "2")
+	if err := s.store.update(func(st *libraryState) error {
+		remote := RemoteFile{Account: "42", FileID: "2", PickCode: "abcdefghijklmnopq", SHA1: strings.Repeat("b", 40), Size: 10}
+		st.Cloud.Items[badID] = CloudItem{RemoteFile: remote, TrackID: badID, Name: "Bad.mp3", Path: "Bad.mp3", State: "ready"}
+		st.Tracks[badID] = DiskTrack{Track: Track{ID: badID, Title: "Bad", Artist: "A", Favorite: true}, Remote: &remote}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		good, bad := treeFile("1", "0", "Song.mp3"), treeFile("2", "0", "Bad.mp3")
+		bad["sha"] = "invalid"
+		jsonResponse(w, 200, map[string]any{"state": true, "count": 2, "cid": "0", "path": []any{map[string]any{"cid": "0"}}, "offset": 0, "data": []any{good, bad}})
+	}))
+	defer api.Close()
+	s.cloud.webURL, s.cloud.apiURL = api.URL, api.URL
+	if err := s.cloud.syncTree(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	goodID := cloudTrackID("42", "1")
+	if item := s.cloud.snapshot().Items[goodID]; item.State != "pending" {
+		t.Fatal("complete file was not indexed", item)
+	}
+	if item := s.cloud.snapshot().Items[badID]; item.State != "ready" || item.SHA1 != strings.Repeat("b", 40) {
+		t.Fatal("incomplete file replaced the previous index", item)
+	}
+	track, _ := s.store.Track(badID)
+	if !track.Favorite || track.Unavailable {
+		t.Fatal("incomplete file changed playback state", track)
+	}
+}
+
 func TestCloudDirectoryBrowserAndFieldAliases(t *testing.T) {
 	s := testServer(t)
 	seedCloud(t, s)

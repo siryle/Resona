@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,7 @@ func testServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.auth.setup("a-test-password-123"); err != nil {
+	if err := s.auth.setup("a-test-password-123", s.auth.setupCode); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
@@ -136,6 +137,17 @@ func TestLoginThrottleAndExpiry(t *testing.T) {
 	if _, err := s.auth.login(r, "admin", "a-test-password-123"); err != nil {
 		t.Fatal("rate limit did not recover", err)
 	}
+	s.auth.mu.Lock()
+	s.auth.attempts = map[string]attempt{}
+	now := time.Now()
+	for i := 0; i < 4096; i++ {
+		s.auth.attempts[fmt.Sprintf("filled-%d", i)] = attempt{Count: 1, Since: now}
+	}
+	s.auth.mu.Unlock()
+	r.RemoteAddr = "203.0.113.9:9"
+	if _, err := s.auth.login(r, "admin", "a-test-password-123"); err != nil {
+		t.Fatal("full attempt table rejected a new client", err)
+	}
 }
 
 func TestFirstRunSetupIsRequiredPersistentAndCreateOnly(t *testing.T) {
@@ -153,10 +165,13 @@ func TestFirstRunSetupIsRequiredPersistentAndCreateOnly(t *testing.T) {
 	if w.Code != 428 {
 		t.Fatal("uninitialized login accepted", w.Code)
 	}
-	if w := request(h, "POST", "/api/v1/auth/setup", `{"password":"short"}`, ""); w.Code != 400 {
+	if w := request(h, "POST", "/api/v1/auth/setup", `{"password":"short","code":"`+s.auth.setupCode+`"}`, ""); w.Code != 400 {
 		t.Fatal("weak setup password accepted")
 	}
-	w = request(h, "POST", "/api/v1/auth/setup", `{"password":"a-test-password-123"}`, "")
+	if w := request(h, "POST", "/api/v1/auth/setup", `{"password":"a-test-password-123"}`, ""); w.Code != 403 {
+		t.Fatal("setup without the startup code accepted", w.Code)
+	}
+	w = request(h, "POST", "/api/v1/auth/setup", `{"password":"a-test-password-123","code":"`+s.auth.setupCode+`"}`, "")
 	if w.Code != 201 {
 		t.Fatal("setup failed", w.Code, w.Body.String())
 	}
@@ -193,7 +208,7 @@ func TestSetupPasswordLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body, err := json.Marshal(map[string]string{"password": tc.password})
+			body, err := json.Marshal(map[string]string{"password": tc.password, "code": s.auth.setupCode})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -226,7 +241,7 @@ func TestConcurrentSetupCanOnlySucceedOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- a.setup("a-test-password-123")
+			results <- a.setup("a-test-password-123", a.setupCode)
 		}()
 	}
 	wg.Wait()

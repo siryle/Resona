@@ -71,6 +71,9 @@ func NewServer(ctx context.Context, c Config) (*Server, error) {
 		return nil, err
 	}
 	logger.Info("Resona 已启动", "version", root.Version())
+	if auth.setupCode != "" {
+		logger.With("category", "settings").Info("首次设置请使用初始化码 " + auth.setupCode)
+	}
 	s.plugins = newPlugins(s)
 	s.cloud = newCloud115(s)
 	if err := s.cloud.pruneMissingSTRMs(); err != nil {
@@ -348,14 +351,17 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Password string `json:"password"`
+		Code     string `json:"code"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	err := s.auth.setup(body.Password)
+	err := s.auth.setup(body.Password, strings.TrimSpace(body.Code))
 	switch {
 	case errors.Is(err, errAlreadyConfigured):
 		apiError(w, 409, "管理员密码已设置，请使用已有密码登录")
+	case errors.Is(err, errSetupCode):
+		apiError(w, 403, err.Error())
 	case errors.Is(err, errPasswordPolicy):
 		apiError(w, 400, err.Error())
 	case err != nil:

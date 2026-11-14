@@ -73,7 +73,7 @@ func TestLogFilteringPersistenceAndPrivacy(t *testing.T) {
 		t.Fatal(result)
 	}
 	reopened, err := openLogBook(s.config.DataDir)
-	if err != nil || len(reopened.entries) != 5 {
+	if err != nil || len(reopened.entries) != 6 {
 		t.Fatal("logs not persistent", err, reopened)
 	}
 	for _, method := range []string{"DELETE"} {

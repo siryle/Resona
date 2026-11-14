@@ -368,6 +368,7 @@ func (c *Cloud115) syncTree(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		skipped, kept := 0, 0
 		for _, f := range files {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -375,11 +376,15 @@ func (c *Cloud115) syncTree(ctx context.Context) error {
 			if !supported(f.Name) {
 				continue
 			}
+			id := cloudTrackID(settings.Account, string(f.ID))
 			size, err := strconv.ParseInt(string(f.Size), 10, 64)
 			if err != nil || size <= 0 || !validHex(f.SHA1, 40) || f.PickCode == "" {
-				return errors.New("115 音乐文件信息不完整，请重新同步")
+				// Keep a previous index entry, but do not publish this incomplete file.
+				seen[id] = true
+				skipped++
+				continue
 			}
-			id := cloudTrackID(settings.Account, string(f.ID))
+			kept++
 			seen[id] = true
 			fingerprint := strings.ToLower(f.SHA1) + ":" + string(f.Size)
 			item, exists := st.Cloud.Items[id]
@@ -423,6 +428,12 @@ func (c *Cloud115) syncTree(ctx context.Context) error {
 				old.Remote = &remote
 				st.Tracks[id] = old
 			}
+		}
+		if skipped > 0 && kept == 0 {
+			return errors.New("115 音乐文件信息不完整，请重新同步")
+		}
+		if skipped > 0 {
+			c.server.logger.Warn("已跳过信息不完整的网盘音频", "count", skipped)
 		}
 		for id, item := range st.Cloud.Items {
 			if !seen[id] && item.Account == settings.Account {

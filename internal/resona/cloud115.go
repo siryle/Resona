@@ -84,6 +84,12 @@ type cloudAuth struct {
 	Expires         time.Time
 }
 
+type cloudFetch struct {
+	done chan struct{}
+	url  string
+	err  error
+}
+
 type cloudLink struct {
 	URL     string
 	Expires time.Time
@@ -113,6 +119,7 @@ type Cloud115 struct {
 	message                        string
 	auth                           cloudAuth
 	links                          map[string]cloudLink
+	pending                        map[string]*cloudFetch
 	downloadPath                   string
 	scheduleChanged                chan struct{}
 	wg                             sync.WaitGroup
@@ -126,7 +133,7 @@ func newCloud115(s *Server) *Cloud115 {
 	c := &Cloud115{server: s, client: &http.Client{Transport: transport, Timeout: 45 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		apiURL: "https://proapi.115.com", webURL: "https://webapi.115.com", userURL: "https://my.115.com",
-		qrURL: "https://qrcodeapi.115.com", apiGate: make(chan struct{}, 1), linkGate: make(chan struct{}, 1), links: map[string]cloudLink{},
+		qrURL: "https://qrcodeapi.115.com", apiGate: make(chan struct{}, 1), linkGate: make(chan struct{}, 1), links: map[string]cloudLink{}, pending: map[string]*cloudFetch{},
 		scheduleChanged: make(chan struct{}, 1)}
 	c.probe = c.probeFile
 	return c
@@ -258,17 +265,44 @@ func (c *Cloud115) request(ctx context.Context, method, path string, form url.Va
 }
 
 func (c *Cloud115) requestAt(ctx context.Context, base, method, path string, form url.Values, ua string, out any) error {
+	cookie, err := c.exchange(ctx, base, method, path, form, ua, out)
+	if errors.Is(err, errCloudAuth) && cookie != "" {
+		if saveErr := c.forgetCookie(cookie); saveErr != nil {
+			return errors.New("无法保存 115 登录失效状态")
+		}
+	}
+	return err
+}
+
+// Short 115 calls share the request spacing. The QR status poll stays outside this gate:
+// it can wait about 30 seconds and must not block playback.
+func (c *Cloud115) limitedRaw(ctx context.Context, method, endpoint string, form url.Values, cookie, ua string, out any) error {
 	select {
 	case c.apiGate <- struct{}{}:
 		defer func() { <-c.apiGate }()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	if err := cloudWait(ctx, time.Until(c.nextRequest)); err != nil {
+		return err
+	}
+	err := c.raw(ctx, method, endpoint, form, cookie, ua, out)
+	c.nextRequest = time.Now().Add(300 * time.Millisecond)
+	return err
+}
+
+func (c *Cloud115) exchange(ctx context.Context, base, method, path string, form url.Values, ua string, out any) (string, error) {
+	select {
+	case c.apiGate <- struct{}{}:
+		defer func() { <-c.apiGate }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 	c.server.store.mu.RLock()
 	cookie := c.server.store.state.Cloud.Cookie
 	c.server.store.mu.RUnlock()
 	if cookie == "" {
-		return errCloudAuth
+		return "", errCloudAuth
 	}
 	var err error
 	retries := 3
@@ -280,7 +314,7 @@ func (c *Cloud115) requestAt(ctx context.Context, base, method, path string, for
 	}
 	for attempt := 0; ; attempt++ {
 		if err := cloudWait(ctx, time.Until(c.nextRequest)); err != nil {
-			return err
+			return cookie, err
 		}
 		err = c.raw(ctx, method, base+path, form, cookie, ua, out)
 		c.nextRequest = time.Now().Add(300 * time.Millisecond)
@@ -295,23 +329,22 @@ func (c *Cloud115) requestAt(ctx context.Context, base, method, path string, for
 			break
 		}
 	}
-	if errors.Is(err, errCloudAuth) {
-		if saveErr := c.server.store.updateCloud(func(st *libraryState) error {
-			if st.Cloud.Cookie == cookie {
-				st.Cloud.Cookie = ""
-				for id, track := range st.Tracks {
-					if track.Remote != nil {
-						track.Unavailable = true
-						st.Tracks[id] = track
-					}
+	return cookie, err
+}
+
+func (c *Cloud115) forgetCookie(cookie string) error {
+	return c.server.store.updateCloud(func(st *libraryState) error {
+		if st.Cloud.Cookie == cookie {
+			st.Cloud.Cookie = ""
+			for id, track := range st.Tracks {
+				if track.Remote != nil {
+					track.Unavailable = true
+					st.Tracks[id] = track
 				}
 			}
-			return nil
-		}); saveErr != nil {
-			return errors.New("无法保存 115 登录失效状态")
 		}
-	}
-	return err
+		return nil
+	})
 }
 
 type cloudFile struct {
@@ -350,52 +383,110 @@ func (c *Cloud115) invalidate(file RemoteFile, ua string) {
 	<-c.linkGate
 }
 
-func (c *Cloud115) downloadURL(ctx context.Context, file RemoteFile, ua string) (string, error) {
-	key := file.Account + "\x00" + file.PickCode + "\x00" + file.SHA1 + "\x00" + ua
+func (c *Cloud115) withLinkCache(ctx context.Context, fn func() error) error {
 	select {
 	case c.linkGate <- struct{}{}:
 		defer func() { <-c.linkGate }()
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return ctx.Err()
 	}
-	settings := c.summary()
-	if !settings.Settings.Enabled || settings.Account != file.Account || settings.Cookie == "" {
-		return "", errors.New("115 音源已停用或账号已更换")
+	return fn()
+}
+
+func (c *Cloud115) downloadURL(ctx context.Context, file RemoteFile, ua string) (string, error) {
+	key := file.Account + "\x00" + file.PickCode + "\x00" + file.SHA1 + "\x00" + ua
+	var settings CloudState
+	var paths []string
+	var cached string
+	var flight *cloudFetch
+	leader := false
+	err := c.withLinkCache(ctx, func() error {
+		settings = c.summary()
+		if !settings.Settings.Enabled || settings.Account != file.Account || settings.Cookie == "" {
+			return errors.New("115 音源已停用或账号已更换")
+		}
+		if hit, ok := c.links[key]; ok && time.Now().Before(hit.Expires) {
+			cached = hit.URL
+			return nil
+		}
+		if existing := c.pending[key]; existing != nil {
+			flight = existing
+			return nil
+		}
+		flight = &cloudFetch{done: make(chan struct{})}
+		c.pending[key] = flight
+		leader = true
+		paths = []string{"/android/2.0/ufile/download", "/app/chrome/downurl"}
+		if c.downloadPath == paths[1] {
+			slices.Reverse(paths)
+		}
+		return nil
+	})
+	if err != nil || cached != "" {
+		return cached, err
 	}
-	if cached, ok := c.links[key]; ok && time.Now().Before(cached.Expires) {
-		return cached.URL, nil
+	if !leader {
+		select {
+		case <-flight.done:
+			return flight.url, flight.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
-	paths := []string{"/android/2.0/ufile/download", "/app/chrome/downurl"}
-	if c.downloadPath == paths[1] {
-		slices.Reverse(paths)
-	}
-	var link string
-	var err, previous error
+	var link, used string
+	var previous error
 	for _, path := range paths {
 		link, err = c.fetchDownloadURL(ctx, file, ua, path)
 		if err == nil {
-			c.downloadPath = path
+			used = path
 			break
 		}
 		if previous != nil {
 			if errors.Is(err, errCloudAuth) || ctx.Err() != nil {
-				return "", err
+				break
 			}
 			cause := errors.Join(previous, err)
 			if cloudRestricted(cause) {
-				return "", &cloudDownloadError{cause: cause, http: settings.Settings.DownloadHTTP}
+				err = &cloudDownloadError{cause: cause, http: settings.Settings.DownloadHTTP}
+			} else {
+				err = cause
 			}
-			return "", cause
+			break
 		}
 		var rejection *cloudHTTPError
 		if !errors.Is(err, errCloudCookieLink) && (!errors.As(err, &rejection) || rejection.Status != http.StatusMethodNotAllowed) {
-			return "", err
+			break
 		}
 		previous = err
 	}
-	if err != nil {
-		return "", err
+	var expires time.Time
+	if err == nil {
+		expires, err = cloudLinkExpiry(link)
 	}
+	c.finishFetch(key, flight, link, used, expires, err)
+	return flight.url, flight.err
+}
+
+func (c *Cloud115) finishFetch(key string, flight *cloudFetch, link, used string, expires time.Time, err error) {
+	c.linkGate <- struct{}{}
+	defer func() { <-c.linkGate }()
+	if err == nil {
+		if hit, ok := c.links[key]; ok && time.Now().Before(hit.Expires) {
+			link = hit.URL
+		} else {
+			if len(c.links) >= 512 {
+				clear(c.links)
+			}
+			c.links[key] = cloudLink{URL: link, Expires: expires}
+			c.downloadPath = used
+		}
+	}
+	flight.url, flight.err = link, err
+	close(flight.done)
+	delete(c.pending, key)
+}
+
+func cloudLinkExpiry(link string) (time.Time, error) {
 	u, _ := url.Parse(link)
 	expires := time.Now().Add(5 * time.Minute)
 	if stamp, err := strconv.ParseInt(u.Query().Get("t"), 10, 64); err == nil {
@@ -405,13 +496,9 @@ func (c *Cloud115) downloadURL(ctx context.Context, file RemoteFile, ua string) 
 		}
 	}
 	if !expires.After(time.Now()) {
-		return "", errors.New("115 下载地址已过期，请重试")
+		return time.Time{}, errors.New("115 下载地址已过期，请重试")
 	}
-	if len(c.links) >= 512 {
-		clear(c.links)
-	}
-	c.links[key] = cloudLink{URL: link, Expires: expires}
-	return link, nil
+	return expires, nil
 }
 
 var errCloudCookieLink = errors.New("115 返回的地址需要额外 Cookie，无法安全用于 302 播放，请重新扫码登录")
