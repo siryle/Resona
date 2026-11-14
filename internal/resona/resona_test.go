@@ -41,7 +41,7 @@ func testServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.auth.setup("a-test-password-123", s.auth.setupCode); err != nil {
+	if err := s.auth.setup(nil, "a-test-password-123", s.auth.setupCode); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
@@ -241,7 +241,7 @@ func TestConcurrentSetupCanOnlySucceedOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- a.setup("a-test-password-123", a.setupCode)
+			results <- a.setup(nil, "a-test-password-123", a.setupCode)
 		}()
 	}
 	wg.Wait()

@@ -1111,8 +1111,10 @@ $("lyrics-embed").addEventListener("click", async () => {
         if (track.id === id) Object.assign(track, updated);
     if (current) {
       Object.assign(state.current, updated);
+      audio.addEventListener("loadedmetadata", () => {
+        if (state.current?.id === updated.id && position > 0) audio.currentTime = position;
+      }, { once: true });
       audio.src = `/api/v1/tracks/${updated.id}/stream`;
-      audio.currentTime = position;
       if (!paused) audio.play().catch((error) => toast(error.message));
       listening.loadedFor = null;
       renderListeningTrack();

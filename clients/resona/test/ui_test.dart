@@ -15,6 +15,11 @@ void main() {
       expect(lines.map((line) => line.seconds), [1.4, 1.9, 3.023]);
       expect(lines.map((line) => line.text), ['Hello', 'World', 'Hello']);
       expect(parseLyrics('Plain lyrics').single.seconds, null);
+      expect(
+        parseLyrics('[00:01.00]\n[00:02.00]Keep').map((line) => line.text),
+        ['Keep'],
+      );
+      expect(parseLyrics('[offset:-5000]\n[00:01.00]Late').single.seconds, 0);
     },
   );
   for (final width in [390.0, 800.0, 1280.0]) {

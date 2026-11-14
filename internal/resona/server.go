@@ -356,12 +356,15 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	err := s.auth.setup(body.Password, strings.TrimSpace(body.Code))
+	err := s.auth.setup(r, body.Password, strings.TrimSpace(body.Code))
 	switch {
 	case errors.Is(err, errAlreadyConfigured):
 		apiError(w, 409, "管理员密码已设置，请使用已有密码登录")
 	case errors.Is(err, errSetupCode):
 		apiError(w, 403, err.Error())
+	case errors.Is(err, errThrottled):
+		w.Header().Set("Retry-After", "900")
+		apiError(w, 429, "初始化尝试过多，请稍后重试")
 	case errors.Is(err, errPasswordPolicy):
 		apiError(w, 400, err.Error())
 	case err != nil:

@@ -178,7 +178,8 @@ func telegramUserAllowed(whitelist string, user int64) bool {
 		return true
 	}
 	for _, id := range list {
-		if id == strconv.FormatInt(user, 10) {
+		parsed, err := strconv.ParseInt(id, 10, 64)
+		if err == nil && parsed == user {
 			return true
 		}
 	}

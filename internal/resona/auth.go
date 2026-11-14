@@ -47,7 +47,7 @@ func NewAuth(c Config) (*Auth, error) {
 		sessions: map[[32]byte]session{}, attempts: map[string]attempt{}, trusted: c.TrustedProxies}
 	data, err := os.ReadFile(a.path)
 	if errors.Is(err, os.ErrNotExist) {
-		a.setupCode = randomID(4)
+		a.setupCode = randomID(16)
 		return a, nil
 	}
 	if err != nil {
@@ -147,7 +147,7 @@ func (a *Auth) initialized() bool {
 	return len(a.hash) != 0
 }
 
-func (a *Auth) setup(password, code string) error {
+func (a *Auth) setup(r *http.Request, password, code string) error {
 	if utf8.RuneCountInString(password) < 8 || len(password) > 1024 {
 		return errPasswordPolicy
 	}
@@ -156,8 +156,16 @@ func (a *Auth) setup(password, code string) error {
 	if len(a.hash) != 0 {
 		return errAlreadyConfigured
 	}
+	if r != nil {
+		if err := a.consumeAttempt(a.clientAddress(r), time.Now()); err != nil {
+			return err
+		}
+	}
 	if subtle.ConstantTimeCompare([]byte(code), []byte(a.setupCode)) != 1 {
 		return errSetupCode
+	}
+	if r != nil {
+		delete(a.attempts, a.clientAddress(r))
 	}
 	salt := secureRandom(32)
 	hash, err := pbkdf2.Key(sha256.New, password, salt, 600000, 32)
@@ -215,32 +223,10 @@ func (a *Auth) login(r *http.Request, user, password string) (string, error) {
 		return "", errSetupRequired
 	}
 	salt, expected, username := append([]byte{}, a.salt...), append([]byte{}, a.hash...), a.user
-	for key, v := range a.attempts {
-		if now.Sub(v.Since) >= 15*time.Minute {
-			delete(a.attempts, key)
-		}
-	}
-	at := a.attempts[host]
-	if at.Count >= 8 {
+	if err := a.consumeAttempt(host, now); err != nil {
 		a.mu.Unlock()
-		return "", errThrottled
+		return "", err
 	}
-	if len(a.attempts) >= 4096 && at.Count == 0 {
-		var oldestKey string
-		var oldest time.Time
-		first := true
-		for key, v := range a.attempts {
-			if first || v.Since.Before(oldest) {
-				oldestKey, oldest, first = key, v.Since, false
-			}
-		}
-		delete(a.attempts, oldestKey)
-	}
-	if at.Count == 0 {
-		at.Since = now
-	}
-	at.Count++
-	a.attempts[host] = at
 	a.mu.Unlock()
 
 	hash, err := pbkdf2.Key(sha256.New, password, salt, 600000, 32)
@@ -280,7 +266,7 @@ func (a *Auth) clientAddress(r *http.Request) string {
 	}
 	peer = peer.Unmap()
 	if !a.isTrusted(peer) {
-		return peer.String()
+		return throttleAddress(peer)
 	}
 	forwarded := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
 	for i := len(forwarded) - 1; i >= 0; i-- {
@@ -293,7 +279,49 @@ func (a *Auth) clientAddress(r *http.Request) string {
 		}
 		peer = address.Unmap()
 	}
-	return peer.String()
+	return throttleAddress(peer)
+}
+
+// IPv6 clients share a /64. Counting the full address lets one network rotate hosts past the limit.
+func throttleAddress(addr netip.Addr) string {
+	addr = addr.Unmap()
+	if !addr.Is4() {
+		prefix, err := addr.Prefix(64)
+		if err == nil {
+			return prefix.Masked().Addr().String()
+		}
+	}
+	return addr.String()
+}
+
+// mu must be held.
+func (a *Auth) consumeAttempt(host string, now time.Time) error {
+	for key, v := range a.attempts {
+		if now.Sub(v.Since) >= 15*time.Minute {
+			delete(a.attempts, key)
+		}
+	}
+	at := a.attempts[host]
+	if at.Count >= 8 {
+		return errThrottled
+	}
+	if len(a.attempts) >= 4096 && at.Count == 0 {
+		var oldestKey string
+		var oldest time.Time
+		first := true
+		for key, v := range a.attempts {
+			if first || v.Since.Before(oldest) {
+				oldestKey, oldest, first = key, v.Since, false
+			}
+		}
+		delete(a.attempts, oldestKey)
+	}
+	if at.Count == 0 {
+		at.Since = now
+	}
+	at.Count++
+	a.attempts[host] = at
+	return nil
 }
 
 func (a *Auth) isTrusted(address netip.Addr) bool {

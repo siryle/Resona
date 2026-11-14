@@ -98,3 +98,56 @@ func TestLibraryScanOnlyIndexesExistingMusic(t *testing.T) {
 		t.Fatal("organizing overlapped index scan")
 	}
 }
+
+func TestUnmarkedEmptyLibraryKeepsIndex(t *testing.T) {
+	s := testServer(t)
+	missing := filepath.Join(s.config.LibraryDir, "removed.mp3")
+	if err := s.store.update(func(st *libraryState) error {
+		st.Tracks["missing"] = DiskTrack{Track: Track{ID: "missing"}, File: missing}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.scanner.StartLibrary(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s.scanner.Wait()
+	if _, ok := s.store.Track("missing"); !ok {
+		t.Fatal("empty unmarked library wiped the index")
+	}
+	if _, err := os.Stat(filepath.Join(s.config.LibraryDir, ".resona-library")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("marker created for an unrecognized library", err)
+	}
+	if len(s.store.Jobs()[0].Errors) == 0 {
+		t.Fatal("skipped prune was not reported")
+	}
+}
+
+func TestMarkedLibraryDropsOneMissingTrack(t *testing.T) {
+	s := testServer(t)
+	marker := filepath.Join(s.config.LibraryDir, ".resona-library")
+	if err := os.WriteFile(marker, []byte("resona\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(s.config.LibraryDir, "keep.mp3")
+	if err := os.WriteFile(keep, []byte("not-audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.update(func(st *libraryState) error {
+		st.Tracks["keep"] = DiskTrack{Track: Track{ID: "keep", Format: "mp3"}, File: keep}
+		st.Tracks["missing"] = DiskTrack{Track: Track{ID: "missing"}, File: filepath.Join(s.config.LibraryDir, "removed.mp3")}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.scanner.StartLibrary(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s.scanner.Wait()
+	if _, ok := s.store.Track("missing"); ok {
+		t.Fatal("marked library kept a deleted file")
+	}
+	if _, ok := s.store.Track("keep"); !ok {
+		t.Fatal("marked library removed a file that still exists")
+	}
+}

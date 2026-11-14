@@ -32,6 +32,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   List<Track> queue = [];
   List<Map<String, dynamic>> collections = [];
   final Map<String, Future<Uint8List>> _covers = {};
+  int coverEpoch = 0;
   Track? current;
   String library = 'local',
       section = '歌曲',
@@ -100,6 +101,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
             await activeAPI!.json('GET', 'auth/session');
             if (api != activeAPI) return;
             offline = false;
+            _invalidateCovers();
           } on APIException catch (e) {
             if (api != activeAPI) return;
             if (e.status == 401) {
@@ -224,6 +226,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     try {
       await api!.json('GET', 'auth/session');
       offline = false;
+      _invalidateCovers();
       await load();
     } on APIException catch (e) {
       if (e.status == 401) await logout(revoke: false);
@@ -264,7 +267,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       api?.close();
       current = null;
       queue = [];
-      _covers.clear();
+      _invalidateCovers();
       await _activate(session);
       offline = false;
       await load();
@@ -475,7 +478,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     collectionArtist = '';
     album = '';
     artist = '';
-    _covers.clear();
+    _invalidateCovers();
     unawaited(load());
   }
 
@@ -807,11 +810,29 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  void _invalidateCovers() {
+    _covers.clear();
+    coverEpoch++;
+  }
+
+  Future<Uint8List> _rememberCover(
+    String key,
+    Future<Uint8List> Function() load,
+  ) {
+    final existing = _covers[key];
+    if (existing != null) return existing;
+    if (_covers.length >= 100) _covers.remove(_covers.keys.first);
+    late final Future<Uint8List> future;
+    future = load().then((bytes) {
+      if (bytes.isEmpty && identical(_covers[key], future)) _covers.remove(key);
+      return bytes;
+    });
+    _covers[key] = future;
+    return future;
+  }
+
   Future<Uint8List> cover(Track track) {
-    if (_covers.length >= 100 && !_covers.containsKey(track.id)) {
-      _covers.remove(_covers.keys.first);
-    }
-    return _covers.putIfAbsent(track.id, () async {
+    return _rememberCover(track.id, () async {
       try {
         final local = cache?.cover(track);
         if (local != null && await local.exists()) {
@@ -829,10 +850,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<Uint8List> artistArtwork(String name, String path) {
     final key = 'artist:${session?.server}:$name:$path';
-    if (_covers.length >= 100 && !_covers.containsKey(key)) {
-      _covers.remove(_covers.keys.first);
-    }
-    return _covers.putIfAbsent(key, () async {
+    return _rememberCover(key, () async {
       try {
         if (!offline && authenticated && path.isNotEmpty) {
           return Uint8List.fromList(await api!.artistArtwork(path));
@@ -857,7 +875,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       await _cacheWork;
       await activeCache?.clear();
       cache = activeCache;
-      _covers.clear();
+      _invalidateCovers();
       await savePlaybackState();
       if (section == '缓存' || offline) await load();
     } catch (_) {
@@ -907,7 +925,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       queue = [];
       if (revoke) await savePlaybackState();
       collections = [];
-      _covers.clear();
+      _invalidateCovers();
       album = '';
       artist = '';
       search = '';

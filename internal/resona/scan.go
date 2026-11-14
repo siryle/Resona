@@ -414,12 +414,20 @@ func (s *Scanner) run(ctx context.Context, j Job, importRoots ...string) {
 		}
 		s.logger.Warn("scan", "job", j.ID, "error", err)
 	}
+	persistedAt := time.Now()
 	persist := func() {
 		if err := s.store.putJobProgress(j, dirtyFrom); err != nil {
 			s.logger.Error("save scan progress", "error", err)
 			return
 		}
 		dirtyFrom = len(j.Items)
+		persistedAt = time.Now()
+	}
+	// A commit per file makes a large library wait on SQLite. Flush by count or time instead.
+	saveProgress := func() {
+		if len(j.Items)-dirtyFrom >= 50 || time.Since(persistedAt) >= 2*time.Second {
+			persist()
+		}
 	}
 	defer func() {
 		j.EndedAt = time.Now().UTC()
@@ -485,7 +493,7 @@ func (s *Scanner) run(ctx context.Context, j Job, importRoots ...string) {
 				}
 				j.Items[index] = detail
 				markItems(index)
-				persist()
+				saveProgress()
 			}()
 			reportItem := func(err error) {
 				detail.State = "failed"
@@ -525,9 +533,7 @@ func (s *Scanner) run(ctx context.Context, j Job, importRoots ...string) {
 				}
 				return updated
 			}
-			if j.Processed%10 == 1 {
-				persist()
-			}
+			saveProgress()
 			id, size, err := hashFile(ctx, path)
 			if err != nil {
 				reportItem(fmt.Errorf("%s: %w", entry.Name(), err))
@@ -692,6 +698,11 @@ func (s *Scanner) run(ctx context.Context, j Job, importRoots ...string) {
 		return
 	}
 	// Only prune after a successful traversal; temporary storage outages keep the index intact.
+	// An empty mount of LIBRARY_PATH has no marker and none of the indexed files.
+	if !s.libraryMarked() {
+		report(errors.New("音乐库目录无法确认（缺少标记且已索引文件都不存在），已跳过缺失曲目清理"))
+		return
+	}
 	if err := s.store.update(func(st *libraryState) error {
 		for id, t := range st.Tracks {
 			if t.Remote != nil {
@@ -705,6 +716,36 @@ func (s *Scanner) run(ctx context.Context, j Job, importRoots ...string) {
 	}); err != nil {
 		report(err)
 	}
+}
+
+func (s *Scanner) libraryMarked() bool {
+	marker := filepath.Join(s.config.LibraryDir, ".resona-library")
+	if _, err := os.Stat(marker); err == nil {
+		return true
+	}
+	s.store.mu.RLock()
+	files := make([]string, 0)
+	for _, t := range s.store.state.Tracks {
+		if t.Remote == nil {
+			files = append(files, t.File)
+		}
+	}
+	s.store.mu.RUnlock()
+	present := false
+	for _, file := range files {
+		if _, err := os.Stat(file); err == nil {
+			present = true
+			break
+		}
+	}
+	if len(files) > 0 && !present {
+		return false
+	}
+	if err := os.WriteFile(marker, []byte("resona\n"), 0644); err != nil {
+		s.logger.Error("无法写入音乐库标记", "error", err)
+		return false
+	}
+	return true
 }
 
 func trackFileName(t Track) string {

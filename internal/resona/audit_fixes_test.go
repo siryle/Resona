@@ -158,8 +158,11 @@ func TestTrustedProxyClientAddresses(t *testing.T) {
 		{"127.0.0.1:42", "198.51.100.1, 203.0.113.1", "203.0.113.1"},
 		{"127.0.0.1:42", "203.0.113.1, 10.1.2.3", "203.0.113.1"},
 		{"[::ffff:127.0.0.1]:42", "203.0.113.1", "203.0.113.1"},
-		{"[::1]:42", "", "::1"},
-		{"[::1]:42", "203.0.113.1, invalid", "::1"},
+		{"[::1]:42", "", "::"},
+		{"[::1]:42", "203.0.113.1, invalid", "::"},
+		{"[2001:db8:1:2::5]:42", "", "2001:db8:1:2::"},
+		{"[2001:db8:1:2::9]:42", "", "2001:db8:1:2::"},
+		{"[2001:db8:1:3::1]:42", "", "2001:db8:1:3::"},
 	} {
 		r := httptest.NewRequest("POST", "/login", nil)
 		r.RemoteAddr = tc.peer
@@ -271,5 +274,60 @@ func TestJobProgressAllocationGrowth(t *testing.T) {
 	t.Logf("4000 progress updates allocated %.1f MiB", float64(allocated)/(1<<20))
 	if allocated > 64<<20 {
 		t.Fatal("scan progress allocation is no longer bounded per item", allocated)
+	}
+}
+
+func TestSetupCodeIsLongAndThrottled(t *testing.T) {
+	a, err := NewAuth(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.setupCode) != 32 {
+		t.Fatalf("setup code length %d", len(a.setupCode))
+	}
+	r := httptest.NewRequest("POST", "/setup", nil)
+	r.RemoteAddr = "203.0.113.8:8"
+	for i := range 8 {
+		if err := a.setup(r, "a-test-password-123", "wrong"); !errors.Is(err, errSetupCode) {
+			t.Fatal(i, err)
+		}
+	}
+	if err := a.setup(r, "a-test-password-123", a.setupCode); !errors.Is(err, errThrottled) {
+		t.Fatal("correct setup code bypassed the shared attempt limit", err)
+	}
+	r.RemoteAddr = "203.0.113.9:8"
+	if err := a.setup(r, "a-test-password-123", a.setupCode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIPv6LoginThrottleUsesPrefix(t *testing.T) {
+	s := testServer(t)
+	r := httptest.NewRequest("POST", "/login", nil)
+	r.RemoteAddr = "[2001:db8:1:2::1]:42"
+	s.auth.attempts[s.auth.clientAddress(r)] = attempt{Count: 8, Since: time.Now()}
+	r.RemoteAddr = "[2001:db8:1:2::abcd]:42"
+	if _, err := s.auth.login(r, "admin", "a-test-password-123"); !errors.Is(err, errThrottled) {
+		t.Fatal("another address in the same /64 bypassed the throttle", err)
+	}
+	r.RemoteAddr = "[2001:db8:1:3::1]:42"
+	if _, err := s.auth.login(r, "admin", "a-test-password-123"); err != nil {
+		t.Fatal("a different /64 was blocked", err)
+	}
+	r.RemoteAddr = "192.0.2.8:42"
+	if got := s.auth.clientAddress(r); got != "192.0.2.8" {
+		t.Fatal("IPv4 throttle key changed", got)
+	}
+}
+
+func TestTelegramWhitelistMatchesNumericID(t *testing.T) {
+	if !telegramUserAllowed("", 123) || !telegramUserAllowed("  \n", 123) {
+		t.Fatal("empty whitelist must allow everyone")
+	}
+	if !telegramUserAllowed("+123\n000123", 123) {
+		t.Fatal("equivalent numeric ids were rejected")
+	}
+	if telegramUserAllowed("+123", 124) || telegramUserAllowed("123", 1234) {
+		t.Fatal("different id was allowed")
 	}
 }

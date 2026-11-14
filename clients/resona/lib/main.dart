@@ -2568,7 +2568,7 @@ Future<void> showQueue(BuildContext context, MusicController c) =>
       ),
     );
 
-class ArtistAvatar extends StatelessWidget {
+class ArtistAvatar extends StatefulWidget {
   final MusicController controller;
   final String name, path;
   const ArtistAvatar({
@@ -2578,7 +2578,38 @@ class ArtistAvatar extends StatelessWidget {
     required this.path,
   });
   @override
+  State<ArtistAvatar> createState() => _ArtistAvatarState();
+}
+
+class _ArtistAvatarState extends State<ArtistAvatar> {
+  late Future<Uint8List> _bytes;
+  late int _epoch;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(ArtistAvatar old) {
+    super.didUpdateWidget(old);
+    if (old.name != widget.name ||
+        old.path != widget.path ||
+        old.controller != widget.controller ||
+        _epoch != widget.controller.coverEpoch) {
+      _load();
+    }
+  }
+
+  void _load() {
+    _epoch = widget.controller.coverEpoch;
+    _bytes = widget.controller.artistArtwork(widget.name, widget.path);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final name = widget.name;
     final placeholder = ColoredBox(
       color: Theme.of(context).colorScheme.secondaryContainer,
       child: Center(child: Text(name.isEmpty ? '' : name.characters.first)),
@@ -2589,8 +2620,7 @@ class ArtistAvatar extends StatelessWidget {
           width: 48,
           height: 48,
           child: FutureBuilder<Uint8List>(
-            key: ValueKey('${controller.session?.server}:$name:$path'),
-            future: controller.artistArtwork(name, path),
+            future: _bytes,
             builder: (context, snapshot) {
               if (!snapshot.hasData || snapshot.data!.isEmpty) {
                 return placeholder;
@@ -2608,7 +2638,7 @@ class ArtistAvatar extends StatelessWidget {
   }
 }
 
-class Cover extends StatelessWidget {
+class Cover extends StatefulWidget {
   final MusicController controller;
   final Track track;
   final double size;
@@ -2619,18 +2649,49 @@ class Cover extends StatelessWidget {
     required this.size,
   });
   @override
+  State<Cover> createState() => _CoverState();
+}
+
+class _CoverState extends State<Cover> {
+  late Future<Uint8List> _bytes;
+  late String _id;
+  late int _epoch;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(Cover old) {
+    super.didUpdateWidget(old);
+    if (widget.track.id != _id ||
+        widget.controller != old.controller ||
+        _epoch != widget.controller.coverEpoch) {
+      _load();
+    }
+  }
+
+  void _load() {
+    _id = widget.track.id;
+    _epoch = widget.controller.coverEpoch;
+    _bytes = widget.controller.cover(widget.track);
+  }
+
+  @override
   Widget build(BuildContext context) => ExcludeSemantics(
     child: ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: SizedBox(
-        width: size,
-        height: size,
+        width: widget.size,
+        height: widget.size,
         child: FutureBuilder<Uint8List>(
-          future: controller.cover(track),
+          future: _bytes,
           builder: (context, snapshot) {
             final placeholder = ColoredBox(
               color: Theme.of(context).colorScheme.secondaryContainer,
-              child: Icon(Icons.music_note_outlined, size: size * .4),
+              child: Icon(Icons.music_note_outlined, size: widget.size * .4),
             );
             if (!snapshot.hasData || snapshot.data!.isEmpty) return placeholder;
             return Image.memory(

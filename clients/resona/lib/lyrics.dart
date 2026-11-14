@@ -18,12 +18,14 @@ List<LyricLine> parseLyrics(String text) {
     if (matches.isEmpty) continue;
     timed = true;
     final body = row.replaceAll(pattern, '').trim();
+    if (body.isEmpty) continue;
     for (final match in matches) {
-      final seconds =
+      var seconds =
           int.parse(match[1]!) * 60 +
           int.parse(match[2]!) +
           double.parse('0.${match[3] ?? '0'}') +
           offset;
+      if (seconds < 0) seconds = 0;
       lines.add(LyricLine(seconds, body));
     }
   }
