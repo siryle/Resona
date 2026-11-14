@@ -220,12 +220,19 @@ func TestCloudTreeIncrementalSyncAndMissingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, removed := cloudTrackID("42", "1"), cloudTrackID("42", "2")
+	if err := s.cloud.generateSTRMs(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.store.update(func(st *libraryState) error {
 		for _, key := range []string{id, removed} {
 			item := st.Cloud.Items[key]
 			item.State = "ready"
 			st.Cloud.Items[key] = item
-			st.Tracks[key] = DiskTrack{Track: Track{ID: key, Favorite: true}}
+			disk := st.Tracks[key]
+			disk.Favorite, disk.Title, disk.Artist, disk.MetadataSource = true, "Old Song", "Artist", "tags"
+			disk.EmbeddedLyrics, disk.Lyrics = &SavedLyrics{Text: "old embedded lyrics"}, &SavedLyrics{Text: "old fetched lyrics"}
+			disk.EmbeddedChecked = true
+			st.Tracks[key] = disk
 		}
 		return nil
 	}); err != nil {
@@ -252,6 +259,43 @@ func TestCloudTreeIncrementalSyncAndMissingFiles(t *testing.T) {
 			t.Fatal("incremental sync lost favorite or failed to invalidate audio")
 		}
 	}
+	if err := s.cloud.generateSTRMs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cloud.scanSTRMs(ctx, &Job{}); err != nil {
+		t.Fatal(err)
+	}
+	track, _ := s.store.Track(id)
+	if !track.Unavailable || !s.cloud.snapshot().Items[id].AudioChanged {
+		t.Fatal("generation or local scan unlocked changed audio before probing", track)
+	}
+	s.store.mu.RLock()
+	disk := s.store.state.Tracks[id]
+	s.store.mu.RUnlock()
+	if disk.Lyrics != nil || disk.EmbeddedLyrics != nil || disk.EmbeddedChecked || disk.Artwork != "" {
+		t.Fatal("changed audio retained stale probe results", disk)
+	}
+	reopened, err := NewServer(t.Context(), s.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if !reopened.cloud.snapshot().Items[id].AudioChanged {
+		t.Fatal("changed audio marker did not survive restart")
+	}
+	if err := reopened.cloud.generateSTRMs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if restored, _ := reopened.store.Track(id); !restored.Unavailable {
+		t.Fatal("restart unlocked changed audio")
+	}
+	item := reopened.cloud.snapshot().Items[id]
+	if err := reopened.cloud.publish(item, Track{Title: "New Song", Artist: "Artist", Album: "Album", Format: "mp3", TagLyrics: "new lyrics"}); err != nil {
+		t.Fatal(err)
+	}
+	if restored, _ := reopened.store.Track(id); restored.Unavailable || restored.Title != "New Song" || !restored.Favorite || reopened.cloud.snapshot().Items[id].AudioChanged {
+		t.Fatal("successful probe did not publish changed audio", restored)
+	}
 	files = []any{treeFile("1", "0", "Song.mp3"), treeFile("2", "0", "Other.mp3")}
 	if err := s.cloud.syncTree(ctx); err != nil {
 		t.Fatal(err)
@@ -275,12 +319,16 @@ func TestCloudTreeSidecarChangeStaysPlayable(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := cloudTrackID("42", "1")
+	if err := s.cloud.generateSTRMs(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.store.update(func(st *libraryState) error {
 		item := st.Cloud.Items[id]
 		item.State = "ready"
 		st.Cloud.Items[id] = item
-		remote := item.RemoteFile
-		st.Tracks[id] = DiskTrack{Track: Track{ID: id, Favorite: true}, Remote: &remote}
+		disk := st.Tracks[id]
+		disk.Favorite = true
+		st.Tracks[id] = disk
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -289,9 +337,12 @@ func TestCloudTreeSidecarChangeStaysPlayable(t *testing.T) {
 	if err := s.cloud.syncTree(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.cloud.generateSTRMs(ctx); err != nil {
+		t.Fatal(err)
+	}
 	item := s.cloud.snapshot().Items[id]
 	track, ok := s.store.Track(id)
-	if !ok || item.State != "pending" || item.Cover == nil || item.Cover.FileID != "3" || track.Unavailable || !track.Favorite {
+	if !ok || item.State != "pending" || item.AudioChanged || item.Cover == nil || item.Cover.FileID != "3" || track.Unavailable || !track.Favorite {
 		t.Fatal("cover or folder art blocked playback", item.State, item.Cover, track.Unavailable, track.Favorite)
 	}
 }

@@ -93,6 +93,17 @@ func TestCloudDownloadPostRetryAndCancellation(t *testing.T) {
 	if _, err := s.cloud.downloadURL(t.Context(), file, "Player"); err != nil || calls != 2 {
 		t.Fatal("transient download rejection was not retried", calls, err)
 	}
+	file.SHA1 = strings.Repeat("b", 40)
+	if _, err := s.cloud.downloadURL(t.Context(), file, "Player"); err != nil || calls != 3 {
+		t.Fatal("changed audio reused the old revision's download URL", calls, err)
+	}
+	if _, err := s.cloud.downloadURL(t.Context(), file, "Player"); err != nil || calls != 3 {
+		t.Fatal("unchanged audio revision was not cached", calls, err)
+	}
+	s.cloud.invalidate(file, "Player")
+	if _, err := s.cloud.downloadURL(t.Context(), file, "Player"); err != nil || calls != 4 {
+		t.Fatal("forced refresh retained the revision's cached download URL", calls, err)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := s.cloud.downloadURL(ctx, file, "Another Player"); err != context.Canceled {

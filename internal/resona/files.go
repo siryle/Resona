@@ -174,6 +174,7 @@ type fileOperation struct {
 
 type pendingFileOperation struct {
 	Action, Root, Path, TargetRoot, Destination, Hidden string
+	CopyStage                                           string `json:",omitempty"`
 	Tracks                                              map[string]DiskTrack
 	CloudItems                                          map[string]CloudItem
 	ProbeQueue                                          []string
@@ -212,7 +213,18 @@ func (s *Server) recoverFileOperation() error {
 	} else if originalErr != nil {
 		return errors.New("file operation recovery: original entry unavailable")
 	}
-	if pending.Action != "delete" && pending.Hidden != pending.Destination {
+	if pending.CopyStage != "" {
+		target, _, err := s.fileRoot(pending.TargetRoot)
+		if err != nil {
+			return err
+		}
+		err = target.RemoveAll(pending.CopyStage)
+		target.Close()
+		if err != nil {
+			return err
+		}
+	}
+	if pending.Action != "delete" && pending.Destination != "" && pending.Hidden != pending.Destination {
 		target, _, err := s.fileRoot(pending.TargetRoot)
 		if err != nil {
 			return err
@@ -382,32 +394,35 @@ func (s *Server) operateFile(ctx context.Context, body fileOperation, source *os
 		parentStat, okTarget := parentInfo.Sys().(*syscall.Stat_t)
 		sameRoot = sourceDir == targetDir && okSource && okTarget && originalStat.Dev == parentStat.Dev
 	}
+	// Journal the hidden copy before writing any bytes; publish only complete entries.
+	hidden := filepath.Join(filepath.Dir(path), ".resona-files-"+randomID(12))
+	copyStage := ""
 	if action == "copy" || (!sameRoot && (action == "move" || action == "rename")) {
+		copyStage = filepath.Join(filepath.Dir(dest), ".resona-copy-"+randomID(12))
+		pending := pendingFileOperation{Action: action, Root: "filesystem", Path: path,
+			TargetRoot: "filesystem", Hidden: hidden, CopyStage: copyStage}
+		if err := atomicJSON(s.fileJournal(), pending); err != nil {
+			return err
+		}
 		budget := 10000
-		if err := copyManaged(ctx, source, path, target, dest, &budget); err != nil {
-			return err
+		if err := copyManaged(ctx, source, path, target, copyStage, &budget); err != nil {
+			return errors.Join(err, s.recoverFileOperation())
 		}
-		if err := s.destinationPermissions(to); err != nil {
-			_ = target.RemoveAll(dest)
-			return err
-		}
-		if action == "copy" {
-			return nil
+		if err := s.destinationPermissions(filepath.Join(targetDir, copyStage)); err != nil {
+			return errors.Join(err, s.recoverFileOperation())
 		}
 	}
-	// Keep removed entries in a hidden sibling until the index is safely published.
-	hidden := filepath.Join(filepath.Dir(path), ".resona-files-"+randomID(12))
-	moved := false
+	moved, published := false, false
 	err := s.store.updateWithRollback(func(st *libraryState) error {
 		next := hidden
-		if sameRoot && action != "delete" {
+		if sameRoot && action != "delete" && action != "copy" {
 			next = dest
 		}
 		pending := pendingFileOperation{Action: action, Root: "filesystem", Path: path,
-			TargetRoot: "filesystem", Destination: dest, Hidden: next,
+			TargetRoot: "filesystem", Destination: dest, Hidden: next, CopyStage: copyStage,
 			Tracks: map[string]DiskTrack{}, CloudItems: map[string]CloudItem{}}
 		for id, disk := range st.Tracks {
-			if within(from, disk.File) {
+			if action != "copy" && within(from, disk.File) {
 				pending.Tracks[id] = disk
 				if item, ok := st.Cloud.Items[id]; ok {
 					pending.CloudItems[id] = item
@@ -419,6 +434,21 @@ func (s *Server) operateFile(ctx context.Context, body fileOperation, source *os
 		}
 		if err := atomicJSON(s.fileJournal(), pending); err != nil {
 			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if copyStage != "" {
+			if _, err := target.Lstat(dest); !errors.Is(err, os.ErrNotExist) {
+				return errors.New("目标已存在，已保留原文件，请使用其他名称")
+			}
+			if err := target.Rename(copyStage, dest); err != nil {
+				return err
+			}
+			published = true
+		}
+		if action == "copy" {
+			return nil
 		}
 		if err := source.Rename(path, next); err != nil {
 			return err
@@ -463,8 +493,11 @@ func (s *Server) operateFile(ctx context.Context, body fileOperation, source *os
 			}
 			restore = source.Rename(next, path)
 		}
-		if !sameRoot && action != "delete" {
+		if published {
 			restore = errors.Join(restore, target.RemoveAll(dest))
+		}
+		if copyStage != "" {
+			restore = errors.Join(restore, target.RemoveAll(copyStage))
 		}
 		if restore == nil {
 			if err := os.Remove(s.fileJournal()); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -479,7 +512,7 @@ func (s *Server) operateFile(ctx context.Context, body fileOperation, source *os
 	if err := os.Remove(s.fileJournal()); err != nil {
 		return errors.New("文件操作已保存，但恢复记录未能清理，请检查数据目录权限")
 	}
-	if action == "delete" || !sameRoot {
+	if action != "copy" && (action == "delete" || !sameRoot) {
 		if err := source.RemoveAll(hidden); err != nil {
 			return errors.New("索引已更新；旧文件清理未完成，请检查目录权限")
 		}

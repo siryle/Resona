@@ -109,7 +109,7 @@ func (p *Plugins) runBot(ctx context.Context, settings PluginSettings) {
 	pending := true
 	for ctx.Err() == nil {
 		if pending {
-			_, err := p.server.scanner.Start(p.server.ctx, false)
+			_, err := p.server.scanner.startPluginInbox(p.server.ctx)
 			pending = err != nil
 		}
 		var updates []struct {

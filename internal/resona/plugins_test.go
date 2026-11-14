@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -112,11 +113,35 @@ func TestTelegramReceiveAndImport(t *testing.T) {
 		t.Fatal("duplicate delivery not idempotent")
 	}
 	requireMusicPermissions(t, s.store.pluginInbox(s.config))
-	if _, err := s.scanner.Start(context.Background(), false); err != nil {
+	// Automatic imports must not inspect unrelated local audio or the regular inbox.
+	for _, root := range []string{s.config.LibraryDir, s.config.InboxDir} {
+		if err := os.WriteFile(filepath.Join(root, "unrelated.mp3"), []byte("not valid audio"), 0640); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(root, "unrelated.mp3"), 0777); err != nil {
+			t.Fatal(err)
+		}
+	}
+	missing := filepath.Join(s.config.LibraryDir, "temporarily-missing.mp3")
+	if err := s.store.update(func(st *libraryState) error {
+		st.Tracks["missing"] = DiskTrack{Track: Track{ID: "missing", Favorite: true}, File: missing}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.scanner.startPluginInbox(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	s.scanner.Wait()
+	job := s.store.Jobs()[0]
+	if job.Processed != 1 || len(job.Errors) != 0 {
+		t.Fatal("plugin import scanned unrelated audio", job)
+	}
+	if _, ok := s.store.Track("missing"); !ok {
+		t.Fatal("plugin import pruned an unscanned library entry")
+	}
 	tracks := s.store.Tracks()
+	tracks = slices.DeleteFunc(tracks, func(track Track) bool { return track.ID == "missing" })
 	if len(tracks) != 1 || tracks[0].Title != "Song" || tracks[0].Artist != "Artist" {
 		t.Fatalf("bot audio not imported: %+v", tracks)
 	}

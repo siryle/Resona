@@ -408,7 +408,10 @@ func (c *Cloud115) syncTree(ctx context.Context) error {
 				item.State, item.Error = "pending", ""
 				if audioChanged {
 					if old, ok := st.Tracks[id]; ok {
+						item.AudioChanged = true
 						old.Unavailable = true
+						old.Lyrics, old.EmbeddedLyrics = nil, nil
+						old.EmbeddedChecked, old.Artwork = false, ""
 						st.Tracks[id] = old
 					}
 				}

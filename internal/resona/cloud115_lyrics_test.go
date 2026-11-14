@@ -70,7 +70,7 @@ func TestCloudLyricsRestrictionAfterDeletionPreservesRegeneratedLibrary(t *testi
 		w.Write(text)
 	}))
 	defer cdn.Close()
-	s.cloud.links["42\x00abcdefghijklmnopq\x00"+probeUserAgent] = cloudLink{URL: cdn.URL, Expires: time.Now().Add(time.Hour)}
+	s.cloud.links["42\x00abcdefghijklmnopq\x00"+hex.EncodeToString(sum[:])+"\x00"+probeUserAgent] = cloudLink{URL: cdn.URL, Expires: time.Now().Add(time.Hour)}
 	if err := s.cloud.syncLyrics(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestCloudLyricsSyncIsOptionalIncrementalAndPlayableBeforeProbe(t *testing.T
 	}))
 	defer api.Close()
 	s.cloud.webURL = api.URL
-	s.cloud.links["42\x00abcdefghijklmnopq\x00"+probeUserAgent] = cloudLink{URL: api.URL + "/lyric", Expires: time.Now().Add(time.Hour)}
+	s.cloud.links["42\x00abcdefghijklmnopq\x00"+hex.EncodeToString(sum[:])+"\x00"+probeUserAgent] = cloudLink{URL: api.URL + "/lyric", Expires: time.Now().Add(time.Hour)}
 	token := loginToken(t, s)
 	run := func(enabled bool) {
 		t.Helper()

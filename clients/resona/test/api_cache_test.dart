@@ -231,12 +231,116 @@ void main() {
     },
   );
 
+  File metadataFile(Track song) => File(
+    '${cache.root.path}/${cache.audio(song).uri.pathSegments.last.split('.').first}.json',
+  );
+
+  test(
+    'concurrent pin and favorite preserve both changes after restart',
+    () async {
+      await cache.save(api, track);
+      for (var i = 0; i < 10; i++) {
+        await Future.wait([
+          cache.pin(track),
+          cache.updateFavorite(track.id, i.isEven),
+        ]);
+        final reopened = PlaybackCache(directory, session);
+        await reopened.load();
+        expect(reopened.downloads, {track.id});
+        expect(reopened.tracks[track.id]!.favorite, i.isEven);
+      }
+      await cache.clear();
+      expect(cache.contains(track), isTrue);
+    },
+  );
+
+  test(
+    'failed revision commit retains the previous verified download',
+    () async {
+      await cache.save(api, track);
+      await cache.pin(track);
+      final oldPath = cache.audio(track).path;
+      final oldLyrics = await cache.lyrics(track).readAsString();
+      final revisedBytes = List<int>.from(audio.reversed);
+      final revised = Track({
+        ...track.json,
+        'content_hash': sha256.convert(revisedBytes).toString(),
+      });
+      final blocked = Directory('${metadataFile(track).path}.part');
+      await blocked.create();
+      servedAudio = revisedBytes;
+      await expectLater(
+        cache.save(api, revised),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(cache.contains(track), isTrue);
+      expect(await cache.audio(track).readAsBytes(), audio);
+      await blocked.delete();
+      final reopened = PlaybackCache(directory, session);
+      await reopened.load();
+      expect(reopened.contains(track), isTrue);
+      expect(reopened.contains(revised), isFalse);
+      expect(reopened.downloads, {track.id});
+      expect(await reopened.lyrics(track).readAsString(), oldLyrics);
+      servedAudio = revisedBytes;
+      await reopened.save(api, revised);
+      expect(reopened.audio(revised).path, isNot(oldPath));
+      expect(await reopened.audio(revised).readAsBytes(), revisedBytes);
+      expect(reopened.downloads, {track.id});
+    },
+  );
+
+  test(
+    'legacy migration rejects equal-length audio with a different digest',
+    () async {
+      await cache.audio(track).writeAsBytes(audio.reversed.toList());
+      await metadataFile(track).writeAsString(
+        jsonEncode({
+          ...track.json,
+          '_cache_bytes': audio.length,
+          '_downloaded': true,
+        }),
+      );
+      final reopened = PlaybackCache(directory, session);
+      await reopened.load();
+      expect(reopened.tracks, isEmpty);
+      expect(reopened.downloads, isEmpty);
+    },
+  );
+
+  test(
+    'failed legacy migration keeps verified manual downloads usable',
+    () async {
+      await cache.audio(track).writeAsBytes(audio);
+      final original = cache.audio(track).path;
+      final metadata = metadataFile(track);
+      await metadata.writeAsString(
+        jsonEncode({
+          ...track.json,
+          '_cache_bytes': audio.length,
+          '_downloaded': true,
+        }),
+      );
+      final blocked = Directory('${metadata.path}.part');
+      await blocked.create();
+      final reopened = PlaybackCache(directory, session);
+      await reopened.load();
+      expect(reopened.contains(track), isTrue);
+      expect(reopened.downloads, {track.id});
+      expect(await reopened.audio(track).readAsBytes(), audio);
+      expect(await File(original).exists(), isTrue);
+      await blocked.delete();
+      await reopened.load();
+      expect(reopened.contains(track), isTrue);
+      expect(reopened.downloads, {track.id});
+      expect(reopened.audio(track).path, isNot(original));
+    },
+  );
+
   test('legacy cache migration verifies hashes before publishing', () async {
     await cache.save(api, track);
     await cache.pin(track);
-    final metadata = File(
-      cache.audio(track).path.replaceFirst('.flac', '.json'),
-    );
+    final metadata = metadataFile(track);
     final legacy = Map<String, dynamic>.from(
       jsonDecode(await metadata.readAsString()) as Map,
     )..remove('_cache_bytes');

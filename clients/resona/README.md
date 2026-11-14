@@ -62,7 +62,11 @@ The existing Swift clients remain the iOS / macOS implementation.
   a foreground media service; audio focus and headphone removal pause playback.
 - Played songs are downloaded in the background, verified with the server's
   SHA-256 or 115 SHA-1 when available, then published to an account-isolated
-  cache. Incomplete downloads are never listed offline. Cached lyrics and covers
+  cache. Each audio revision has a separate file, and metadata switches to it only
+  after verification; interrupted updates retain the previous complete download.
+  Favorite changes and download pins are saved in order so neither overwrites the
+  other. Legacy caches are verified before migration. Incomplete downloads are
+  never listed offline. Cached lyrics and covers
   are snapshots; clear playback cache in Settings to fetch newer versions.
 - Manual song downloads include audio, cover and lyrics, and remain accessible
   without login. Cache cleanup stops playback, cancels active transfers and waits

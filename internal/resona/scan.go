@@ -39,14 +39,18 @@ func NewScanner(c Config, store *Store) *Scanner {
 }
 
 func (s *Scanner) Start(ctx context.Context, rescrape bool) (Job, error) {
-	return s.start(ctx, rescrape, false)
+	return s.start(ctx, rescrape, false, false)
 }
 
 func (s *Scanner) StartLibrary(ctx context.Context) (Job, error) {
-	return s.start(ctx, false, true)
+	return s.start(ctx, false, true, false)
 }
 
-func (s *Scanner) start(ctx context.Context, rescrape, indexOnly bool) (Job, error) {
+func (s *Scanner) startPluginInbox(ctx context.Context) (Job, error) {
+	return s.start(ctx, false, false, true)
+}
+
+func (s *Scanner) start(ctx context.Context, rescrape, indexOnly, pluginOnly bool) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -73,7 +77,11 @@ func (s *Scanner) start(ctx context.Context, rescrape, indexOnly bool) (Job, err
 			s.active = false
 			s.mu.Unlock()
 		}()
-		s.run(ctx, j)
+		if pluginOnly {
+			s.run(ctx, j, s.store.pluginInbox(s.config))
+		} else {
+			s.run(ctx, j)
+		}
 	}()
 	return j, nil
 }
@@ -390,7 +398,7 @@ func (s *Scanner) removeImportedSource(ctx context.Context, root, path, sourceID
 	return removeUnusedLyrics(path, track.Path)
 }
 
-func (s *Scanner) run(ctx context.Context, j Job) {
+func (s *Scanner) run(ctx context.Context, j Job, importRoots ...string) {
 	sources := s.store.SourceSettings()
 	seen := map[string]bool{}
 	lyricsAttempted := map[string]bool{}
@@ -429,6 +437,9 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 	roots := []string{s.config.LibraryDir}
 	if !j.IndexOnly {
 		roots = append(roots, s.config.InboxDir, s.store.pluginInbox(s.config))
+	}
+	if len(importRoots) > 0 {
+		roots = importRoots
 	}
 	traversalFailed := false
 	for _, root := range roots {
@@ -677,7 +688,7 @@ func (s *Scanner) run(ctx context.Context, j Job) {
 			return
 		}
 	}
-	if traversalFailed {
+	if traversalFailed || len(importRoots) > 0 {
 		return
 	}
 	// Only prune after a successful traversal; temporary storage outages keep the index intact.

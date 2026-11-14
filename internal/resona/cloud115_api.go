@@ -343,7 +343,7 @@ func (c *Cloud115) authStatus(w http.ResponseWriter, r *http.Request) {
 		st.Cloud.Cookie = cookie
 		for id, track := range st.Tracks {
 			if track.Remote != nil {
-				track.Unavailable = track.Remote.Account != st.Cloud.Account || st.Cloud.Items[id].State == "missing" || st.Cloud.Items[id].State == "skipped"
+				track.Unavailable = track.Remote.Account != st.Cloud.Account || st.Cloud.Items[id].AudioChanged || st.Cloud.Items[id].State == "missing" || st.Cloud.Items[id].State == "skipped"
 				st.Tracks[id] = track
 			}
 		}

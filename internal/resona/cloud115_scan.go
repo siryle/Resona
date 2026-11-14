@@ -175,6 +175,6 @@ func cloudSTRMTrack(item CloudItem, disk DiskTrack, path string, unavailable boo
 			Library: "cloud", MetadataSource: "filename", AddedAt: added, Favorite: disk.Favorite}
 	}
 	remote := item.RemoteFile
-	disk.File, disk.Remote, disk.Size, disk.Unavailable = path, &remote, item.Size, unavailable
+	disk.File, disk.Remote, disk.Size, disk.Unavailable = path, &remote, item.Size, unavailable || item.AudioChanged
 	return disk
 }

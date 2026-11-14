@@ -42,16 +42,17 @@ type RemoteFile struct {
 
 type CloudItem struct {
 	RemoteFile
-	Name        string      `json:"name"`
-	Path        string      `json:"path"`
-	State       string      `json:"state"`
-	Error       string      `json:"error,omitempty"`
-	TrackID     string      `json:"track_id"`
-	Fingerprint string      `json:"fingerprint"`
-	Queued      bool        `json:"queued,omitempty"`
-	UpdatedAt   time.Time   `json:"updated_at"`
-	Cover       *RemoteFile `json:"cover,omitempty"`
-	LRC         *RemoteFile `json:"lrc,omitempty"`
+	Name         string      `json:"name"`
+	Path         string      `json:"path"`
+	State        string      `json:"state"`
+	Error        string      `json:"error,omitempty"`
+	TrackID      string      `json:"track_id"`
+	Fingerprint  string      `json:"fingerprint"`
+	AudioChanged bool        `json:"audio_changed,omitempty"`
+	Queued       bool        `json:"queued,omitempty"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+	Cover        *RemoteFile `json:"cover,omitempty"`
+	LRC          *RemoteFile `json:"lrc,omitempty"`
 }
 
 type CloudSettings struct {
@@ -345,12 +346,12 @@ func validCloudURL(value string) bool {
 
 func (c *Cloud115) invalidate(file RemoteFile, ua string) {
 	c.linkGate <- struct{}{}
-	delete(c.links, file.Account+"\x00"+file.PickCode+"\x00"+ua)
+	delete(c.links, file.Account+"\x00"+file.PickCode+"\x00"+file.SHA1+"\x00"+ua)
 	<-c.linkGate
 }
 
 func (c *Cloud115) downloadURL(ctx context.Context, file RemoteFile, ua string) (string, error) {
-	key := file.Account + "\x00" + file.PickCode + "\x00" + ua
+	key := file.Account + "\x00" + file.PickCode + "\x00" + file.SHA1 + "\x00" + ua
 	select {
 	case c.linkGate <- struct{}{}:
 		defer func() { <-c.linkGate }()
@@ -787,7 +788,7 @@ func (c *Cloud115) publish(item CloudItem, t Track) error {
 		st.Tracks[t.ID] = DiskTrack{Track: candidate, File: move.destination, Remote: &remote, Lyrics: lyrics,
 			EmbeddedLyrics: embedded, EmbeddedChecked: true}
 		cloudCurrent := st.Cloud.Items[t.ID]
-		cloudCurrent.State, cloudCurrent.Error = "ready", ""
+		cloudCurrent.State, cloudCurrent.Error, cloudCurrent.AudioChanged = "ready", "", false
 		st.Cloud.Items[t.ID] = cloudCurrent
 		return nil
 	})

@@ -82,7 +82,11 @@ Future<void> initializeAndroidAudio(MusicController controller) async {
     ),
   );
   final session = await AudioSession.instance;
-  await session.configure(const AudioSessionConfiguration.music());
+  await session.configure(
+    const AudioSessionConfiguration.music().copyWith(
+      androidWillPauseWhenDucked: true,
+    ),
+  );
   controller.activateAudio = () async => await session.setActive(true);
   String? interruptedTrack;
   session.interruptionEventStream.listen((event) {
