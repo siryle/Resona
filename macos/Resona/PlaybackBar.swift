@@ -26,7 +26,7 @@ struct DesktopPlaybackBar: View {
     private var progress: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Theme.ink.opacity(0.12)
+                Theme.border
                 Theme.accent.frame(width: geometry.size.width * min(1, max(0, player.position / max(1, player.duration))))
             }
             .overlay {
@@ -65,14 +65,14 @@ struct DesktopPlaybackBar: View {
                             ZStack(alignment: .leading) {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(track.title).font(.system(size: 14, weight: .semibold))
-                                    Text("\(track.artist) · \(track.album)").font(.system(size: 12)).foregroundStyle(Theme.ink.opacity(0.65))
+                                    Text("\(track.artist) · \(track.album)").font(.system(size: 12)).foregroundStyle(Theme.secondary)
                                 }.opacity(showTrackInfo || lyrics.isEmpty ? 1 : 0)
                                     .accessibilityHidden(!showTrackInfo && !lyrics.isEmpty)
                                 if !lyrics.isEmpty {
                                     VStack(alignment: .leading, spacing: 5) {
                                         Text(lyrics[0]).font(.system(size: 14, weight: .medium))
                                         if lyrics.count > 1 {
-                                            Text(lyrics[1]).font(.system(size: 12)).foregroundStyle(Theme.ink.opacity(0.65))
+                                            Text(lyrics[1]).font(.system(size: 12)).foregroundStyle(Theme.secondary)
                                         }
                                     }.opacity(showTrackInfo ? 0 : 1)
                                         .accessibilityHidden(showTrackInfo)
@@ -93,8 +93,8 @@ struct DesktopPlaybackBar: View {
                     Button { player.toggle() } label: {
                         Image(systemName: player.playing ? "pause.fill" : "play.fill")
                             .font(.system(size: 16, weight: .semibold))
-                            .frame(width: 40, height: 40).foregroundStyle(.white)
-                            .background(Theme.accent, in: Circle())
+                            .frame(width: 40, height: 40).foregroundStyle(Theme.accentOn)
+                            .background(Theme.accentFill, in: Circle())
                     }.help(player.playing ? "暂停" : "播放")
                         .accessibilityLabel(player.playing ? "暂停" : "播放").focused($focusedControl, equals: .play)
                     Button { player.next() } label: {
@@ -104,13 +104,13 @@ struct DesktopPlaybackBar: View {
                 HStack(spacing: 14) {
                     VStack(spacing: 5) {
                         HStack(spacing: 8) {
-                            Image(systemName: "speaker.wave.2").font(.system(size: 12))
+                            Image(systemName: "speaker.wave.2").font(.system(size: 12)).foregroundStyle(Theme.secondary)
                             Slider(value: $player.volume, in: 0...1).frame(width: 76)
                                 .controlSize(.mini).accessibilityLabel("音量")
                                 .focused($focusedControl, equals: .volume)
                         }
                         Text("\(clock(player.position)) / \(clock(player.duration))")
-                            .font(.system(size: 10).monospacedDigit()).foregroundStyle(Theme.ink.opacity(0.65))
+                            .font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.muted)
                             .lineLimit(1).fixedSize()
                     }.frame(width: 108)
                     if let track = player.current {
@@ -137,7 +137,7 @@ struct DesktopPlaybackBar: View {
                         .focused($focusedControl, equals: .queue)
                 }.buttonStyle(.plain)
             }.padding(.horizontal, 20).frame(height: 79)
-        }.background(.regularMaterial).contentShape(Rectangle())
+        }.background(Theme.playerBar).contentShape(Rectangle())
             .onHover {
                 playerBarHovered = $0
                 if !$0 { focusedControl = nil }

@@ -409,7 +409,9 @@ final class DesktopIntegration: NSObject, ObservableObject {
 
 private struct MenuPlaybackView: View {
     @ObservedObject var desktop: DesktopIntegration
+    @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.system.rawValue
     private var player: PlayerModel { desktop.player }
+    private var appearance: AppearanceMode { AppearanceMode(rawValue: appearanceRaw) ?? .system }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -456,7 +458,7 @@ private struct MenuPlaybackView: View {
                 Button("退出") { desktop.quit() }
             }.buttonStyle(.borderless)
         }.padding(20).frame(width: 300).foregroundStyle(Theme.ink)
-            .background(Theme.paper).tint(Theme.accent).preferredColorScheme(.light)
+            .background(Theme.paper).tint(Theme.accent).preferredColorScheme(appearance.colorScheme)
     }
 }
 

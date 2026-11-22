@@ -17,6 +17,8 @@ private enum Section: String, CaseIterable {
 struct DesktopView: View {
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var player: PlayerModel
+    @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.system.rawValue
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var showingSettings: Bool
     @State private var section = Section.tracks
     @State private var query = ""
@@ -103,16 +105,19 @@ struct DesktopView: View {
             }.padding(.top, 44).padding(.horizontal, 10)
             Text("你的音乐空间").font(.caption).foregroundStyle(Theme.muted).padding(.horizontal, 12)
             Button { showLibraryMenu.toggle() } label: {
-                HStack(spacing: 14) {
+                HStack(spacing: 12) {
                     Image(systemName: library.libraryScope == "local" ? "internaldrive" : "cloud")
-                        .frame(width: 24, height: 20, alignment: .center)
+                        .frame(width: 20, height: 20, alignment: .center)
                     Text(library.libraryScope == "local" ? "本地音乐库" : "网盘音乐库")
+                        .fontWeight(.medium)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium))
+                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
                 }
-                .font(.system(size: 14))
+                .font(.system(size: 13.5))
                 .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .leading)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 12)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.border) }
                 .contentShape(Rectangle())
                 .foregroundStyle(Theme.accent)
             }.buttonStyle(.plain).help("切换音乐库")
@@ -130,28 +135,32 @@ struct DesktopView: View {
                             HStack(spacing: 14) {
                                 Image(systemName: scope == "local" ? "internaldrive" : "cloud")
                                     .frame(width: 24, height: 20)
+                                    .foregroundStyle(library.libraryScope == scope ? Theme.accent : Theme.muted)
                                 Text(scope == "local" ? "本地音乐库" : "网盘音乐库")
                                 Spacer(minLength: 8)
-                                if library.libraryScope == scope { Image(systemName: "checkmark") }
+                                if library.libraryScope == scope { Image(systemName: "checkmark").foregroundStyle(Theme.accent) }
                             }.font(.system(size: 14)).padding(.horizontal, 12).frame(height: 40)
-                                .background(library.libraryScope == scope ? Theme.sage : .clear, in: RoundedRectangle(cornerRadius: 7))
+                                .background(library.libraryScope == scope ? Theme.selected : .clear, in: RoundedRectangle(cornerRadius: 8))
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
-                }.padding(8).frame(width: 220).foregroundStyle(Theme.ink)
+                }.padding(8).frame(width: 220).foregroundStyle(Theme.ink).background(Theme.surface)
             }
             VStack(spacing: 6) {
                 ForEach(Section.allCases, id: \.self) { item in
+                    let active = section == item && !showingSettings
                     Button {
                         section = item; album = nil; artist = nil; query = ""; player.expanded = false; showingSettings = false
                     } label: {
                         HStack(spacing: 14) {
                             Image(systemName: item.symbol).frame(width: 24, height: 20, alignment: .center)
+                                .foregroundStyle(active ? Theme.accent : Theme.muted)
                             Text(item.rawValue).frame(maxWidth: .infinity, alignment: .leading)
                         }
-                            .font(.system(size: 14, weight: section == item && !showingSettings ? .semibold : .regular))
+                            .font(.system(size: 14, weight: active ? .semibold : .regular))
+                            .foregroundStyle(active ? Theme.ink : Theme.secondary)
                             .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .leading).padding(.horizontal, 14)
-                            .background(section == item && !showingSettings ? Theme.sage : .clear, in: RoundedRectangle(cornerRadius: 9))
+                            .background(active ? Theme.selected : .clear, in: RoundedRectangle(cornerRadius: 9))
                             .contentShape(Rectangle())
                     }.buttonStyle(.plain)
                 }
@@ -161,14 +170,18 @@ struct DesktopView: View {
                 ProgressView("正在下载 \(library.downloading.count) 首").font(.caption).controlSize(.small).padding(.horizontal, 10)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Label(library.offline ? "离线音乐空间" : "已连接音乐服务器", systemImage: library.offline ? "internaldrive" : "circle.fill")
-                Text("\(library.libraryDownloads.count) 首已下载 · 随时聆听").font(.caption2)
-            }.font(.caption).foregroundStyle(Theme.muted).padding(.horizontal, 10).padding(.bottom, 18)
-        }.padding(.horizontal, 14).frame(width: 204).frame(maxHeight: .infinity, alignment: .top).background(.ultraThinMaterial)
+                HStack(spacing: 7) {
+                    Circle().fill(library.offline ? Theme.muted : Theme.ok).frame(width: 7, height: 7)
+                    Text(library.offline ? "离线音乐空间" : "已连接音乐服务器")
+                }.foregroundStyle(Theme.secondary)
+                Text("\(library.libraryDownloads.count) 首已下载 · 随时聆听").font(.caption2).foregroundStyle(Theme.muted)
+            }.font(.caption).padding(.horizontal, 10).padding(.bottom, 18)
+        }.padding(.horizontal, 14).frame(width: 204).frame(maxHeight: .infinity, alignment: .top).background(Theme.sidebar)
+            .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
     }
 
     private var header: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 16) {
             if player.expanded {
                 Button { player.expanded = false } label: { Image(systemName: "chevron.down") }.help("收起播放页")
             } else if !showingSettings && (album != nil || artist != nil) {
@@ -183,7 +196,14 @@ struct DesktopView: View {
                 TextField("搜索歌曲、专辑、艺术家", text: $query).textFieldStyle(.plain)
                     .onSubmit { player.expanded = false; selection.query = query }
                 if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) }
-            }.padding(10).frame(width: 255).background(.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 9)) }
+            }.padding(10).frame(width: 255).background(Theme.surface, in: RoundedRectangle(cornerRadius: 9))
+                .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.border) } }
+            Button {
+                appearanceRaw = (colorScheme == .dark ? AppearanceMode.light : .dark).rawValue
+            } label: {
+                Image(systemName: colorScheme == .dark ? "sun.max" : "moon")
+            }.help(colorScheme == .dark ? "切换为日间纸韵" : "切换为夜间黑胶")
+                .accessibilityLabel(colorScheme == .dark ? "切换为日间纸韵" : "切换为夜间黑胶")
             Button { Task { await library.refresh() } } label: { Image(systemName: "arrow.clockwise") }.disabled(library.busy).help("刷新音乐库")
             Button { player.expanded = false; showingSettings = true } label: { Image(systemName: "gearshape") }.help("设置与服务器登录")
         }.buttonStyle(.borderless).padding(.horizontal, 28).frame(height: 70)
@@ -218,7 +238,8 @@ struct DesktopView: View {
                                         .frame(width: 48, height: 48).clipShape(Circle())
                                     VStack(alignment: .leading) { Text(item.name); Text("\(item.tracks) 首").font(.caption).foregroundStyle(Theme.muted) }
                                     Spacer()
-                                }.padding(14).background(.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+                                }.padding(14).background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                                    .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border) }
                             }.buttonStyle(.plain)
                         }
                     }
@@ -231,11 +252,11 @@ struct DesktopView: View {
                                 Button { playAll() } label: {
                                     HStack(spacing: 10) {
                                         Image(systemName: "play.fill").font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(.white).frame(width: 28, height: 28).background(Theme.accent, in: Circle())
+                                            .foregroundStyle(Theme.accentOn).frame(width: 28, height: 28).background(Theme.accentFill, in: Circle())
                                         Text("全部播放").font(.system(size: 14, weight: .medium))
                                     }
                                 }.disabled(tracks.isEmpty).accessibilityLabel("全部播放")
-                                Text("（共 \(tracks.count) 首）").font(.system(size: 12)).foregroundStyle(Theme.ink.opacity(0.65))
+                                Text("（共 \(tracks.count) 首）").font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.secondary)
                                 Spacer()
                                 Button { selecting = true; showQueue = false } label: { Image(systemName: "checklist").collectionIcon() }
                                     .accessibilityLabel("选歌").help("选歌").disabled(tracks.isEmpty)
@@ -283,7 +304,7 @@ struct DesktopView: View {
             } label: { Image(systemName: "text.badge.plus").collectionIcon() }
                 .help("加入播放列表").accessibilityLabel("加入播放列表")
                 .disabled(batch.busy || chosen.isEmpty)
-        }.buttonStyle(.plain).padding(.horizontal, 30).frame(height: 82).background(.regularMaterial)
+        }.buttonStyle(.plain).padding(.horizontal, 30).frame(height: 82).background(Theme.playerBar)
     }
 
     private func runBatch(_ action: TrackBatchActions.Action) {
@@ -301,7 +322,7 @@ struct DesktopView: View {
                 }.buttonStyle(.plain).disabled(tracks.isEmpty || batch.busy)
                     .accessibilityLabel("全选当前结果")
                     .accessibilityValue(selection.allSelected(in: tracks) ? "已全选" : "未全选")
-                Text("已选 \(selectedTracks.count) 首").font(.caption).foregroundStyle(Theme.ink.opacity(0.7))
+                Text("已选 \(selectedTracks.count) 首").font(.caption).foregroundStyle(Theme.secondary)
                 Spacer()
                 Button("完成") { cancelSelection() }.buttonStyle(.plain).foregroundStyle(Theme.accent)
                     .help("退出选歌，不修改播放列表")
@@ -313,13 +334,14 @@ struct DesktopView: View {
     private var trackSearchControls: some View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(Theme.ink.opacity(0.6))
+                Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted)
                 TextField("搜索歌曲 / 专辑 / 歌手", text: $selection.query).textFieldStyle(.plain).accessibilityLabel("搜索歌曲")
                 if !selection.query.isEmpty {
-                    Button { selection.query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    Button { selection.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.muted) }
                         .buttonStyle(.plain).accessibilityLabel("清除歌曲搜索")
                 }
-            }.padding(10).background(.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 9))
+            }.padding(10).background(Theme.surface, in: RoundedRectangle(cornerRadius: 9))
+                .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.border) }
             Button { showSelectionFilters.toggle() } label: {
                 Image(systemName: "line.3.horizontal.decrease").collectionIcon()
             }.buttonStyle(.plain).foregroundStyle(selection.hasFilters ? Theme.accent : Theme.ink)
@@ -381,10 +403,11 @@ struct DesktopView: View {
                         Text(track.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
                         HStack(spacing: 8) {
                             Text(track.format.uppercased() + (track.bitrate > 0 ? " \(track.bitrate / 1000)K" : ""))
-                                .font(.system(size: 10, weight: .medium)).padding(.horizontal, 5).padding(.vertical, 2)
-                                .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.ink.opacity(0.2)) }
-                            Text("\(track.artist) · \(track.album)").font(.caption).lineLimit(1)
-                        }.foregroundStyle(Theme.ink.opacity(0.65))
+                                .font(.system(size: 10, weight: .medium).monospacedDigit()).padding(.horizontal, 6).padding(.vertical, 2)
+                                .foregroundStyle(Theme.sageInk)
+                                .background(Theme.sage, in: RoundedRectangle(cornerRadius: 5))
+                            Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
+                        }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     Text(clock(track.duration)).font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)
                 }.contentShape(Rectangle())
@@ -393,7 +416,7 @@ struct DesktopView: View {
                 .accessibilityValue(selecting ? (selection.selectedIDs.contains(track.id) ? "已选择" : "未选择") : "")
             if !selecting {
                 Button { Task { await library.favorite(track) } } label: {
-                    Image(systemName: track.favorite ? "heart.fill" : "heart").foregroundStyle(Theme.accent)
+                    Image(systemName: track.favorite ? "heart.fill" : "heart").foregroundStyle(track.favorite ? Theme.accent : Theme.muted)
                 }.buttonStyle(.borderless).disabled(library.offline).help("收藏")
                 Menu {
                     Button("加入播放列表") { player.append([track], session: library.session) }
@@ -407,11 +430,11 @@ struct DesktopView: View {
                         Button("下载到本机") { Task { await library.download(track) } }
                             .disabled(library.session == nil || library.offline || library.downloading.contains(track.id))
                     }
-                } label: { Image(systemName: library.downloading.contains(track.id) ? "arrow.down.circle.dotted" : "ellipsis") }
+                } label: { Image(systemName: library.downloading.contains(track.id) ? "arrow.down.circle.dotted" : "ellipsis").foregroundStyle(Theme.muted) }
                     .menuStyle(.borderlessButton).frame(width: 24).help("下载与播放操作")
             }
         }.padding(.horizontal, 12).padding(.vertical, 14)
-            .background((selecting ? selection.selectedIDs.contains(track.id) : player.current?.id == track.id) ? Theme.sage : .clear,
+            .background((selecting ? selection.selectedIDs.contains(track.id) : player.current?.id == track.id) ? Theme.selected : .clear,
                         in: RoundedRectangle(cornerRadius: 9))
             .foregroundStyle(player.current?.id == track.id ? Theme.accent : Theme.ink)
     }
@@ -429,22 +452,23 @@ struct DesktopView: View {
                                     Artwork(path: track.artwork).frame(width: 36, height: 36)
                                     VStack(alignment: .leading, spacing: 5) { Text(track.title).lineLimit(1); Text(track.artist).font(.caption).foregroundStyle(Theme.muted).lineLimit(1) }
                                     Spacer()
-                                    if player.current?.id == track.id { Image(systemName: "speaker.wave.2.fill") }
-                                }.padding(9).background(player.current?.id == track.id ? Theme.sage : .clear, in: RoundedRectangle(cornerRadius: 8))
+                                    if player.current?.id == track.id { Image(systemName: "speaker.wave.2.fill").foregroundStyle(Theme.accent) }
+                                }.padding(9).background(player.current?.id == track.id ? Theme.selected : .clear, in: RoundedRectangle(cornerRadius: 8))
                             }.buttonStyle(.plain).id(track.id)
                         }
                     }
                 }.onAppear { proxy.scrollTo(player.current?.id, anchor: .center) }
             }
-        }.padding(18).background(.regularMaterial)
+        }.padding(18).background(Theme.surface)
+            .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 1) }
     }
 }
 
 private extension View {
     func collectionIcon() -> some View {
         font(.system(size: 15, weight: .regular)).frame(width: 34, height: 34)
-            .background(.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 7))
-            .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.ink.opacity(0.12)) }
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border) }
             .contentShape(Rectangle())
     }
 }
@@ -456,11 +480,11 @@ struct Artwork: View {
     @State private var image: NSImage?
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Theme.sage, Theme.muted.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: [Theme.surfaceElevated, Theme.selected], startPoint: .topLeading, endPoint: .bottomTrailing)
             if let image { Image(nsImage: image).resizable().scaledToFill() }
             else if let fallback { Text(fallback).font(.title2).foregroundStyle(Theme.ink) }
             else { Image(systemName: "opticaldisc").resizable().scaledToFit().padding(15).foregroundStyle(Theme.muted) }
-        }.aspectRatio(1, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 7))
+        }.aspectRatio(1, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 8))
         .task(id: "\(library.session?.server.absoluteString ?? "")\(library.session?.token ?? "")\(path ?? "")") {
             image = nil
             if let path, path.hasPrefix("/api/v1/tracks/"), let id = path.split(separator: "/").dropLast().last,
@@ -492,28 +516,32 @@ struct ListeningView: View {
                             ForEach(0..<12) { index in Circle().stroke(.white.opacity(0.045), lineWidth: 1).padding(CGFloat(index) * 4 + 8) }
                             Artwork(path: track.artwork).clipShape(Circle()).padding(geometry.size.width * 0.048)
                         }.aspectRatio(1, contentMode: .fit).frame(maxWidth: 350)
-                        Text(track.title).font(.title2.weight(.medium))
-                        Text("\(track.artist) · \(track.album)").font(.callout).foregroundStyle(Theme.muted).lineLimit(2)
-                        Text("\(track.format.uppercased()) · \(track.sampleRate / 1000) kHz").font(.caption).foregroundStyle(Theme.muted)
+                        Text(track.title).font(.title2.weight(.semibold))
+                        Text("\(track.artist) · \(track.album)").font(.callout).foregroundStyle(Theme.secondary).lineLimit(2)
+                        Text("\(track.format.uppercased()) · \(track.sampleRate / 1000) kHz")
+                            .font(.caption.weight(.medium).monospacedDigit())
+                            .foregroundStyle(Theme.sageInk)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Theme.sage, in: Capsule())
                     }.frame(maxWidth: .infinity)
                 }
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 28) {
+                        VStack(alignment: .leading, spacing: 26) {
                             if player.lyrics.isEmpty {
                                 Text(player.plainLyrics.isEmpty ? "纯粹聆听，也是共鸣。\n暂无歌词" : player.plainLyrics).font(.title3).foregroundStyle(Theme.muted).lineSpacing(12)
                             }
                             ForEach(player.lyrics) { line in
                                 Button { player.seek(line.time) } label: {
-                                    Text(line.text).font(.system(size: 22, weight: active == line.id ? .semibold : .regular))
-                                        .foregroundStyle(active == line.id ? Theme.ink : Theme.muted.opacity(0.6)).multilineTextAlignment(.leading)
+                                    Text(line.text).font(.system(size: active == line.id ? 22 : 19, weight: active == line.id ? .semibold : .regular))
+                                        .foregroundStyle(active == line.id ? Theme.ink : Theme.muted.opacity(0.7)).multilineTextAlignment(.leading)
                                 }.buttonStyle(.plain).id(line.id)
                             }
                         }.padding(.vertical, 100).frame(maxWidth: .infinity, alignment: .leading)
                     }.onChange(of: active) { _, value in withAnimation { proxy.scrollTo(value, anchor: .center) } }
                 }.frame(maxWidth: .infinity)
             }.padding(40).frame(width: geometry.size.width, height: geometry.size.height)
-        }.background(LinearGradient(colors: [Theme.sage.opacity(0.7), Theme.paper], startPoint: .topLeading, endPoint: .bottomTrailing))
+        }.background(LinearGradient(colors: [Theme.listeningStart, Theme.paper, Theme.listeningEnd], startPoint: .topLeading, endPoint: .bottomTrailing))
     }
 }
 
@@ -521,9 +549,18 @@ struct ServerSettings: View {
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var desktop: DesktopIntegration
     @ObservedObject private var cache = PlaybackCache.shared
+    @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.system.rawValue
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                settingsSection("外观主题") {
+                    Picker("主题模式", selection: $appearanceRaw) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }.pickerStyle(.segmented).labelsHidden()
+                    explanation("支持跟随系统自动切换，或固定使用「日间纸韵」与「夜间黑胶」。")
+                }
                 settingsSection("服务器") {
                     if let session = library.session {
                         Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 16) {
@@ -625,13 +662,13 @@ struct ServerSettings: View {
             Text(title).font(.system(size: 16, weight: .semibold)).padding(.horizontal, 4)
             VStack(alignment: .leading, spacing: 16, content: content)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(20)
-                .background(.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
-                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.ink.opacity(0.08)) }
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border) }
         }
     }
 
     private func fieldLabel(_ title: String) -> some View {
-        Text(title).foregroundStyle(Theme.ink.opacity(0.7)).frame(width: 64, alignment: .leading)
+        Text(title).foregroundStyle(Theme.secondary).frame(width: 64, alignment: .leading)
     }
 
     private func informationRow(_ title: String, value: String) -> some View {
@@ -643,7 +680,7 @@ struct ServerSettings: View {
     }
 
     private func explanation(_ text: String) -> some View {
-        Text(text).font(.system(size: 12)).foregroundStyle(Theme.ink.opacity(0.7))
+        Text(text).font(.system(size: 12)).foregroundStyle(Theme.muted)
             .lineSpacing(4).fixedSize(horizontal: false, vertical: true)
     }
 }

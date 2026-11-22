@@ -53,6 +53,84 @@ const destinationIcons = [
 String clock(Duration value) =>
     '${value.inMinutes}:${(value.inSeconds % 60).toString().padLeft(2, '0')}';
 
+class ResonaPalette extends ThemeExtension<ResonaPalette> {
+  final Color sidebar;
+  final Color accentFill;
+  final Color accentOn;
+  final Color sage;
+  final Color sageInk;
+  final Color listeningStart;
+  final Color listeningEnd;
+
+  const ResonaPalette({
+    required this.sidebar,
+    required this.accentFill,
+    required this.accentOn,
+    required this.sage,
+    required this.sageInk,
+    required this.listeningStart,
+    required this.listeningEnd,
+  });
+
+  // Scheme A: Warm Studio (Day Paper / Vinyl Night)
+  static const light = ResonaPalette(
+    sidebar: Color(0xffede9df),
+    accentFill: Color(0xffb54720),
+    accentOn: Color(0xfffcfbf8),
+    sage: Color(0xffe4eadb),
+    sageInk: Color(0xff2b3a22),
+    listeningStart: Color(0xffece8de),
+    listeningEnd: Color(0xfff3eae1),
+  );
+
+  static const dark = ResonaPalette(
+    sidebar: Color(0xff191815),
+    accentFill: Color(0xffb84922),
+    accentOn: Color(0xfffcfbf8),
+    sage: Color(0xff222a1f),
+    sageInk: Color(0xffc2d6b0),
+    listeningStart: Color(0xff1b1a16),
+    listeningEnd: Color(0xff1d1612),
+  );
+
+  static ResonaPalette of(BuildContext context) =>
+      Theme.of(context).extension<ResonaPalette>() ??
+      (Theme.of(context).brightness == Brightness.dark ? dark : light);
+
+  @override
+  ResonaPalette copyWith({
+    Color? sidebar,
+    Color? accentFill,
+    Color? accentOn,
+    Color? sage,
+    Color? sageInk,
+    Color? listeningStart,
+    Color? listeningEnd,
+  }) => ResonaPalette(
+    sidebar: sidebar ?? this.sidebar,
+    accentFill: accentFill ?? this.accentFill,
+    accentOn: accentOn ?? this.accentOn,
+    sage: sage ?? this.sage,
+    sageInk: sageInk ?? this.sageInk,
+    listeningStart: listeningStart ?? this.listeningStart,
+    listeningEnd: listeningEnd ?? this.listeningEnd,
+  );
+
+  @override
+  ResonaPalette lerp(ThemeExtension<ResonaPalette>? other, double t) {
+    if (other is! ResonaPalette) return this;
+    return ResonaPalette(
+      sidebar: Color.lerp(sidebar, other.sidebar, t)!,
+      accentFill: Color.lerp(accentFill, other.accentFill, t)!,
+      accentOn: Color.lerp(accentOn, other.accentOn, t)!,
+      sage: Color.lerp(sage, other.sage, t)!,
+      sageInk: Color.lerp(sageInk, other.sageInk, t)!,
+      listeningStart: Color.lerp(listeningStart, other.listeningStart, t)!,
+      listeningEnd: Color.lerp(listeningEnd, other.listeningEnd, t)!,
+    );
+  }
+}
+
 class ResonaApp extends StatelessWidget {
   final MusicController controller;
   final WindowsDesktop? desktopIntegration;
@@ -64,32 +142,41 @@ class ResonaApp extends StatelessWidget {
   ThemeData theme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
     final windows = defaultTargetPlatform == TargetPlatform.windows;
+    final palette = dark ? ResonaPalette.dark : ResonaPalette.light;
     final scheme =
         ColorScheme.fromSeed(
-          seedColor: const Color(0xffbe5532),
+          seedColor: const Color(0xffb54720),
           brightness: brightness,
         ).copyWith(
-          primary: dark ? const Color(0xffffb397) : const Color(0xffa83f22),
-          surface: dark ? const Color(0xff201f1c) : const Color(0xfff6f4ee),
+          primary: dark ? const Color(0xffea7e55) : const Color(0xffa43c17),
+          onPrimary: const Color(0xfffcfbf8),
+          surface: dark ? const Color(0xff121110) : const Color(0xfff6f3ec),
+          onSurface: dark ? const Color(0xfff3efe7) : const Color(0xff1c1d1a),
+          onSurfaceVariant: dark
+              ? const Color(0xffb6afa3)
+              : const Color(0xff4b4e46),
           surfaceContainerLow: dark
-              ? const Color(0xff262722)
-              : const Color(0xfffbfaf7),
+              ? const Color(0xff22201c)
+              : const Color(0xfffcfbf8),
+          surfaceContainer: palette.sidebar,
           surfaceContainerHighest: dark
-              ? const Color(0xff393d33)
-              : const Color(0xffeaece2),
+              ? const Color(0xff292621)
+              : const Color(0xfff1ede4),
+          outline: dark ? const Color(0xff454038) : const Color(0xffcfc9bc),
           outlineVariant: dark
-              ? const Color(0xff55594f)
-              : const Color(0xffdfdfd6),
+              ? const Color(0xff302d27)
+              : const Color(0xffe2ddd1),
           secondaryContainer: dark
-              ? const Color(0xff3c4434)
-              : const Color(0xffe5eadb),
+              ? const Color(0xff2c2924)
+              : const Color(0xffe8e3d6),
           onSecondaryContainer: dark
-              ? const Color(0xffdce7cd)
-              : const Color(0xff34432e),
+              ? const Color(0xfff3efe7)
+              : const Color(0xff1c1d1a),
         );
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
+      extensions: [palette],
       fontFamily: windows ? 'Microsoft YaHei UI' : null,
       fontFamilyFallback: windows
           ? const ['Microsoft YaHei', 'Segoe UI']
@@ -161,32 +248,75 @@ class ResonaApp extends StatelessWidget {
       scaffoldBackgroundColor: scheme.surface,
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
         scrolledUnderElevation: 0,
       ),
-      inputDecorationTheme: const InputDecorationTheme(
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: palette.accentFill,
+          foregroundColor: palette.accentOn,
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(color: scheme.outlineVariant),
+          backgroundColor: scheme.surfaceContainerLow,
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: scheme.surfaceContainerLow,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.all(Radius.circular(12)),
+          borderRadius: const BorderRadius.all(Radius.circular(10)),
+          borderSide: BorderSide(color: scheme.outlineVariant),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: const BorderRadius.all(Radius.circular(10)),
+          borderSide: BorderSide(color: scheme.outlineVariant),
         ),
       ),
       dividerTheme: DividerThemeData(color: scheme.outlineVariant),
       navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: scheme.surface,
+        backgroundColor: palette.sidebar,
+        indicatorColor: scheme.secondaryContainer,
+        selectedIconTheme: IconThemeData(color: scheme.primary),
       ),
       navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: palette.sidebar,
+        indicatorColor: scheme.secondaryContainer,
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: scheme.surfaceContainerLow,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: scheme.surfaceContainerLow,
+      ),
+      chipTheme: ChipThemeData(
         backgroundColor: scheme.surface,
+        selectedColor: scheme.secondaryContainer,
+        side: BorderSide(color: scheme.outlineVariant),
+        labelStyle: TextStyle(color: scheme.onSurface),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
       ),
     );
   }
 
+  ThemeMode get themeMode => switch (controller.themePreference) {
+    'light' => ThemeMode.light,
+    'dark' => ThemeMode.dark,
+    _ => ThemeMode.system,
+  };
+
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'Resona',
-    debugShowCheckedModeBanner: false,
-    theme: theme(Brightness.light),
-    darkTheme: theme(Brightness.dark),
-    home: AnimatedBuilder(
-      animation: Listenable.merge([controller, desktopIntegration]),
-      builder: (context, _) => MusicPage(
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: Listenable.merge([controller, desktopIntegration]),
+    builder: (context, _) => MaterialApp(
+      title: 'Resona',
+      debugShowCheckedModeBanner: false,
+      theme: theme(Brightness.light),
+      darkTheme: theme(Brightness.dark),
+      themeMode: themeMode,
+      home: MusicPage(
         controller: controller,
         desktopIntegration: desktopIntegration,
       ),
@@ -372,7 +502,7 @@ class AdaptiveShell extends StatelessWidget {
               if (rail && desktop)
                 Container(
                   width: 204,
-                  color: Theme.of(context).colorScheme.surfaceContainerLow,
+                  color: ResonaPalette.of(context).sidebar,
                   padding: const EdgeInsets.fromLTRB(14, 36, 14, 20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -392,9 +522,20 @@ class AdaptiveShell extends StatelessWidget {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(9),
                               ),
-                              leading: Icon(icons[i], size: 21),
+                              leading: Icon(
+                                icons[i],
+                                size: 21,
+                                color: index == i
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                              ),
                               title: Text(labels[i]),
                               selected: index == i,
+                              selectedColor: Theme.of(
+                                context,
+                              ).colorScheme.onSurface,
                               selectedTileColor: Theme.of(
                                 context,
                               ).colorScheme.secondaryContainer,
@@ -775,6 +916,26 @@ class _MusicPageState extends State<MusicPage> {
                                   ),
                                 if (desktop)
                                   IconButton(
+                                    tooltip:
+                                        Theme.of(context).brightness ==
+                                            Brightness.dark
+                                        ? '切换为日间纸韵'
+                                        : '切换为夜间黑胶',
+                                    onPressed: () => c.setThemePreference(
+                                      Theme.of(context).brightness ==
+                                              Brightness.dark
+                                          ? 'light'
+                                          : 'dark',
+                                    ),
+                                    icon: Icon(
+                                      Theme.of(context).brightness ==
+                                              Brightness.dark
+                                          ? Icons.light_mode_outlined
+                                          : Icons.dark_mode_outlined,
+                                    ),
+                                  ),
+                                if (desktop)
+                                  IconButton(
                                     tooltip: '设置与服务器登录',
                                     onPressed: settingsPage,
                                     icon: const Icon(Icons.settings_outlined),
@@ -874,11 +1035,10 @@ class _MusicPageState extends State<MusicPage> {
     final enabled = !c.batchBusy && !c.busy && chosen.isNotEmpty;
     final online = enabled && c.authenticated && !c.offline;
     final scheme = Theme.of(context).colorScheme;
+    final palette = ResonaPalette.of(context);
     return Material(
       key: const ValueKey('track-selection-actions'),
-      color: scheme.brightness == Brightness.dark
-          ? const Color(0xff292c2d)
-          : const Color(0xffe8e9eb),
+      color: palette.sidebar,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
         decoration: BoxDecoration(
@@ -1273,6 +1433,31 @@ class _MusicPageState extends State<MusicPage> {
             ),
             const Text('关闭主窗口会最小化并继续播放。通过任务栏右键关闭窗口，或从托盘菜单退出 Resona。'),
           ]),
+        settingsGroup('外观主题', [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final option in const [
+                ('system', '跟随系统'),
+                ('light', '日间纸韵'),
+                ('dark', '夜间黑胶'),
+              ])
+                ChoiceChip(
+                  label: Text(option.$2),
+                  selected: c.themePreference == option.$1,
+                  showCheckmark: false,
+                  onSelected: (_) => unawaited(c.setThemePreference(option.$1)),
+                ),
+            ],
+          ),
+          Text(
+            '支持跟随系统自动切换，或固定使用「日间纸韵」与「夜间黑胶」。',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ]),
         settingsGroup('离线音乐', [
           Text('本机下载 · ${c.cache?.downloads.length ?? 0} 首'),
           const Text('通过歌曲右侧菜单下载音频、封面和歌词。退出登录后仍可从「已下载」播放和删除。'),
@@ -1738,15 +1923,13 @@ class _MusicPageState extends State<MusicPage> {
                                     children: [
                                       Container(
                                         padding: const EdgeInsets.symmetric(
-                                          horizontal: 5,
-                                          vertical: 1,
+                                          horizontal: 6,
+                                          vertical: 2,
                                         ),
                                         decoration: BoxDecoration(
-                                          border: Border.all(
-                                            color: scheme.outline,
-                                          ),
+                                          color: ResonaPalette.of(context).sage,
                                           borderRadius: BorderRadius.circular(
-                                            4,
+                                            5,
                                           ),
                                         ),
                                         child: Text(
@@ -1754,7 +1937,13 @@ class _MusicPageState extends State<MusicPage> {
                                           style: theme.textTheme.bodySmall
                                               ?.copyWith(
                                                 fontSize: 10,
-                                                color: scheme.onSurfaceVariant,
+                                                fontWeight: FontWeight.w500,
+                                                fontFeatures: const [
+                                                  FontFeature.tabularFigures(),
+                                                ],
+                                                color: ResonaPalette.of(
+                                                  context,
+                                                ).sageInk,
                                               ),
                                         ),
                                       ),
@@ -1895,6 +2084,7 @@ class DesktopListening extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = controller, track = c.current!;
     final theme = Theme.of(context), scheme = theme.colorScheme;
+    final palette = ResonaPalette.of(context);
     final rate = track.json['sample_rate'];
     final metadata = [
       track.format.toUpperCase(),
@@ -1903,7 +2093,7 @@ class DesktopListening extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [scheme.secondaryContainer, scheme.surface],
+          colors: [palette.listeningStart, scheme.surface, palette.listeningEnd],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -1977,11 +2167,25 @@ class DesktopListening extends StatelessWidget {
                       color: scheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    metadata,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
+                  const SizedBox(height: 10),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: palette.sage,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                      child: Text(
+                        metadata,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: palette.sageInk,
+                          fontWeight: FontWeight.w500,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -2135,6 +2339,10 @@ class _DesktopPlayerState extends State<DesktopPlayer> {
         IconButton.filled(
           tooltip: c.playing ? '暂停' : '播放',
           onPressed: track == null || c.opening ? null : () => c.toggle(),
+          style: IconButton.styleFrom(
+            backgroundColor: ResonaPalette.of(context).accentFill,
+            foregroundColor: ResonaPalette.of(context).accentOn,
+          ),
           constraints: const BoxConstraints.tightFor(width: 40, height: 40),
           padding: EdgeInsets.zero,
           icon: Icon(c.playing ? Icons.pause : Icons.play_arrow, size: 22),
@@ -2288,7 +2496,7 @@ class _DesktopPlayerState extends State<DesktopPlayer> {
       child: Focus(
         onFocusChange: (value) => setState(() => focused = value),
         child: Material(
-          color: scheme.surfaceContainerLow,
+          color: ResonaPalette.of(context).sidebar,
           child: LayoutBuilder(
             builder: (context, bounds) {
               final compact = bounds.maxWidth < 650;
@@ -2748,8 +2956,14 @@ class MiniPlayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = controller, track = controller.current!;
+    final scheme = Theme.of(context).colorScheme;
+    final palette = ResonaPalette.of(context);
     return Material(
-      color: Theme.of(context).colorScheme.secondaryContainer,
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2790,6 +3004,8 @@ class MiniPlayer extends StatelessWidget {
                             track.artist,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
                           ),
                         ],
                       ),
@@ -2802,9 +3018,13 @@ class MiniPlayer extends StatelessWidget {
                     onPressed: () => c.next(delta: -1),
                     icon: const Icon(Icons.skip_previous),
                   ),
-                IconButton(
+                IconButton.filled(
                   tooltip: c.playing ? '暂停' : '播放',
                   onPressed: c.opening ? null : () => c.toggle(),
+                  style: IconButton.styleFrom(
+                    backgroundColor: palette.accentFill,
+                    foregroundColor: palette.accentOn,
+                  ),
                   icon: Icon(c.playing ? Icons.pause : Icons.play_arrow),
                 ),
                 IconButton(
@@ -2918,6 +3138,10 @@ Future<void> showPlayer(
                     iconSize: 32,
                     tooltip: c.playing ? '暂停' : '播放',
                     onPressed: c.opening ? null : () => c.toggle(),
+                    style: IconButton.styleFrom(
+                      backgroundColor: ResonaPalette.of(context).accentFill,
+                      foregroundColor: ResonaPalette.of(context).accentOn,
+                    ),
                     icon: Icon(c.playing ? Icons.pause : Icons.play_arrow),
                   ),
                   IconButton(

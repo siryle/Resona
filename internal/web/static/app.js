@@ -2225,6 +2225,73 @@ if ("mediaSession" in navigator) {
   ])
     navigator.mediaSession.setActionHandler(action, handler);
 }
+const THEME_STORAGE_KEY = "resona_theme";
+const darkMedia =
+  typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-color-scheme: dark)")
+    : null;
+function readThemeMode() {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === "light" || saved === "dark" || saved === "system")
+      return saved;
+  } catch {
+    /* Storage may be unavailable in restricted contexts. */
+  }
+  return "system";
+}
+function resolvedTheme(mode) {
+  if (mode === "light" || mode === "dark") return mode;
+  return darkMedia && darkMedia.matches ? "dark" : "light";
+}
+function applyTheme(mode, persist = true) {
+  const next =
+    mode === "light" || mode === "dark" || mode === "system" ? mode : "system";
+  if (persist) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      /* Keep the selected theme active for the current session. */
+    }
+  }
+  const root = document.documentElement;
+  if (next === "system") delete root.dataset.theme;
+  else root.dataset.theme = next;
+  const effective = resolvedTheme(next);
+  root.dataset.resolvedTheme = effective;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", effective === "dark" ? "#121110" : "#f6f3ec");
+  const toggle = $("theme-toggle");
+  if (toggle) {
+    const label =
+      effective === "dark"
+        ? "切换为日间纸韵"
+        : "切换为夜间黑胶";
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("title", label);
+  }
+  for (const button of document.querySelectorAll("[data-theme-option]")) {
+    button.setAttribute(
+      "aria-pressed",
+      String(button.dataset.themeOption === next),
+    );
+  }
+}
+applyTheme(readThemeMode(), false);
+if (darkMedia && typeof darkMedia.addEventListener === "function") {
+  darkMedia.addEventListener("change", () => {
+    if (readThemeMode() === "system") applyTheme("system", false);
+  });
+}
+$("theme-toggle")?.addEventListener("click", () => {
+  const effective = resolvedTheme(readThemeMode());
+  applyTheme(effective === "dark" ? "light" : "dark", true);
+});
+for (const button of document.querySelectorAll("[data-theme-option]")) {
+  button.addEventListener("click", () =>
+    applyTheme(button.dataset.themeOption, true),
+  );
+}
 async function bootstrap() {
   try {
     const status = await api("/auth/status");

@@ -53,6 +53,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _playWork = Future.value();
   Future<void> _stateWork = Future.value();
   File? _stateFile;
+  File? _prefsFile;
+  String themePreference = 'system';
   bool _restoringPlayback = false;
   bool _needsPlaybackOpen = false;
   Duration _savedPosition = Duration.zero;
@@ -85,6 +87,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     loading = true;
     notifyListeners();
+    await _loadThemePreference();
     try {
       final value =
           await _credentials.read(key: 'session') ??
@@ -186,6 +189,44 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       _needsPlaybackOpen = current != null;
     } catch (_) {
       /* Missing or damaged state must not prevent startup. */
+    }
+  }
+
+  Future<void> _loadThemePreference() async {
+    try {
+      final dir = supportDirectory ?? await getApplicationSupportDirectory();
+      _prefsFile = File('${dir.path}/appearance.json');
+      if (await _prefsFile!.exists()) {
+        final data = jsonDecode(await _prefsFile!.readAsString());
+        final mode = data is Map ? data['theme'] : null;
+        if (mode is String &&
+            (mode == 'light' || mode == 'dark' || mode == 'system')) {
+          themePreference = mode;
+          notifyListeners();
+        }
+      }
+    } catch (_) {
+      /* Missing or unreadable preferences fall back to system appearance. */
+    }
+  }
+
+  Future<void> setThemePreference(String mode) async {
+    if (mode != 'light' && mode != 'dark' && mode != 'system') return;
+    if (themePreference == mode) return;
+    themePreference = mode;
+    notifyListeners();
+    try {
+      final file = _prefsFile ??
+          File(
+            '${(supportDirectory ?? await getApplicationSupportDirectory()).path}/appearance.json',
+          );
+      _prefsFile = file;
+      await file.parent.create(recursive: true);
+      final partial = File('${file.path}.part');
+      await partial.writeAsString(jsonEncode({'theme': mode}), flush: true);
+      await partial.rename(file.path);
+    } catch (_) {
+      /* Keep the chosen theme active for the current session. */
     }
   }
 

@@ -27,20 +27,22 @@ struct LoginView: View {
                 }
                 if let error = library.error { Text(error).font(.footnote).foregroundStyle(Theme.accent).accessibilityAddTraits(.updatesFrequently) }
                 Button { Task { await library.login() } } label: {
-                    HStack { Text("进入音乐空间"); Spacer(); if library.busy { ProgressView().tint(.white) } else { Image(systemName: "arrow.up.right") } }
-                        .font(.subheadline.weight(.semibold)).padding(18).background(Theme.accent, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(.white)
+                    HStack { Text("进入音乐空间"); Spacer(); if library.busy { ProgressView().tint(Theme.accentOn) } else { Image(systemName: "arrow.up.right") } }
+                        .font(.subheadline.weight(.semibold)).padding(18).background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(Theme.accentOn)
                 }.disabled(library.busy || library.serverInput.isEmpty || library.password.isEmpty)
-                Text("YOUR MUSIC. YOUR SPACE.").font(.system(size: 9)).tracking(3).foregroundStyle(Theme.muted).frame(maxWidth: .infinity).padding(.top, 15)
-                Text("首次使用？请先在服务端网页设置管理员密码。").font(.caption2).foregroundStyle(Theme.muted).frame(maxWidth: .infinity)
+                Text("首次使用？请先在服务端网页设置管理员密码。").font(.caption).foregroundStyle(Theme.muted).frame(maxWidth: .infinity).padding(.top, 10)
             }.padding(30).frame(maxWidth: 530).frame(maxWidth: .infinity)
         }
-        .background(LinearGradient(colors: [Theme.sage, Theme.paper, Theme.paper], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .foregroundStyle(Theme.ink)
+        .background(LinearGradient(colors: [Theme.listeningStart, Theme.paper, Theme.listeningEnd], startPoint: .topLeading, endPoint: .bottomTrailing))
     }
 
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(.caption).foregroundStyle(Theme.muted)
-            content().font(.subheadline).padding(15).background(.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.caption).foregroundStyle(Theme.secondary)
+            content().font(.subheadline).padding(15)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border))
         }
     }
 }
@@ -54,18 +56,19 @@ struct Artwork: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Theme.sage, Color(red: 0.77, green: 0.81, blue: 0.69)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: [Theme.surfaceElevated, Theme.selected], startPoint: .topLeading, endPoint: .bottomTrailing)
             if let image { Image(uiImage: image).resizable().scaledToFill() }
             else if let fallback { Text(fallback).font(.title2).foregroundStyle(Theme.ink) }
             else {
                 GeometryReader { proxy in
-                    Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(Theme.ink.opacity(0.65))
-                        .padding(proxy.size.width * 0.16)
+                    Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(Theme.muted)
+                        .padding(proxy.size.width * 0.18)
                 }
             }
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: radius))
+        .overlay(RoundedRectangle(cornerRadius: radius).stroke(Theme.borderSubtle, lineWidth: 0.75))
         .task(id: "\(library.session?.server.absoluteString ?? "")\(library.session?.token ?? "")\(path ?? "")") {
             image = nil
             if let path, path.hasPrefix("/api/v1/tracks/"), let id = path.split(separator: "/").dropLast().last,
@@ -115,7 +118,7 @@ struct MainView: View {
                 if player.current != nil {
                     MiniPlayer().padding(.horizontal, 14).padding(.vertical, 8)
                 }
-                Divider()
+                Rectangle().fill(Theme.border).frame(height: 0.75)
                 HStack(spacing: 0) {
                     ForEach(MusicTab.allCases, id: \.self) { tab in
                         Button { selectedTab = tab } label: {
@@ -134,7 +137,7 @@ struct MainView: View {
                 }
                 .accessibilityIdentifier("main-tab-bar")
             }
-            .background(Theme.paper)
+            .background(Theme.playerBar)
         }
         .fullScreenCover(isPresented: $player.expanded) { NowPlayingView() }
         .alert("Resona", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
@@ -171,37 +174,51 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 22) {
                 HStack {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text("YOUR MUSIC UNIVERSE").font(.system(size: 9)).tracking(2).foregroundStyle(Theme.muted)
-                        Text("音乐，井然有声。").font(.system(size: 29, weight: .medium, design: .serif))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("音乐，井然有声。").font(.system(size: 27, weight: .semibold))
+                        Text("让每一份热爱，产生共鸣。").font(.caption).foregroundStyle(Theme.muted)
                     }
                     Spacer()
-                    Image("BrandIcon").resizable().frame(width: 38, height: 38).clipShape(RoundedRectangle(cornerRadius: 11))
+                    Image("BrandIcon").resizable().frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 10))
                 }
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 15) {
-                        Text("OWN YOUR SOUND").font(.system(size: 8)).tracking(2).foregroundStyle(Theme.muted)
-                        Text("好音乐，\n值得好好收藏。").font(.system(size: 25, weight: .medium, design: .serif)).lineSpacing(4)
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("好音乐，\n值得好好收藏。").font(.system(size: 22, weight: .semibold)).lineSpacing(4)
                         Button {
                             if let first = library.tracks.first { player.play(first, queue: library.tracks, session: library.session) }
                         } label: {
-                            Label("开始聆听", systemImage: "play.fill").font(.caption.weight(.medium)).padding(.horizontal, 15).padding(.vertical, 11).background(Theme.ink, in: Capsule()).foregroundStyle(.white)
+                            Label("开始聆听", systemImage: "play.fill").font(.caption.weight(.semibold))
+                                .padding(.horizontal, 16).padding(.vertical, 10)
+                                .background(Theme.accentFill, in: Capsule()).foregroundStyle(Theme.accentOn)
                         }.disabled(library.tracks.isEmpty)
                     }
                     Spacer(minLength: 0)
-                    Image(systemName: "opticaldisc").resizable().scaledToFit().frame(maxWidth: 120).foregroundStyle(Theme.ink).rotationEffect(.degrees(-20))
+                    ZStack {
+                        Circle().fill(Color(red: 0.09, green: 0.09, blue: 0.08))
+                            .shadow(color: .black.opacity(0.24), radius: 12, y: 6)
+                        ForEach(0..<5) { i in
+                            Circle().stroke(.white.opacity(0.06), lineWidth: 1).padding(CGFloat(i) * 7 + 8)
+                        }
+                        Circle().fill(Theme.accentFill).frame(width: 34, height: 34)
+                        Circle().fill(Theme.paper).frame(width: 9, height: 9)
+                    }.frame(width: 104, height: 104)
                 }
-                .padding(24).frame(maxWidth: .infinity, alignment: .leading).background(LinearGradient(colors: [Theme.sage, Theme.sage.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 20))
-                HStack {
+                .padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                .background(LinearGradient(colors: [Theme.heroStart, Theme.heroEnd], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.border))
+                HStack(spacing: 0) {
                     stat("\(library.tracks.count)", "首音乐")
-                    Spacer()
+                    Divider().frame(height: 30).overlay(Theme.borderSubtle)
                     stat("\(library.albums.count)", "张专辑")
-                    Spacer()
+                    Divider().frame(height: 30).overlay(Theme.borderSubtle)
                     stat("\(library.artists.count)", "位艺术家")
-                }.padding(.horizontal, 15)
-                Text("最近入库").font(.title3.weight(.medium))
+                }
+                .padding(.vertical, 14)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+                Text("最近入库").font(.title3.weight(.semibold))
                 if library.albums.isEmpty {
                     EmptyLibrary(title: "第一张唱片，等你入库", message: "在服务端导入音乐后，下拉刷新，开始聆听。")
                 } else {
@@ -213,15 +230,16 @@ struct HomeView: View {
                 }
             }.padding(22)
         }
+        .foregroundStyle(Theme.ink)
         .background(Theme.paper).toolbar(.hidden, for: .navigationBar)
         .refreshable { await library.refresh() }
     }
 
     private func stat(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(value).font(.system(size: 28, weight: .regular, design: .serif))
+        VStack(spacing: 4) {
+            Text(value).font(.system(size: 22, weight: .semibold).monospacedDigit()).foregroundStyle(Theme.ink)
             Text(label).font(.caption2).foregroundStyle(Theme.muted)
-        }
+        }.frame(maxWidth: .infinity)
     }
 }
 
@@ -258,9 +276,10 @@ struct CollectionView: View {
                                 HStack(spacing: 15) {
                                     Artwork(path: artist.artwork, fallback: String(artist.name.prefix(1)))
                                         .frame(width: 52, height: 52).clipShape(Circle())
-                                    VStack(alignment: .leading, spacing: 5) { Text(artist.name).font(.subheadline); Text("\(artist.tracks) 首歌曲").font(.caption).foregroundStyle(Theme.muted) }
-                                    Spacer(); Image(systemName: "chevron.right").font(.caption)
-                                }.padding(12).background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 13))
+                                    VStack(alignment: .leading, spacing: 5) { Text(artist.name).font(.subheadline.weight(.medium)); Text("\(artist.tracks) 首歌曲").font(.caption).foregroundStyle(Theme.muted) }
+                                    Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.muted)
+                                }.padding(12).background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
                             }.buttonStyle(.plain)
                         }
                     }
@@ -271,6 +290,7 @@ struct CollectionView: View {
                 }
             }.padding(20)
         }
+        .foregroundStyle(Theme.ink)
         .background(Theme.paper).navigationTitle("音乐库")
         .refreshable { await library.refresh() }
     }
@@ -287,17 +307,17 @@ struct AlbumView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                Artwork(path: album.artwork).frame(maxWidth: 250).shadow(color: Theme.ink.opacity(0.13), radius: 20, y: 12).padding(.vertical, 12)
-                Text(album.title).font(.title2.weight(.medium)).multilineTextAlignment(.center)
-                Text("\(album.artist) · \(album.year) · \(album.tracks) 首").font(.caption).foregroundStyle(Theme.muted)
+                Artwork(path: album.artwork).frame(maxWidth: 250).shadow(color: .black.opacity(0.18), radius: 20, y: 12).padding(.vertical, 12)
+                Text(album.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+                Text("\(album.artist) · \(album.year) · \(album.tracks) 首").font(.caption).foregroundStyle(Theme.secondary)
                 Button {
                     if let first = tracks.first { player.play(first, queue: tracks, session: library.session) }
                 } label: {
-                    Label("播放专辑", systemImage: "play.fill").font(.subheadline.weight(.medium)).frame(maxWidth: .infinity).padding(14).background(Theme.accent, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(.white)
+                    Label("播放专辑", systemImage: "play.fill").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(14).background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(Theme.accentOn)
                 }
                 TrackRows(tracks: tracks)
             }.padding(22)
-        }.background(Theme.paper).navigationBarTitleDisplayMode(.inline)
+        }.foregroundStyle(Theme.ink).background(Theme.paper).navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -343,7 +363,7 @@ struct TrackRows: View {
                             .frame(width: 30, height: 44).foregroundStyle(Theme.muted)
                     }.accessibilityLabel("下载与播放操作 · \(track.title)")
                 }.padding(.vertical, 10)
-                Divider().overlay(Theme.sage.opacity(0.5))
+                Divider().overlay(Theme.borderSubtle)
             }
         }
     }
@@ -353,7 +373,7 @@ struct TrackListView: View {
     let title: String
     let tracks: [Track]
     var body: some View {
-        ScrollView { TrackRows(tracks: tracks).padding(20) }.background(Theme.paper).navigationTitle(title)
+        ScrollView { TrackRows(tracks: tracks).padding(20) }.foregroundStyle(Theme.ink).background(Theme.paper).navigationTitle(title)
     }
 }
 
@@ -369,7 +389,7 @@ struct SearchView: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted)
-                TextField("歌曲、艺术家、专辑", text: $query, prompt: Text("歌曲、艺术家、专辑").foregroundStyle(Theme.ink.opacity(0.75)))
+                TextField("歌曲、艺术家、专辑", text: $query, prompt: Text("歌曲、艺术家、专辑").foregroundStyle(Theme.muted))
                     .focused($searchFocused)
                     .frame(minHeight: 28)
                     .textInputAutocapitalization(.never)
@@ -387,14 +407,15 @@ struct SearchView: View {
             .padding(.horizontal, 14).padding(.vertical, 8)
             .contentShape(Rectangle())
             .onTapGesture { searchFocused = true }
-            .background(Theme.sage.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(Theme.border))
             .padding(.horizontal, 20).padding(.bottom, 12)
             ScrollView {
                 if query.trimmingCharacters(in: .whitespaces).isEmpty { EmptyLibrary(title: "找一首，此刻想听的歌", message: "搜索歌曲、专辑或艺术家。").padding(.top, 60) }
                 else if results.isEmpty { EmptyLibrary(title: "还没有找到这段旋律", message: "试试其他关键词。").padding(.top, 60) }
                 else { TrackRows(tracks: results).padding(20) }
             }.scrollDismissesKeyboard(.interactively)
-        }.background(Theme.paper).navigationTitle("寻找共鸣")
+        }.foregroundStyle(Theme.ink).background(Theme.paper).navigationTitle("寻找共鸣")
     }
 }
 
@@ -407,16 +428,25 @@ struct MiniPlayer: View {
                 Button { player.expanded = true } label: {
                     HStack(spacing: 12) {
                         Artwork(path: track.artwork, radius: 7).frame(width: 42, height: 42)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(track.title).font(.caption.weight(.medium)).lineLimit(1).foregroundStyle(Theme.ink)
-                            Text(track.artist).font(.caption2).foregroundStyle(Theme.muted).lineLimit(1)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(track.title).font(.subheadline.weight(.medium)).lineLimit(1).foregroundStyle(Theme.ink)
+                            Text(track.artist).font(.caption).foregroundStyle(Theme.muted).lineLimit(1)
                         }
                         Spacer(minLength: 0)
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain)
-                Button { player.toggle() } label: { Image(systemName: player.playing ? "pause.fill" : "play.fill").frame(width: 35, height: 44) }.accessibilityLabel(player.playing ? "暂停" : "播放")
-                Button { showQueue = true } label: { Image(systemName: "list.bullet").frame(width: 35, height: 44) }.accessibilityLabel("播放列表")
-            }.padding(.horizontal, 12).padding(.vertical, 7).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 15)).overlay(RoundedRectangle(cornerRadius: 15).stroke(Theme.muted.opacity(0.12)))
+                Button { player.toggle() } label: {
+                    Image(systemName: player.playing ? "pause.fill" : "play.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accentOn)
+                        .frame(width: 34, height: 34)
+                        .background(Theme.accentFill, in: Circle())
+                        .frame(width: 40, height: 44)
+                }.accessibilityLabel(player.playing ? "暂停" : "播放")
+                Button { showQueue = true } label: { Image(systemName: "list.bullet").foregroundStyle(Theme.secondary).frame(width: 35, height: 44) }.accessibilityLabel("播放列表")
+            }.padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border))
                 .sheet(isPresented: $showQueue) { PlaybackQueueView() }
         }
     }
@@ -468,9 +498,23 @@ struct NowPlayingView: View {
             ScrollView {
                 VStack(spacing: 28) {
                     HStack {
-                        Button { dismiss() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.accessibilityLabel("收起播放器")
+                        Button { dismiss() } label: { Image(systemName: "chevron.down").foregroundStyle(Theme.secondary).frame(width: 44, height: 44) }.accessibilityLabel("收起播放器")
                         Spacer()
-                        VStack(spacing: 5) { Text("NOW PLAYING").font(.system(size: 9)).tracking(3); Text("你的私人音乐空间").font(.caption2).foregroundStyle(Theme.muted) }
+                        HStack(spacing: 2) {
+                            Button { withAnimation(.easeInOut(duration: 0.2)) { showLyrics = false } } label: {
+                                Text("唱片").font(.caption.weight(.medium)).padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(!showLyrics ? Theme.selected : .clear, in: Capsule())
+                                    .foregroundStyle(!showLyrics ? Theme.ink : Theme.muted)
+                            }.buttonStyle(.plain)
+                            Button { withAnimation(.easeInOut(duration: 0.2)) { showLyrics = true } } label: {
+                                Text("歌词").font(.caption.weight(.medium)).padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(showLyrics ? Theme.selected : .clear, in: Capsule())
+                                    .foregroundStyle(showLyrics ? Theme.ink : Theme.muted)
+                            }.buttonStyle(.plain)
+                        }
+                        .padding(3)
+                        .background(Theme.surface, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.border))
                         Spacer()
                         Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
                     }
@@ -479,20 +523,20 @@ struct NowPlayingView: View {
                           if showLyrics {
                             ScrollViewReader { proxy in
                                 ScrollView {
-                                    VStack(alignment: .leading, spacing: 23) {
+                                    VStack(alignment: .leading, spacing: 22) {
                                         if player.lyrics.isEmpty {
                                             Text(player.plainLyrics.isEmpty ? "纯粹聆听，也是共鸣。\n暂无歌词" : player.plainLyrics)
                                                 .font(.title2).foregroundStyle(Theme.muted).lineSpacing(12).padding(.top, 40)
                                         }
                                         ForEach(player.lyrics) { line in
-                                            Text(line.text).font(.system(size: 23, weight: activeLine == line.id ? .semibold : .regular)).foregroundStyle(activeLine == line.id ? Theme.ink : Theme.muted.opacity(0.65)).multilineTextAlignment(.leading).id(line.id)
+                                            Text(line.text).font(.system(size: activeLine == line.id ? 22 : 19, weight: activeLine == line.id ? .semibold : .regular)).foregroundStyle(activeLine == line.id ? Theme.ink : Theme.muted.opacity(0.68)).multilineTextAlignment(.leading).id(line.id)
                                         }
                                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 30)
                                 }
                                 .onChange(of: activeLine) { _, value in withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(value, anchor: .center) } }
                             }
                           } else {
-                            Artwork(path: track.artwork, radius: 18).shadow(color: Theme.ink.opacity(0.16), radius: 25, y: 15)
+                            Artwork(path: track.artwork, radius: 18).shadow(color: .black.opacity(0.24), radius: 24, y: 14)
                           }
                         }
                         .frame(maxWidth: .infinity)
@@ -502,14 +546,16 @@ struct NowPlayingView: View {
                         .accessibilityAction(named: Text(showLyrics ? "显示海报" : "显示歌词")) { showLyrics.toggle() }
                         .accessibilityIdentifier("now-playing-artwork-lyrics")
                         HStack {
-                            VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 6) {
                                 Text(track.title).font(.title2.weight(.semibold)).lineLimit(2)
-                                Text(track.artist).font(.subheadline).foregroundStyle(Theme.muted)
+                                Text(track.artist).font(.subheadline).foregroundStyle(Theme.secondary)
                             }
                             Spacer()
                             let favorite = library.tracks.first(where: { $0.id == track.id }) ?? track
                             Button { Task { await library.favorite(favorite) } } label: {
-                                Image(systemName: favorite.favorite ? "heart.fill" : "heart").font(.title3).frame(width: 44, height: 44)
+                                Image(systemName: favorite.favorite ? "heart.fill" : "heart")
+                                    .foregroundStyle(favorite.favorite ? Theme.accent : Theme.secondary)
+                                    .font(.title3).frame(width: 44, height: 44)
                             }.accessibilityLabel(favorite.favorite ? "取消收藏" : "收藏")
                         }
                         VStack(spacing: 8) {
@@ -518,7 +564,7 @@ struct NowPlayingView: View {
                                 if editing { seekValue = player.position }
                                 dragging = editing
                                 if !editing { player.seek(seekValue) }
-                            }).tint(Theme.ink).accessibilityLabel("播放进度")
+                            }).tint(Theme.accent).accessibilityLabel("播放进度")
                             HStack { Text(clock(dragging ? seekValue : player.position)); Spacer(); Text(clock(player.duration)) }.font(.caption2.monospacedDigit()).foregroundStyle(Theme.muted)
                         }
                         HStack {
@@ -526,16 +572,20 @@ struct NowPlayingView: View {
                             Spacer()
                             Button { player.previous() } label: { Image(systemName: "backward.end.fill").font(.title2).frame(width: 44, height: 50) }.accessibilityLabel("上一首")
                             Spacer()
-                            Button { player.toggle() } label: { Image(systemName: player.playing ? "pause.fill" : "play.fill").font(.title).frame(width: 76, height: 76).background(Theme.ink, in: Circle()).foregroundStyle(Theme.paper) }.accessibilityLabel(player.playing ? "暂停" : "播放")
+                            Button { player.toggle() } label: { Image(systemName: player.playing ? "pause.fill" : "play.fill").font(.title).frame(width: 72, height: 72).background(Theme.accentFill, in: Circle()).foregroundStyle(Theme.accentOn) }.accessibilityLabel(player.playing ? "暂停" : "播放")
                             Spacer()
                             Button { player.next() } label: { Image(systemName: "forward.end.fill").font(.title2).frame(width: 44, height: 50) }.accessibilityLabel("下一首")
                             Spacer()
                             Button { showQueue = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }.accessibilityLabel("播放列表")
                         }
-                        Text("\(track.format.uppercased()) · \(track.sampleRate / 1000) kHz · \(track.bitrate / 1000) kbps").font(.system(size: 9)).tracking(1.5).foregroundStyle(Theme.muted).padding(.top, 5)
+                        Text("\(track.format.uppercased()) · \(track.sampleRate / 1000) kHz · \(track.bitrate / 1000) kbps")
+                            .font(.caption2.weight(.medium).monospacedDigit())
+                            .foregroundStyle(Theme.sageInk)
+                            .padding(.horizontal, 12).padding(.vertical, 5)
+                            .background(Theme.sage, in: Capsule())
                     }
                 }.padding(.horizontal, 30).padding(.top, 18).padding(.bottom, 35).frame(maxWidth: 500).frame(maxWidth: .infinity)
-            }.background(LinearGradient(colors: [Theme.sage, Theme.paper], startPoint: .topLeading, endPoint: .bottomTrailing))
+            }.background(LinearGradient(colors: [Theme.listeningStart, Theme.paper, Theme.listeningEnd], startPoint: .topLeading, endPoint: .bottomTrailing))
         }.foregroundStyle(Theme.ink)
             .sheet(isPresented: $showQueue) { PlaybackQueueView() }
     }
@@ -544,6 +594,7 @@ struct NowPlayingView: View {
 struct SettingsView: View {
     @EnvironmentObject private var library: LibraryModel
     @ObservedObject private var cache = PlaybackCache.shared
+    @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.system.rawValue
     @State private var showLogin = false
     var body: some View {
         Form {
@@ -555,7 +606,16 @@ struct SettingsView: View {
                         Text("让每一份热爱，产生共鸣。").font(.caption).foregroundStyle(Theme.muted)
                     }
                 }.padding(.vertical, 8)
-            }
+            }.listRowBackground(Theme.surface)
+            Section("外观主题") {
+                Picker("主题模式", selection: $appearanceRaw) {
+                    ForEach(AppearanceMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }.pickerStyle(.segmented)
+                Text("支持跟随系统自动切换，或固定使用「日间纸韵」与「夜间黑胶」。")
+                    .font(.caption).foregroundStyle(Theme.muted)
+            }.listRowBackground(Theme.surface)
             Section("你的服务器") {
                 LabeledContent("状态", value: library.offline ? "离线 · 已下载音乐可播放" : "已连接")
                 LabeledContent("地址", value: library.session?.server.absoluteString ?? "尚未连接").font(.caption)
@@ -563,7 +623,7 @@ struct SettingsView: View {
                 LabeledContent("音乐", value: "\(library.tracks.count) 首")
                 if library.session == nil { Button("登录服务器") { showLogin = true } }
                 Button("刷新音乐库") { Task { await library.refresh() } }.disabled(library.busy)
-            }
+            }.listRowBackground(Theme.surface)
             Section("播放缓存") {
                 LabeledContent("占用空间", value: ByteCountFormatter.string(fromByteCount: cache.bytes, countStyle: .file))
                 Text("播放时自动缓存完整歌曲，再次播放优先读取本地。清理缓存会保留手动下载的音乐。")
@@ -571,15 +631,15 @@ struct SettingsView: View {
                 Button(cache.clearing ? "正在清理…" : "清理缓存") { Task { await library.clearPlaybackCache() } }
                     .disabled(cache.clearing)
                 if let message = cache.message { Text(message).font(.caption).foregroundStyle(Theme.muted) }
-            }
+            }.listRowBackground(Theme.surface)
             Section("关于") {
                 LabeledContent("版本", value: "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""))")
                 Text("支持后台播放、锁屏控制、同步 LRC 与纯文本歌词。可在服务端网页获取歌词。音乐格式的播放能力取决于 iOS 原生解码支持。").font(.caption).foregroundStyle(Theme.muted)
-            }
+            }.listRowBackground(Theme.surface)
             if library.session != nil {
-                Section { Button("退出服务器登录", role: .destructive) { Task { await library.logout() } } }
+                Section { Button("退出服务器登录", role: .destructive) { Task { await library.logout() } } }.listRowBackground(Theme.surface)
             }
-        }.scrollContentBackground(.hidden).background(Theme.paper).navigationTitle("音乐空间")
+        }.foregroundStyle(Theme.ink).scrollContentBackground(.hidden).background(Theme.paper).navigationTitle("音乐空间")
         .task { await cache.refreshSize() }
         .sheet(isPresented: $showLogin) {
             NavigationStack {

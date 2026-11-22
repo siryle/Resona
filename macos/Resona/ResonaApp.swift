@@ -8,8 +8,13 @@ struct ResonaDesktopApp: App {
     @StateObject private var player: PlayerModel
     @StateObject private var desktop: DesktopIntegration
     @State private var showingSettings = false
+    @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.system.rawValue
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
+
+    private var appearance: AppearanceMode {
+        AppearanceMode(rawValue: appearanceRaw) ?? .system
+    }
 
     init() {
         let library = LibraryModel()
@@ -25,7 +30,7 @@ struct ResonaDesktopApp: App {
         Window("Resona", id: "main") {
             DesktopView(showingSettings: $showingSettings)
                 .environmentObject(library).environmentObject(player).environmentObject(desktop)
-                .tint(Theme.accent).preferredColorScheme(.light)
+                .tint(Theme.accent).preferredColorScheme(appearance.colorScheme)
                 .frame(minWidth: 920, minHeight: 620)
                 .task {
                     desktop.openMainWindow = {
