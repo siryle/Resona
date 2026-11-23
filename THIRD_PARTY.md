@@ -127,12 +127,18 @@ in `pubspec.lock`:
 - audio_service: https://github.com/ryanheise/audio_service (MIT)
 - audio_session: https://github.com/ryanheise/audio_session (MIT)
 
-Windows builds backport Flutter's BSD-3-Clause OverlayPortal semantics fix
-from https://github.com/flutter/flutter/pull/193372, merged upstream as
-`b304cf18b6864d141cf08e26a07898901cddb4b5`, to Flutter 3.47.8.
-The source patch and its upstream regression tests are preserved in
-`scripts/patches/flutter-3.47.8-semantics.patch`; the SDK's original copyright
-and license remain intact.
+Windows builds backport Flutter's BSD-3-Clause OverlayPortal semantics fixes
+to Flutter 3.47.8:
+
+- https://github.com/flutter/flutter/pull/193372 (merged upstream as
+  `b304cf18b6864d141cf08e26a07898901cddb4b5`), preserved in
+  `scripts/patches/flutter-3.47.8-semantics.patch`.
+- https://github.com/flutter/flutter/pull/190431 (merged upstream as
+  `15ddda0a` in Flutter 3.50.0) and https://github.com/flutter/flutter/pull/190344
+  (for https://github.com/flutter/flutter/issues/182444), preserved in
+  `scripts/patches/flutter-3.47.8-semantics-siblings.patch`.
+
+The SDK's original copyright and license remain intact.
 
 The Windows installer includes the unmodified Simplified Chinese translation
 from Inno Setup 6.7.1:

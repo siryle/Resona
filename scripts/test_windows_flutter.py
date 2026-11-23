@@ -32,6 +32,29 @@ class WindowsFlutterTests(unittest.TestCase):
                     windows_flutter.prepare_windows_flutter(flutter)
                 self.assertEqual(source.read_text(), 'fixed\n')
 
+    def test_multiple_backports_apply_incrementally_and_idempotently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sdk = Path(directory)
+            (sdk / 'bin/internal').mkdir(parents=True)
+            (sdk / 'bin/internal/engine.version').write_text(windows_flutter.ENGINE + '\n')
+            first_file = sdk / 'first.dart'
+            second_file = sdk / 'second.dart'
+            first_file.write_text('one\n')
+            second_file.write_text('two\n')
+            p1 = sdk / 'p1.patch'
+            p2 = sdk / 'p2.patch'
+            p1.write_text('--- a/first.dart\n+++ b/first.dart\n@@ -1 +1 @@\n-one\n+ONE\n')
+            p2.write_text('--- a/second.dart\n+++ b/second.dart\n@@ -1 +1 @@\n-two\n+TWO\n')
+            subprocess.run(['git', 'init', '-q', str(sdk)], check=True)
+            flutter = sdk / 'bin/flutter.bat'
+            # Pre-apply only p1 to simulate a cached SDK upgraded with an additional patch.
+            subprocess.run(['git', '-C', str(sdk), 'apply', str(p1)], check=True)
+            with patch.object(windows_flutter, 'PATCHES', (p1, p2)):
+                windows_flutter.prepare_windows_flutter(flutter)
+                windows_flutter.prepare_windows_flutter(flutter)
+            self.assertEqual(first_file.read_text(), 'ONE\n')
+            self.assertEqual(second_file.read_text(), 'TWO\n')
+
     def test_conflicting_sdk_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:
             sdk = Path(directory)

@@ -42,7 +42,19 @@ def main():
     if args.target == 'windows':
         sdk = prepare_windows_flutter(flutter)
         subprocess.run(
-            [flutter, 'test', 'test/semantics/semantics_update_test.dart'],
+            [flutter, 'test', '--reporter=expanded', 'test/semantics/semantics_update_test.dart'],
+            cwd=sdk / 'packages/flutter', check=True,
+        )
+        subprocess.run(
+            [flutter, 'test', '--reporter=expanded', '--plain-name',
+             'sibling traversal parents are not merged into a single node',
+             'test/widgets/semantics_test.dart'],
+            cwd=sdk / 'packages/flutter', check=True,
+        )
+        subprocess.run(
+            [flutter, 'test', '--reporter=expanded', '--plain-name',
+             'toggling an overlay child does not leave a parentless attached semantics node',
+             'test/widgets/overlay_portal_test.dart'],
             cwd=sdk / 'packages/flutter', check=True,
         )
 
@@ -57,7 +69,7 @@ def main():
         (legal / 'VERSION.json').write_text(json.dumps(v, indent=2) + '\n')
     run('pub', 'get', '--enforce-lockfile')
     run('analyze', '--fatal-infos')
-    run('test')
+    run('test', '--reporter=expanded')
     if args.target == 'windows':
         run('build', 'windows', '--release',
             '--target=test/windows_accessibility_smoke.dart',

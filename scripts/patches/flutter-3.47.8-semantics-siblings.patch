@@ -1,0 +1,166 @@
+diff --git a/packages/flutter/lib/src/rendering/object.dart b/packages/flutter/lib/src/rendering/object.dart
+index 18a456e..fa28e2f 100644
+--- a/packages/flutter/lib/src/rendering/object.dart
++++ b/packages/flutter/lib/src/rendering/object.dart
+@@ -6546,9 +6546,13 @@ class _RenderObjectSemantics extends _SemanticsFragment with DiagnosticableTreeM
+   }
+ 
+   void _marksConflictsInMergeGroup(List<_SemanticsFragment> mergeGroup, {bool isMergeUp = false}) {
++    final wasConflicting = <_RenderObjectSemantics>{};
+     final hasSiblingConflict = <_SemanticsFragment>{};
+     for (var i = 0; i < mergeGroup.length; i += 1) {
+       final _SemanticsFragment fragment = mergeGroup[i];
++      if (fragment is _RenderObjectSemantics && fragment._hasSiblingConflict) {
++        wasConflicting.add(fragment);
++      }
+       // Remove old value
+       fragment.markSiblingConfigurationConflict(false);
+       if (fragment.configToMergeUp == null) {
+@@ -6566,8 +6570,18 @@ class _RenderObjectSemantics extends _SemanticsFragment with DiagnosticableTreeM
+         }
+       }
+     }
++    // A sibling conflict feeds shouldFormSemanticsNode, so gaining or losing one
++    // changes whether the fragment produces a semantics node of its own. What it
++    // has cached is stale until it is rebuilt.
+     for (final fragment in hasSiblingConflict) {
+       fragment.markSiblingConfigurationConflict(true);
++      if (fragment is _RenderObjectSemantics && !wasConflicting.remove(fragment)) {
++        fragment.markNeedsBuild();
++      }
++    }
++    // Whatever is left in wasConflicting stopped conflicting in this pass.
++    for (final fragment in wasConflicting) {
++      fragment.markNeedsBuild();
+     }
+   }
+ 
+diff --git a/packages/flutter/lib/src/semantics/semantics.dart b/packages/flutter/lib/src/semantics/semantics.dart
+index 5c2ff4c..a4e74e9 100644
+--- a/packages/flutter/lib/src/semantics/semantics.dart
++++ b/packages/flutter/lib/src/semantics/semantics.dart
+@@ -6854,6 +6854,15 @@ class SemanticsConfiguration {
+     if (_traversalChildIdentifier != other._traversalChildIdentifier) {
+       return false;
+     }
++    // Two configurations that each anchor a different traversal parent (e.g.
++    // two sibling OverlayPortals) must not be merged: [absorb] can only keep
++    // one `traversalParentIdentifier`, so the other one would be dropped and
++    // its traversal children would end up grafted to nothing.
++    if (_traversalParentIdentifier != null &&
++        other._traversalParentIdentifier != null &&
++        _traversalParentIdentifier != other._traversalParentIdentifier) {
++      return false;
++    }
+     if (!hasBeenAnnotated) {
+       return true;
+     }
+diff --git a/packages/flutter/test/widgets/overlay_portal_test.dart b/packages/flutter/test/widgets/overlay_portal_test.dart
+index ce1bedb..dd43941 100644
+--- a/packages/flutter/test/widgets/overlay_portal_test.dart
++++ b/packages/flutter/test/widgets/overlay_portal_test.dart
+@@ -3242,6 +3242,48 @@ void main() {
+         ),
+       );
+     });
++
++    testWidgets('toggling an overlay child does not leave a parentless attached semantics node', (
++      WidgetTester tester,
++    ) async {
++      final controller = OverlayPortalController();
++      final siblingController = OverlayPortalController();
++
++      final Widget sibling = OverlayPortal.overlayChildLayoutBuilder(
++        controller: siblingController,
++        overlayChildBuilder: (BuildContext context, OverlayChildLayoutInfo info) =>
++            const SizedBox.shrink(),
++        child: Semantics(explicitChildNodes: true, child: const Text('sibling')),
++      );
++
++      Widget portal = OverlayPortal.overlayChildLayoutBuilder(
++        controller: controller,
++        overlayChildBuilder: (BuildContext context, OverlayChildLayoutInfo info) =>
++            const Align(alignment: Alignment.topLeft, child: Text('overlay child')),
++        child: Semantics(explicitChildNodes: true, child: const Text('anchor')),
++      );
++      portal = Overlay.wrap(child: ExcludeSemantics(child: portal));
++      portal = SizedBox(width: 200, height: 100, child: portal);
++
++      await tester.pumpWidget(
++        Directionality(
++          textDirection: TextDirection.ltr,
++          child: Overlay.wrap(
++            child: Semantics(container: true, child: Column(children: <Widget>[sibling, portal])),
++          ),
++        ),
++      );
++
++      for (var i = 0; i < 2; i += 1) {
++        controller.show();
++        await tester.pumpAndSettle();
++        expect(find.text('overlay child'), findsOneWidget);
++
++        controller.hide();
++        await tester.pumpAndSettle();
++        expect(find.text('overlay child'), findsNothing);
++      }
++    });
+   });
+ 
+   testWidgets(
+diff --git a/packages/flutter/test/widgets/semantics_test.dart b/packages/flutter/test/widgets/semantics_test.dart
+index b0d7d64..aff5993 100644
+--- a/packages/flutter/test/widgets/semantics_test.dart
++++ b/packages/flutter/test/widgets/semantics_test.dart
+@@ -2327,6 +2327,51 @@ void main() {
+     semantics.dispose();
+   });
+ 
++  testWidgets('sibling traversal parents are not merged into a single node', (
++    WidgetTester tester,
++  ) async {
++    final semantics = SemanticsTester(tester);
++    const identifierA = 'A';
++    const identifierB = 'B';
++
++    await tester.pumpWidget(
++      Directionality(
++        textDirection: TextDirection.ltr,
++        child: ListView(
++          children: <Widget>[
++            Row(
++              children: <Widget>[
++                Semantics(
++                  traversalParentIdentifier: identifierA,
++                  child: const SizedBox.square(dimension: 10),
++                ),
++                Semantics(
++                  traversalParentIdentifier: identifierB,
++                  child: const SizedBox.square(dimension: 10),
++                ),
++              ],
++            ),
++          ],
++        ),
++      ),
++    );
++
++    final anchors = <Object>[];
++    void collect(SemanticsNode node) {
++      if (node.traversalParentIdentifier case final Object identifier?) {
++        anchors.add(identifier);
++      }
++      node.visitChildren((SemanticsNode child) {
++        collect(child);
++        return true;
++      });
++    }
++
++    collect(tester.binding.pipelineOwner.semanticsOwner!.rootSemanticsNode!);
++    expect(anchors, containsAll(<Object>[identifierA, identifierB]));
++    semantics.dispose();
++  });
++
+   testWidgets('semantics grafting in traversal order with multiple same traversalChildIdentifier', (
+     WidgetTester tester,
+   ) async {

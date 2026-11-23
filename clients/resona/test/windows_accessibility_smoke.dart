@@ -16,7 +16,6 @@ Future<void> frames([int count = 1]) async {
 
 Future<void> main() async {
   final binding = WidgetsFlutterBinding.ensureInitialized();
-  final semantics = binding.ensureSemantics();
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
     exit(1);
@@ -44,8 +43,28 @@ Future<void> main() async {
       ),
     ),
   );
-  await frames(20);
   try {
+    await frames(5);
+    // Wait for the native Windows MSAA client to attach and create the engine's
+    // AccessibilityBridge before flushing the initial semantics tree; calling
+    // ensureSemantics() beforehand drops the initial root node and leaves the
+    // bridge receiving partial delta updates without a root.
+    if (!binding.semanticsEnabled) {
+      final ready = Completer<void>();
+      void onSemanticsChanged() {
+        if (binding.semanticsEnabled && !ready.isCompleted) {
+          ready.complete();
+        }
+      }
+
+      binding.addSemanticsEnabledListener(onSemanticsChanged);
+      try {
+        await ready.future.timeout(const Duration(seconds: 15));
+      } finally {
+        binding.removeSemanticsEnabledListener(onSemanticsChanged);
+      }
+    }
+    await frames(15);
     for (var iteration = 0; iteration < 12; iteration++) {
       final value = ValueNotifier<double>(0.3);
       final visible = ValueNotifier<bool>(false);
@@ -126,7 +145,6 @@ Future<void> main() async {
       controller.notifyListeners();
       await frames(2);
     }
-    semantics.dispose();
     controller.dispose();
     stdout.writeln('Windows accessibility smoke checks passed.');
     await stdout.flush();

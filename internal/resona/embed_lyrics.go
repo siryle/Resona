@@ -146,8 +146,17 @@ func (s *Scanner) embedTrackLyrics(ctx context.Context, id string, replace bool)
 		return Track{}, fmt.Errorf("remux lyrics: %w", err)
 	}
 	verified, err := readMetadata(ctx, staged)
-	if err != nil || verified.TagLyrics != lyrics.Text || abs(verified.Duration-metadata.Duration) > 0.1 {
-		return Track{}, errors.New("remuxed file did not pass lyrics/duration verification")
+	if err != nil {
+		return Track{}, fmt.Errorf("remuxed file did not pass lyrics/duration verification: %w", err)
+	}
+	// Allow up to 0.25s container duration drift (e.g. MP3 LAME delay/padding headers when remuxing from another container).
+	if verified.TagLyrics != lyrics.Text || abs(verified.Duration-metadata.Duration) > 0.25 {
+		return Track{}, fmt.Errorf(
+			"remuxed file did not pass lyrics/duration verification: lyrics_match=%v duration=%.3f->%.3f",
+			verified.TagLyrics == lyrics.Text,
+			metadata.Duration,
+			verified.Duration,
+		)
 	}
 	if actualID, _, err := hashFile(ctx, path); err != nil || actualID != id {
 		return Track{}, errTrackChanged

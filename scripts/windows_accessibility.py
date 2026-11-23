@@ -93,7 +93,10 @@ def run_accessibility_smoke(executable, directory):
             if (process.returncode or not observed or
                     'Windows accessibility smoke checks passed.' not in output or
                     'accessibility_bridge.cc' in output):
-                raise SystemExit('Native Windows accessibility regression checks failed.')
+                raise SystemExit(
+                    f'Native Windows accessibility regression checks failed '
+                    f'(exit={process.returncode}, observed={observed}).',
+                )
             print('Verified the native MSAA tree with an accessibility client attached.')
     finally:
         ole32.CoUninitialize()
