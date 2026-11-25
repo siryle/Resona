@@ -8,11 +8,110 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 from version import ROOT, stem, version
 from windows_flutter import prepare_windows_flutter
 from windows_accessibility import run_accessibility_smoke
 
 CLIENT = ROOT / 'clients/resona'
+WINDOWS_FLUTTER_TEST_RETRIES = 2
+FLUTTER_TESTER_CRASH_MARKERS = (
+    'connection closed before test suite loaded',
+    'unable to connect to flutter_tester process',
+    'shell subprocess crashed',
+    'exited with code=-1073741819',
+    '0xc0000005',
+    'did not complete',
+)
+
+
+def parse_flutter_tester_crash(report_path):
+    """Return crashed suite paths for a pure flutter_tester.exe crash, or None."""
+    if not report_path.is_file():
+        return None
+    suites = {}
+    test_suites = {}
+    failed_tests = []
+    saw_suite = False
+    saw_done = False
+    truncated = False
+    has_non_crash_error = False
+    with report_path.open('r', encoding='utf-8', errors='replace') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                truncated = True
+                break
+            if not isinstance(event, dict):
+                continue
+            event_type = event.get('type')
+            if event_type == 'suite':
+                saw_suite = True
+                suite = event.get('suite') or {}
+                if 'id' in suite:
+                    suites[suite['id']] = suite.get('path')
+            elif event_type == 'testStart':
+                test = event.get('test') or {}
+                if 'id' in test:
+                    test_suites[test['id']] = test.get('suiteID')
+            elif event_type == 'error':
+                message = str(event.get('error') or '').lower()
+                if not any(marker in message for marker in FLUTTER_TESTER_CRASH_MARKERS):
+                    has_non_crash_error = True
+            elif event_type == 'testDone':
+                if not event.get('skipped') and event.get('result') != 'success':
+                    failed_tests.append(event.get('testID'))
+            elif event_type == 'done':
+                saw_done = True
+    if has_non_crash_error:
+        return None
+    if not failed_tests:
+        return [] if saw_suite and (not saw_done or truncated) else None
+    if not saw_done or truncated:
+        return []
+    paths = []
+    seen = set()
+    for test_id in failed_tests:
+        path = suites.get(test_suites.get(test_id))
+        if not isinstance(path, str) or not path:
+            return []
+        if path not in seen:
+            seen.add(path)
+            paths.append(path)
+    return paths
+
+
+def run_flutter_test(flutter, test_args=(), *, cwd, windows=False, retries=WINDOWS_FLUTTER_TEST_RETRIES):
+    """Run flutter test sequentially on Windows and retry native tester crashes."""
+    if not windows:
+        subprocess.run([flutter, 'test', '--reporter=expanded', *test_args], cwd=cwd, check=True)
+        return
+    current_args = list(test_args)
+    for attempt in range(retries + 1):
+        with tempfile.TemporaryDirectory(prefix='resona-flutter-test-') as directory:
+            report = Path(directory) / 'report.json'
+            command = [
+                flutter, 'test', '--reporter=expanded', '--concurrency=1',
+                f'--file-reporter=json:{report}', *current_args,
+            ]
+            completed = subprocess.run(command, cwd=cwd)
+            if completed.returncode == 0:
+                return
+            crashed = parse_flutter_tester_crash(report)
+        if crashed is None or attempt >= retries:
+            raise subprocess.CalledProcessError(completed.returncode, command)
+        if not current_args and crashed and all((Path(cwd) / path).is_file() for path in crashed):
+            current_args = crashed
+        target = ' '.join(current_args) if current_args else 'all tests'
+        print(
+            f'Retrying Windows flutter test ({attempt + 1}/{retries}) '
+            f'after flutter_tester.exe crash (flutter/flutter#196440): {target}',
+            flush=True,
+        )
 
 
 def output_name(target, preview=False):
@@ -41,21 +140,21 @@ def main():
 
     if args.target == 'windows':
         sdk = prepare_windows_flutter(flutter)
-        subprocess.run(
-            [flutter, 'test', '--reporter=expanded', 'test/semantics/semantics_update_test.dart'],
-            cwd=sdk / 'packages/flutter', check=True,
+        run_flutter_test(
+            flutter, ['test/semantics/semantics_update_test.dart'],
+            cwd=sdk / 'packages/flutter', windows=True,
         )
-        subprocess.run(
-            [flutter, 'test', '--reporter=expanded', '--plain-name',
-             'sibling traversal parents are not merged into a single node',
+        run_flutter_test(
+            flutter,
+            ['--plain-name', 'sibling traversal parents are not merged into a single node',
              'test/widgets/semantics_test.dart'],
-            cwd=sdk / 'packages/flutter', check=True,
+            cwd=sdk / 'packages/flutter', windows=True,
         )
-        subprocess.run(
-            [flutter, 'test', '--reporter=expanded', '--plain-name',
-             'toggling an overlay child does not leave a parentless attached semantics node',
+        run_flutter_test(
+            flutter,
+            ['--plain-name', 'toggling an overlay child does not leave a parentless attached semantics node',
              'test/widgets/overlay_portal_test.dart'],
-            cwd=sdk / 'packages/flutter', check=True,
+            cwd=sdk / 'packages/flutter', windows=True,
         )
 
     def run(*args):
@@ -69,7 +168,7 @@ def main():
         (legal / 'VERSION.json').write_text(json.dumps(v, indent=2) + '\n')
     run('pub', 'get', '--enforce-lockfile')
     run('analyze', '--fatal-infos')
-    run('test', '--reporter=expanded')
+    run_flutter_test(flutter, cwd=CLIENT, windows=args.target == 'windows')
     if args.target == 'windows':
         run('build', 'windows', '--release',
             '--target=test/windows_accessibility_smoke.dart',
@@ -178,7 +277,6 @@ def run_installer(installer, log, directory=None):
 def verify_windows_upgrade(installer, source, v):
     """Exercise a previous registered installation, repair, downgrade and uninstall."""
     import winreg
-    import tempfile
 
     key = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8F3A1C2E-6B47-4D91-9E5A-2C7B0A4D6F18}_is1'
     # These integration checks install software; run them only on disposable CI runners.
