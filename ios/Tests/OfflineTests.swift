@@ -245,6 +245,51 @@ struct OfflineTests {
         assert(player.playing && player.position < 2)
         player.stop()
         assert(player.current == nil && !player.playing)
+
+        // Session automatic renewal, legacy fallback, outage preservation, and 401 expiry handling
+        let baseURL = URL(string: CommandLine.arguments[2])!
+        func controlPost(_ path: String) async throws {
+            var req = URLRequest(url: baseURL.appendingPathComponent(path))
+            req.httpMethod = "POST"
+            _ = try await URLSession.shared.data(for: req)
+        }
+        func refreshStats() async throws -> (refresh: Int, session: Int) {
+            let (statsData, _) = try await URLSession.shared.data(from: baseURL.appendingPathComponent("__refresh_stats"))
+            let stats = try JSONDecoder().decode([String: Int].self, from: statsData)
+            return (stats["refresh"] ?? 0, stats["session"] ?? 0)
+        }
+        try await controlPost("__online")
+        let initialStats = try await refreshStats()
+        let renewalLibrary = LibraryModel(downloads: store, persistsSession: false, cache: cache, sessionRenewalInterval: 0.15)
+        renewalLibrary.serverInput = CommandLine.arguments[2]
+        renewalLibrary.username = "admin"
+        renewalLibrary.password = "test-password"
+        await renewalLibrary.login()
+        assert(renewalLibrary.session != nil && !renewalLibrary.offline)
+        for _ in 0..<30 {
+            if (try await refreshStats()).refresh > initialStats.refresh { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let afterPeriodic = try await refreshStats()
+        assert(afterPeriodic.refresh > initialStats.refresh, "Periodic keepalive did not invoke /auth/refresh")
+
+        try await controlPost("__legacy_refresh")
+        await renewalLibrary.renewSessionIfNeeded(force: true)
+        let afterFallback = try await refreshStats()
+        assert(afterFallback.session > initialStats.session, "Older server 404 did not fall back to /auth/session")
+        try await controlPost("__legacy_refresh")
+
+        try await controlPost("__offline")
+        renewalLibrary.error = nil
+        await renewalLibrary.renewSessionIfNeeded(force: true)
+        assert(renewalLibrary.session != nil && renewalLibrary.error == nil, "Transient outage cleared session or surfaced error")
+        try await controlPost("__online")
+
+        try await controlPost("__expire")
+        await renewalLibrary.renewSessionIfNeeded(force: true)
+        assert(renewalLibrary.session == nil && renewalLibrary.offline && renewalLibrary.downloaded.count == 1,
+               "401 during renewal did not clear session while preserving offline downloads")
+
         library.removeDownload(track)
         assert(library.downloaded.isEmpty && library.tracks.isEmpty && store.audio(track) == nil)
         assert(store.sidecar("../escape", name: "cover") == nil)
@@ -253,5 +298,6 @@ struct OfflineTests {
         print("PASS: separate cloud library, 302 download, SHA-1 content verification independent of track ID, corrupt cloud audio rejection and scoped offline library")
         print("PASS: automatic playback cache, persistence, account/server isolation, truncated cache rejection/repair, cached playback during outage, clearing preserves downloads and cancels pending writes")
         print("PASS: favorite metadata persists in downloads and automatic cache; tokenless restart restores automatic cache after expired credentials")
+        print("PASS: Apple automatic session keepalive, legacy /auth/session fallback, transient outage preservation and 401 expiry handling")
     }
 }

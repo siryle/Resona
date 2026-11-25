@@ -94,9 +94,21 @@ enum Credentials {
     }
 }
 
+private final class RenewalCancel: @unchecked Sendable {
+    var task: Task<Void, Never>?
+    deinit { task?.cancel() }
+}
+
 @MainActor
 final class LibraryModel: ObservableObject {
-    @Published var session: Session?
+    @Published var session: Session? {
+        didSet {
+            if oldValue?.token != session?.token || oldValue?.server != session?.server {
+                lastSessionRenewal = nil
+                restartSessionKeepalive()
+            }
+        }
+    }
     @Published var tracks: [Track] = []
     @Published var downloaded: [Track] = []
     @Published var downloading: Set<String> = []
@@ -113,6 +125,10 @@ final class LibraryModel: ObservableObject {
     private let downloads: OfflineStore
     private let cache: PlaybackCache
     private let persistsSession: Bool
+    private let sessionRenewalInterval: TimeInterval
+    private let renewalHandle = RenewalCancel()
+    private var lastSessionRenewal: Date?
+    private var renewingSession = false
     private var refreshGeneration = 0
     private var favorites: [String: Bool] = [:]
 
@@ -126,10 +142,11 @@ final class LibraryModel: ObservableObject {
         return decoder
     }()
 
-    init(downloads: OfflineStore = .shared, persistsSession: Bool = true, cache: PlaybackCache? = nil) {
+    init(downloads: OfflineStore = .shared, persistsSession: Bool = true, cache: PlaybackCache? = nil, sessionRenewalInterval: TimeInterval = 12 * 3600) {
         self.downloads = downloads
         self.cache = cache ?? .shared
         self.persistsSession = persistsSession
+        self.sessionRenewalInterval = sessionRenewalInterval
         do { downloaded = try downloads.tracks() }
         catch { self.error = "无法读取已下载音乐：\(error.localizedDescription)" }
         session = persistsSession ? Credentials.load() : nil
@@ -137,6 +154,7 @@ final class LibraryModel: ObservableObject {
             self.cache.activate(session)
             serverInput = session.server.absoluteString
             username = session.username
+            restartSessionKeepalive()
         } else if let identity = self.cache.identity {
             serverInput = identity.server.absoluteString
             username = identity.username
@@ -150,7 +168,7 @@ final class LibraryModel: ObservableObject {
         return URL(string: base + path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
-    func request(_ path: String, method: String = "GET", body: Data? = nil, server: URL? = nil) async throws -> Data {
+    private func buildRequest(_ path: String, method: String = "GET", body: Data? = nil, server: URL? = nil) throws -> URLRequest {
         guard let base = server ?? session?.server,
               let url = URL(string: path, relativeTo: base.appendingPathComponent("api/v1/"))?.absoluteURL else {
             throw APIError.message("服务器地址无效")
@@ -161,6 +179,18 @@ final class LibraryModel: ObservableObject {
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = session?.token, server == nil { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        return request
+    }
+
+    private func requestStatus(_ path: String, method: String = "GET", body: Data? = nil, server: URL? = nil) async throws -> Int {
+        let request = try buildRequest(path, method: method, body: body, server: server)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw APIError.message("服务器响应无效") }
+        return response.statusCode
+    }
+
+    func request(_ path: String, method: String = "GET", body: Data? = nil, server: URL? = nil) async throws -> Data {
+        let request = try buildRequest(path, method: method, body: body, server: server)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw APIError.message("服务器响应无效") }
         if response.statusCode == 401 && server == nil { throw APIError.unauthorized }
@@ -169,6 +199,45 @@ final class LibraryModel: ObservableObject {
             throw APIError.message(message ?? "请求失败 (\(response.statusCode))")
         }
         return data
+    }
+
+    private func restartSessionKeepalive() {
+        renewalHandle.task?.cancel()
+        renewalHandle.task = nil
+        guard let current = session, sessionRenewalInterval > 0 else { return }
+        let nanoseconds = UInt64(max(0.01, sessionRenewalInterval) * 1_000_000_000)
+        renewalHandle.task = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: nanoseconds)
+                guard !Task.isCancelled, let self, self.session?.token == current.token else { return }
+                await self.renewSessionIfNeeded()
+            }
+        }
+    }
+
+    func renewSessionIfNeeded(force: Bool = false) async {
+        guard let current = session, !renewingSession else { return }
+        if !force, let lastSessionRenewal, Date().timeIntervalSince(lastSessionRenewal) < sessionRenewalInterval {
+            return
+        }
+        renewingSession = true
+        defer { renewingSession = false }
+        do {
+            var status = try await requestStatus("auth/refresh", method: "POST", body: Data("{}".utf8))
+            guard session?.token == current.token, session?.server == current.server else { return }
+            if status == 404 || status == 405 || status == 501 {
+                status = try await requestStatus("auth/session", method: "GET")
+                guard session?.token == current.token, session?.server == current.server else { return }
+            }
+            if (200..<300).contains(status) {
+                lastSessionRenewal = Date()
+            } else if status == 401 {
+                clearSession()
+                error = APIError.unauthorized.localizedDescription
+            }
+        } catch {
+            /* Keep the saved session across transient network or server outages. */
+        }
     }
 
     func login() async {
@@ -189,6 +258,7 @@ final class LibraryModel: ObservableObject {
             let newSession = Session(server: url, username: username, token: login.token)
             if persistsSession { try Credentials.save(newSession) }
             session = newSession
+            lastSessionRenewal = Date()
             favorites = [:]
             cache.activate(newSession)
             password = ""
@@ -223,6 +293,7 @@ final class LibraryModel: ObservableObject {
             offline = false
             albums = try decoder.decode(Page<Album>.self, from: albumData).items
             artists = try decoder.decode(Page<Artist>.self, from: artistData).items
+            lastSessionRenewal = Date()
             error = nil
         } catch APIError.unauthorized {
             guard generation == refreshGeneration, session?.token == current.token else { return }
@@ -332,6 +403,9 @@ final class LibraryModel: ObservableObject {
     }
 
     private func clearSession() {
+        renewalHandle.task?.cancel()
+        renewalHandle.task = nil
+        lastSessionRenewal = nil
         if persistsSession { Credentials.clear() }
         session = nil
         useDownloads()

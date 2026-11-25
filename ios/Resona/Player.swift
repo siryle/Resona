@@ -237,7 +237,7 @@ final class PlayerModel: ObservableObject {
             // AVFoundation's documented cookie option also authenticates byte-range requests.
             var properties: [HTTPCookiePropertyKey: Any] = [
                 .domain: url.host ?? "", .path: "/", .name: "resona_session", .value: session.token,
-                .expires: Date().addingTimeInterval(7 * 24 * 3600)
+                .expires: Date().addingTimeInterval(365 * 24 * 3600)
             ]
             if url.scheme == "https" { properties[.secure] = "TRUE" }
             guard let cookie = HTTPCookie(properties: properties) else { error = "无法建立播放会话"; return }

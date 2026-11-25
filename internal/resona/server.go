@@ -139,10 +139,15 @@ func (s *Server) Handler() http.Handler {
 		jsonResponse(w, 200, map[string]any{"initialized": s.auth.initialized(), "username": s.config.Username})
 	})
 	mux.HandleFunc("POST /api/v1/auth/setup", s.setup)
-	mux.HandleFunc("POST /api/v1/auth/logout", s.protect(s.logout))
-	mux.HandleFunc("GET /api/v1/auth/session", s.protect(func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, map[string]string{"username": s.config.Username})
-	}))
+	mux.HandleFunc("POST /api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		if !s.auth.valid(r) {
+			apiError(w, 401, "please sign in")
+			return
+		}
+		s.logout(w, r)
+	})
+	mux.HandleFunc("POST /api/v1/auth/refresh", s.refreshSession)
+	mux.HandleFunc("GET /api/v1/auth/session", s.protect(s.sessionInfo))
 	mux.HandleFunc("GET /api/v1/system", s.protect(s.system))
 	mux.HandleFunc("GET /api/v1/logs", s.protect(s.logs))
 	mux.HandleFunc("GET /api/v1/files", s.protect(s.files))
@@ -305,12 +310,58 @@ func (s *Server) deleteJobs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.auth.valid(r) {
+		ok, err := s.auth.authenticate(w, r)
+		if !ok {
 			apiError(w, 401, "please sign in")
 			return
 		}
+		if err != nil {
+			s.logger.Warn("renew login session", "error", err)
+		}
 		next(w, r)
 	}
+}
+
+func (s *Server) sessionPayload(expires time.Time) map[string]any {
+	remaining := int64(expires.Sub(s.auth.now()).Seconds())
+	if remaining < 0 {
+		remaining = 0
+	}
+	return map[string]any{
+		"username":   s.config.Username,
+		"expires_in": remaining,
+		"expires_at": expires.UTC().Format(time.RFC3339),
+	}
+}
+
+func (s *Server) sessionInfo(w http.ResponseWriter, r *http.Request) {
+	expires, ok := s.auth.sessionExpiry(r)
+	if !ok {
+		expires = s.auth.now().Add(sessionTTL)
+	}
+	jsonResponse(w, 200, s.sessionPayload(expires))
+}
+
+func (s *Server) refreshSession(w http.ResponseWriter, r *http.Request) {
+	if !s.auth.valid(r) {
+		apiError(w, 401, "please sign in")
+		return
+	}
+	var body struct{}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	expires, ok, err := s.auth.refresh(w, r)
+	if !ok {
+		apiError(w, 401, "please sign in")
+		return
+	}
+	if err != nil {
+		s.logger.Error("persist renewed session", "error", err)
+		apiError(w, 500, "无法续期登录状态，请检查数据目录权限")
+		return
+	}
+	jsonResponse(w, 200, s.sessionPayload(expires))
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -345,7 +396,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auth.cookie(w, r, token)
-	jsonResponse(w, 200, map[string]any{"token": token, "username": s.config.Username, "expires_in": 604800})
+	expires, ok := s.auth.tokenExpiry(token)
+	if !ok {
+		expires = s.auth.now().Add(sessionTTL)
+	}
+	jsonResponse(w, 200, map[string]any{
+		"token":      token,
+		"username":   s.config.Username,
+		"expires_in": int64(sessionTTL / time.Second),
+		"expires_at": expires.UTC().Format(time.RFC3339),
+	})
 }
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {

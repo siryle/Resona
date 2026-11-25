@@ -526,6 +526,136 @@ void main() {
       }
     },
   );
+
+  test(
+    'periodic timer and resume lifecycle renew session and respect manual offline mode',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      var refreshCalls = 0;
+      var refreshStatus = 200;
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.uri.path.endsWith('/auth/refresh')) {
+          refreshCalls++;
+          request.response.statusCode = refreshStatus;
+          request.response.write(
+            refreshStatus == 200
+                ? jsonEncode({'username': 'user', 'expires_in': 31536000})
+                : jsonEncode({'error': 'offline'}),
+          );
+        } else if (request.uri.path.endsWith('/tracks')) {
+          request.response.write('{"items":[],"total":0}');
+        } else {
+          request.response.write('{}');
+        }
+        await request.response.close();
+      });
+      try {
+        await prepare('http://127.0.0.1:${server.port}', token: 'valid');
+        refreshStatus = 503;
+        final resumeController = MusicController(
+          supportDirectory: root,
+          sessionRenewalInterval: const Duration(hours: 12),
+        );
+        try {
+          await resumeController.initialize();
+          expect(resumeController.authenticated, isTrue);
+          expect(refreshCalls, 1);
+          refreshStatus = 200;
+          resumeController.didChangeAppLifecycleState(
+            AppLifecycleState.resumed,
+          );
+          for (var i = 0; i < 40 && refreshCalls < 2; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 25));
+          }
+          expect(refreshCalls, greaterThanOrEqualTo(2));
+        } finally {
+          resumeController.dispose();
+        }
+
+        refreshCalls = 0;
+        final periodicController = MusicController(
+          supportDirectory: root,
+          sessionRenewalInterval: const Duration(milliseconds: 80),
+        );
+        try {
+          await periodicController.initialize();
+          expect(refreshCalls, 1);
+          for (var i = 0; i < 40 && refreshCalls < 2; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 25));
+          }
+          expect(refreshCalls, greaterThanOrEqualTo(2));
+          periodicController.setOfflineMode(true);
+          final pausedAt = refreshCalls;
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+          expect(refreshCalls, pausedAt);
+          periodicController.setOfflineMode(false);
+          for (var i = 0; i < 40 && refreshCalls <= pausedAt; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 25));
+          }
+          expect(refreshCalls, greaterThan(pausedAt));
+        } finally {
+          periodicController.dispose();
+        }
+      } finally {
+        await server.close(force: true);
+      }
+    },
+  );
+
+  test(
+    'transient outage preserves session while 401 during renewal logs out cleanly',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      var status = 200;
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.uri.path.endsWith('/auth/refresh')) {
+          request.response.statusCode = status;
+          request.response.write(
+            status == 200
+                ? jsonEncode({'username': 'user', 'expires_in': 31536000})
+                : jsonEncode({'error': 'error'}),
+          );
+        } else if (request.uri.path.endsWith('/tracks')) {
+          request.response.write('{"items":[],"total":0}');
+        } else {
+          request.response.write('{}');
+        }
+        await request.response.close();
+      });
+      try {
+        await prepare('http://127.0.0.1:${server.port}', token: 'valid');
+        final c = MusicController(supportDirectory: root);
+        try {
+          await c.initialize();
+          expect(c.authenticated, isTrue);
+          status = 503;
+          await c.renewSessionIfNeeded(force: true);
+          expect(c.authenticated, isTrue);
+          expect(c.error, isNull);
+          expect(
+            await const FlutterSecureStorage().read(key: 'session'),
+            isNotNull,
+          );
+          status = 401;
+          await c.renewSessionIfNeeded(force: true);
+          expect(c.authenticated, isFalse);
+          expect(c.offline, isTrue);
+          expect(c.tracks.single.id, 'local-song');
+          expect(c.error, contains('登录已过期'));
+          expect(
+            await const FlutterSecureStorage().read(key: 'session'),
+            isNull,
+          );
+        } finally {
+          c.dispose();
+        }
+      } finally {
+        await server.close(force: true);
+      }
+    },
+  );
 }
 
 class PlaybackController extends MusicController {

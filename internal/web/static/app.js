@@ -42,7 +42,10 @@ const listening = {
   controller: null,
 };
 const audio = $("audio");
+const SESSION_RENEW_INTERVAL_MS = 12 * 60 * 60 * 1000;
 let toastTimer, searchTimer, pollTimer;
+let lastSessionRenew = 0,
+  renewingSession = false;
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -83,6 +86,40 @@ async function api(path, options = {}) {
     throw new Error(body.error || `请求失败 (${response.status})`);
   return body;
 }
+async function renewSessionIfNeeded(force = false) {
+  if (!state.user || renewingSession) return;
+  if (!force && Date.now() - lastSessionRenew < SESSION_RENEW_INTERVAL_MS)
+    return;
+  renewingSession = true;
+  try {
+    let response = await fetch("/api/v1/auth/refresh", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (
+      response.status === 404 ||
+      response.status === 405 ||
+      response.status === 501
+    ) {
+      response = await fetch("/api/v1/auth/session", {
+        credentials: "same-origin",
+      });
+    }
+    if (response.status === 401) {
+      showLogin();
+      return;
+    }
+    if (response.ok) {
+      lastSessionRenew = Date.now();
+    }
+  } catch {
+    /* Keep the active session across transient network interruptions. */
+  } finally {
+    renewingSession = false;
+  }
+}
 function showLogin() {
   resetSelection();
   setQueueOpen(false, false);
@@ -95,6 +132,7 @@ function showLogin() {
   for (const dialog of document.querySelectorAll("dialog[open]"))
     dialog.close();
   state.user = false;
+  lastSessionRenew = 0;
   state.jobsRequest++;
   state.jobId = null;
   state.jobRequest++;
@@ -147,6 +185,7 @@ function authMode(status) {
 }
 async function enter() {
   state.user = true;
+  lastSessionRenew = Date.now();
   $("login-view").hidden = true;
   $("app").hidden = false;
   $("password").value = "";
@@ -156,6 +195,7 @@ async function enter() {
   clearInterval(pollTimer);
   pollTimer = setInterval(() => {
     if (!document.hidden && state.user) {
+      renewSessionIfNeeded();
       Promise.all([
         loadSystem(),
         loadJobs(),
@@ -2309,4 +2349,10 @@ async function bootstrap() {
     $("login-button").textContent = "连接失败";
   }
 }
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && state.user) renewSessionIfNeeded();
+});
+window.addEventListener("online", () => {
+  if (state.user) renewSessionIfNeeded();
+});
 document.addEventListener("DOMContentLoaded", bootstrap);

@@ -196,6 +196,13 @@ final class DesktopIntegration: NSObject, ObservableObject {
                 self?.reservedMenuBarLength = MenuBarPlacement.reservedLength(on: self?.statusItem.button?.window?.screen ?? NSScreen.main)
                 self?.updateStatus()
             }.store(in: &subscriptions)
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    await self?.library.renewSessionIfNeeded()
+                }
+            }.store(in: &subscriptions)
     }
 
     private func configureStatusItem() {

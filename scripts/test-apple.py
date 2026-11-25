@@ -27,6 +27,9 @@ def main():
                            artwork=f"/api/v1/tracks/{cloud_id}/cover")
         offline = False
         expired = False
+        legacy_refresh = False
+        refresh_count = 0
+        session_count = 0
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -40,32 +43,54 @@ def main():
                     self.respond({}, status=401)
 
             def do_POST(self):
-                nonlocal offline, expired
+                nonlocal offline, expired, legacy_refresh, refresh_count
                 if self.path == "/music/__offline":
                     offline = True
+                    self.respond({})
+                elif self.path == "/music/__online":
+                    offline = False
                     self.respond({})
                 elif self.path == "/music/__expire":
                     expired = True
                     self.respond({})
+                elif self.path == "/music/__legacy_refresh":
+                    legacy_refresh = not legacy_refresh
+                    self.respond({"legacy": legacy_refresh})
                 elif self.path == "/music/api/v1/auth/login":
                     body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                     expired = False
                     self.respond({"token": "test-session"} if body == {"username": "admin", "password": "test-password"} else {},
                                  status=200 if body.get("password") == "test-password" else 401)
+                elif self.path == "/music/api/v1/auth/refresh":
+                    if offline:
+                        return self.respond({"error": "offline"}, status=503)
+                    authenticated = self.headers.get("Authorization") == "Bearer test-session"
+                    if expired or not authenticated:
+                        return self.respond({}, status=401)
+                    if legacy_refresh:
+                        return self.respond({"error": "not found"}, status=404)
+                    refresh_count += 1
+                    self.respond({"username": "admin", "expires_in": 31536000})
                 else:
                     self.respond({"error": "offline"}, status=503)
 
             def do_GET(self):
+                nonlocal session_count
+                path = self.path.split("?")[0]
+                if path == "/music/__refresh_stats":
+                    return self.respond({"refresh": refresh_count, "session": session_count})
                 if offline:
                     return self.respond({"error": "offline"}, status=503)
-                path = self.path.split("?")[0]
                 if path.endswith("/test-cloud-audio"):
                     return self.respond(data, "audio/mpeg")
                 authenticated = (self.headers.get("Authorization") == "Bearer test-session"
                                  or "resona_session=test-session" in self.headers.get("Cookie", ""))
                 if expired or not authenticated:
                     return self.respond({}, status=401)
-                if path.endswith("/tracks"):
+                if path.endswith("/auth/session"):
+                    session_count += 1
+                    self.respond({"username": "admin", "expires_in": 31536000})
+                elif path.endswith("/tracks"):
                     self.respond({"items": [cloud_track if "library=cloud" in self.path else track], "total": 1})
                 elif path.endswith("/albums"):
                     self.respond({"items": []})

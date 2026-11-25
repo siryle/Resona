@@ -460,4 +460,54 @@ void main() {
       await jsonServer.close(force: true);
     }
   });
+
+  test(
+    'refreshSession hits auth/refresh and falls back to auth/session on 404',
+    () async {
+      final authServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final requests = <String>[];
+      var legacy = false;
+      authServer.listen((request) async {
+        requests.add('${request.method} ${request.uri.path}');
+        expect(request.headers.value('authorization'), 'Bearer token');
+        request.response.headers.contentType = ContentType.json;
+        if (request.uri.path == '/prefix/api/v1/auth/refresh') {
+          if (legacy) {
+            request.response.statusCode = 404;
+            request.response.write(jsonEncode({'error': 'not found'}));
+          } else {
+            request.response.write(
+              jsonEncode({'username': 'user', 'expires_in': 31536000}),
+            );
+          }
+        } else if (request.uri.path == '/prefix/api/v1/auth/session') {
+          request.response.write(jsonEncode({'username': 'user'}));
+        } else {
+          request.response.statusCode = 404;
+        }
+        await request.response.close();
+      });
+      final authAPI = ResonaAPI(
+        Session(
+          serverAddress('http://127.0.0.1:${authServer.port}/prefix'),
+          'user',
+          'token',
+        ),
+      );
+      try {
+        await authAPI.refreshSession();
+        expect(requests, ['POST /prefix/api/v1/auth/refresh']);
+        legacy = true;
+        await authAPI.refreshSession();
+        expect(requests, [
+          'POST /prefix/api/v1/auth/refresh',
+          'POST /prefix/api/v1/auth/refresh',
+          'GET /prefix/api/v1/auth/session',
+        ]);
+      } finally {
+        authAPI.close();
+        await authServer.close(force: true);
+      }
+    },
+  );
 }

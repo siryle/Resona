@@ -1380,16 +1380,7 @@ class _MusicPageState extends State<MusicPage> {
               title: const Text('离线聆听'),
               subtitle: const Text('只读取本机音频，不请求服务器'),
               value: c.offline,
-              onChanged: c.busy
-                  ? null
-                  : (value) {
-                      if (!value) {
-                        unawaited(c.reconnect());
-                      } else {
-                        c.offline = true;
-                        c.notifyListeners();
-                      }
-                    },
+              onChanged: c.busy ? null : c.setOfflineMode,
             ),
         ]),
         if (desktop && widget.desktopIntegration != null)

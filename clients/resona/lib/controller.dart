@@ -17,7 +17,15 @@ enum TrackBatchAction { download, favorite }
 class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   static const _credentials = FlutterSecureStorage();
   final Directory? supportDirectory;
-  MusicController({this.supportDirectory});
+  final Duration sessionRenewalInterval;
+  MusicController({
+    this.supportDirectory,
+    this.sessionRenewalInterval = const Duration(hours: 12),
+  });
+  Timer? _sessionRenewalTimer;
+  DateTime? _lastSessionRenewal;
+  bool _renewingSession = false;
+  bool _manualOffline = false;
   final Set<String> downloading = {};
   String collectionTitle = "";
   String collectionArtist = '';
@@ -101,8 +109,10 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         final activeAPI = api;
         if (authenticated) {
           try {
-            await activeAPI!.json('GET', 'auth/session');
+            await activeAPI!.refreshSession();
             if (api != activeAPI) return;
+            _manualOffline = false;
+            _lastSessionRenewal = DateTime.now();
             offline = false;
             _invalidateCovers();
           } on APIException catch (e) {
@@ -147,6 +157,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       List.generate(32, (_) => Random.secure().nextInt(256)),
     );
     relay = PlaybackRelay(api!, secret);
+    _startSessionKeepalive();
   }
 
   Future<void> _restorePlaybackState() async {
@@ -255,17 +266,87 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         });
   }
 
+  void _startSessionKeepalive() {
+    _stopSessionKeepalive();
+    if (_disposed ||
+        !authenticated ||
+        sessionRenewalInterval <= Duration.zero) {
+      return;
+    }
+    _sessionRenewalTimer = Timer.periodic(
+      sessionRenewalInterval,
+      (_) => unawaited(renewSessionIfNeeded()),
+    );
+  }
+
+  void _stopSessionKeepalive() {
+    _sessionRenewalTimer?.cancel();
+    _sessionRenewalTimer = null;
+  }
+
+  void setOfflineMode(bool value) {
+    if (!value) {
+      _manualOffline = false;
+      unawaited(reconnect());
+      return;
+    }
+    _manualOffline = true;
+    offline = true;
+    notifyListeners();
+  }
+
+  Future<void> renewSessionIfNeeded({bool force = false}) async {
+    if (_disposed ||
+        !authenticated ||
+        busy ||
+        _manualOffline ||
+        _renewingSession) {
+      return;
+    }
+    if (!force &&
+        _lastSessionRenewal != null &&
+        DateTime.now().difference(_lastSessionRenewal!) <
+            sessionRenewalInterval) {
+      return;
+    }
+    final activeAPI = api;
+    if (activeAPI == null) return;
+    _renewingSession = true;
+    try {
+      await activeAPI.refreshSession();
+      if (_disposed || api != activeAPI) return;
+      _lastSessionRenewal = DateTime.now();
+    } on APIException catch (e) {
+      if (_disposed || api != activeAPI) return;
+      if (e.status == 401) {
+        await logout(revoke: false);
+        error = '登录已过期，本机音乐仍可播放。可在设置中重新连接服务器。';
+        notifyListeners();
+      }
+    } catch (_) {
+      /* Preserve the saved session across transient network or server outages. */
+    } finally {
+      _renewingSession = false;
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) unawaited(savePlaybackState());
+    if (state == AppLifecycleState.resumed) {
+      unawaited(renewSessionIfNeeded());
+    } else {
+      unawaited(savePlaybackState());
+    }
   }
 
   Future<void> reconnect() async {
     if (!authenticated || busy) return;
+    _manualOffline = false;
     busy = true;
     notifyListeners();
     try {
-      await api!.json('GET', 'auth/session');
+      await api!.refreshSession();
+      _lastSessionRenewal = DateTime.now();
       offline = false;
       _invalidateCovers();
       await load();
@@ -310,6 +391,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       queue = [];
       _invalidateCovers();
       await _activate(session);
+      _manualOffline = false;
+      _lastSessionRenewal = DateTime.now();
       offline = false;
       await load();
     } catch (e) {
@@ -929,6 +1012,9 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> logout({bool revoke = true}) async {
+    _stopSessionKeepalive();
+    _lastSessionRenewal = null;
+    _manualOffline = false;
     busy = true;
     ++_request;
     ++_playRequest;
@@ -1067,6 +1153,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
+    _stopSessionKeepalive();
+    _lastSessionRenewal = null;
     ++_playRequest;
     for (final sub in _subscriptions) {
       unawaited(sub.cancel());

@@ -49,7 +49,11 @@ struct ResonaApp: App {
                 await library.refresh()
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { player.savePlaybackState() }
+                if phase == .active {
+                    Task { await library.renewSessionIfNeeded() }
+                } else {
+                    player.savePlaybackState()
+                }
             }
             .onChange(of: library.session?.token) { _, _ in
                 player.connectionChanged(library.session)

@@ -20,6 +20,13 @@ import (
 	"unicode/utf8"
 )
 
+const (
+	sessionTTL               = 365 * 24 * time.Hour
+	sessionRenewInterval     = 24 * time.Hour
+	sessionRefreshMinPersist = time.Minute
+	sessionMaxCount          = 128
+)
+
 type session struct {
 	Expires time.Time
 }
@@ -40,6 +47,14 @@ type Auth struct {
 	path      string
 	setupCode string
 	trusted   []netip.Prefix
+	clock     func() time.Time
+}
+
+func (a *Auth) now() time.Time {
+	if a.clock != nil {
+		return a.clock()
+	}
+	return time.Now()
 }
 
 func NewAuth(c Config) (*Auth, error) {
@@ -76,16 +91,17 @@ func NewAuth(c Config) (*Auth, error) {
 	if sessions.Credentials != a.credentialID() {
 		return a, nil
 	}
+	now := a.now()
 	for digest, s := range sessions.Sessions {
 		key, err := hex.DecodeString(digest)
 		if err != nil || len(key) != sha256.Size {
 			return nil, errors.New("invalid saved session digest")
 		}
-		if time.Now().Before(s.Expires) {
+		if now.Before(s.Expires) {
 			a.sessions[[32]byte(key)] = s
 		}
 	}
-	if len(a.sessions) > 128 {
+	if len(a.sessions) > sessionMaxCount {
 		return nil, errors.New("too many saved sessions")
 	}
 	return a, nil
@@ -106,8 +122,9 @@ func (a *Auth) credentialID() string {
 // Called with the auth mutex held; only token digests ever reach disk.
 func (a *Auth) saveSessions() error {
 	saved := savedSessions{Credentials: a.credentialID(), Sessions: map[string]session{}}
+	now := a.now()
 	for key, s := range a.sessions {
-		if time.Now().Before(s.Expires) {
+		if now.Before(s.Expires) {
 			saved.Sessions[hex.EncodeToString(key[:])] = s
 		}
 	}
@@ -157,7 +174,7 @@ func (a *Auth) setup(r *http.Request, password, code string) error {
 		return errAlreadyConfigured
 	}
 	if r != nil {
-		if err := a.consumeAttempt(a.clientAddress(r), time.Now()); err != nil {
+		if err := a.consumeAttempt(a.clientAddress(r), a.now()); err != nil {
 			return err
 		}
 	}
@@ -216,7 +233,7 @@ var errCredentials = errors.New("invalid username or password")
 
 func (a *Auth) login(r *http.Request, user, password string) (string, error) {
 	host := a.clientAddress(r)
-	now := time.Now()
+	now := a.now()
 	a.mu.Lock()
 	if len(a.hash) == 0 {
 		a.mu.Unlock()
@@ -242,14 +259,27 @@ func (a *Auth) login(r *http.Request, user, password string) (string, error) {
 			delete(a.sessions, key)
 		}
 	}
-	if len(a.sessions) >= 128 {
-		return "", errThrottled
+	var evictedKey [32]byte
+	var evictedSession session
+	var evicted bool
+	if len(a.sessions) >= sessionMaxCount {
+		first := true
+		for k, s := range a.sessions {
+			if first || s.Expires.Before(evictedSession.Expires) {
+				evictedKey, evictedSession, first = k, s, false
+			}
+		}
+		delete(a.sessions, evictedKey)
+		evicted = true
 	}
 	delete(a.attempts, host)
 	key := sha256.Sum256([]byte(token))
-	a.sessions[key] = session{Expires: now.Add(7 * 24 * time.Hour)}
+	a.sessions[key] = session{Expires: now.Add(sessionTTL)}
 	if err := a.saveSessions(); err != nil {
 		delete(a.sessions, key)
+		if evicted {
+			a.sessions[evictedKey] = evictedSession
+		}
 		return "", err
 	}
 	return token, nil
@@ -333,34 +363,128 @@ func (a *Auth) isTrusted(address netip.Addr) bool {
 	return false
 }
 
-func requestToken(r *http.Request) string {
+func requestToken(r *http.Request) (string, bool) {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		return strings.TrimPrefix(h, "Bearer ")
+		return strings.TrimPrefix(h, "Bearer "), false
 	}
 	if c, err := r.Cookie("resona_session"); err == nil {
-		return c.Value
+		return c.Value, true
 	}
-	return ""
+	return "", false
 }
 
 func (a *Auth) valid(r *http.Request) bool {
-	token := requestToken(r)
+	token, _ := requestToken(r)
 	if len(token) != 64 {
 		return false
 	}
 	key := sha256.Sum256([]byte(token))
+	now := a.now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s, ok := a.sessions[key]
-	if ok && !time.Now().Before(s.Expires) {
+	if ok && !now.Before(s.Expires) {
 		delete(a.sessions, key)
 		return false
 	}
 	return ok
 }
 
+func (a *Auth) authenticate(w http.ResponseWriter, r *http.Request) (bool, error) {
+	token, viaCookie := requestToken(r)
+	if len(token) != 64 {
+		return false, nil
+	}
+	key := sha256.Sum256([]byte(token))
+	now := a.now()
+	var renewed bool
+	var saveErr error
+
+	a.mu.Lock()
+	s, ok := a.sessions[key]
+	if ok && !now.Before(s.Expires) {
+		delete(a.sessions, key)
+		ok = false
+	}
+	if ok && !s.Expires.After(now.Add(sessionTTL-sessionRenewInterval)) {
+		previous := s
+		s.Expires = now.Add(sessionTTL)
+		a.sessions[key] = s
+		if err := a.saveSessions(); err != nil {
+			a.sessions[key] = previous
+			saveErr = err
+		} else {
+			renewed = true
+		}
+	}
+	a.mu.Unlock()
+
+	if ok && viaCookie && renewed {
+		a.cookie(w, r, token)
+	}
+	return ok, saveErr
+}
+
+func (a *Auth) refresh(w http.ResponseWriter, r *http.Request) (time.Time, bool, error) {
+	token, viaCookie := requestToken(r)
+	if len(token) != 64 {
+		return time.Time{}, false, nil
+	}
+	key := sha256.Sum256([]byte(token))
+	now := a.now()
+
+	a.mu.Lock()
+	s, ok := a.sessions[key]
+	if ok && !now.Before(s.Expires) {
+		delete(a.sessions, key)
+		ok = false
+	}
+	if !ok {
+		a.mu.Unlock()
+		return time.Time{}, false, nil
+	}
+	nextExpires := now.Add(sessionTTL)
+	if nextExpires.Sub(s.Expires) >= sessionRefreshMinPersist {
+		previous := s
+		s.Expires = nextExpires
+		a.sessions[key] = s
+		if err := a.saveSessions(); err != nil {
+			a.sessions[key] = previous
+			a.mu.Unlock()
+			return time.Time{}, true, err
+		}
+	}
+	expires := s.Expires
+	a.mu.Unlock()
+
+	if viaCookie {
+		a.cookie(w, r, token)
+	}
+	return expires, true, nil
+}
+
+func (a *Auth) tokenExpiry(token string) (time.Time, bool) {
+	if len(token) != 64 {
+		return time.Time{}, false
+	}
+	key := sha256.Sum256([]byte(token))
+	now := a.now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s, ok := a.sessions[key]
+	if !ok || !now.Before(s.Expires) {
+		return time.Time{}, false
+	}
+	return s.Expires, true
+}
+
+func (a *Auth) sessionExpiry(r *http.Request) (time.Time, bool) {
+	token, _ := requestToken(r)
+	return a.tokenExpiry(token)
+}
+
 func (a *Auth) cookie(w http.ResponseWriter, r *http.Request, token string) {
-	age := 7 * 24 * 60 * 60
+	age := int(sessionTTL / time.Second)
 	if token == "" {
 		age = -1
 	}
@@ -369,9 +493,10 @@ func (a *Auth) cookie(w http.ResponseWriter, r *http.Request, token string) {
 }
 
 func (a *Auth) logout(w http.ResponseWriter, r *http.Request) error {
+	token, _ := requestToken(r)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	key := sha256.Sum256([]byte(requestToken(r)))
+	key := sha256.Sum256([]byte(token))
 	s, ok := a.sessions[key]
 	delete(a.sessions, key)
 	if err := a.saveSessions(); err != nil {

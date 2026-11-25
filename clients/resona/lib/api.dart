@@ -107,6 +107,18 @@ class ResonaAPI {
     }
   }
 
+  Future<void> refreshSession() async {
+    try {
+      await json('POST', 'auth/refresh', body: const <String, dynamic>{});
+    } on APIException catch (e) {
+      if (e.status == 404 || e.status == 405 || e.status == 501) {
+        await json('GET', 'auth/session');
+        return;
+      }
+      rethrow;
+    }
+  }
+
   Future<Map<String, dynamic>> json(
     String method,
     String path, {

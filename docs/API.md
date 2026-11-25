@@ -28,9 +28,18 @@ Content-Type: application/json
 {"username":"admin","password":"a-strong-password-you-choose"}
 ```
 
-响应包含 `token`、`username`、`expires_in`（604800 秒）并设置浏览器 Cookie。未初始化返回 `428`，凭据不正确返回 `401`。同一来源地址在 15 分钟内最多 8 次登录尝试，成功登录重置计数，超限返回 `429`。地址表满时丢掉最旧的记录，不拒绝还没失败过的地址。最多同时保留 128 个活跃会话。会话持久化，服务重启不使其失效；过期或主动退出后需重新登录。
+响应包含 `token`、`username`、`expires_in`（31536000 秒，即 365 天）和 `expires_at`（RFC 3339 UTC），并设置 365 天有效期的浏览器 Cookie。未初始化返回 `428`，凭据不正确返回 `401`。同一来源地址在 15 分钟内最多 8 次登录尝试，成功登录重置计数，超限返回 `429`。地址表满时丢掉最旧的记录，不拒绝还没失败过的地址。最多同时保留 128 个活跃会话；达到上限后新登录会先清理过期会话，若仍满则淘汰最早到期的会话，持久化失败时回滚。会话持久化，服务重启不使其失效；过期或主动退出后需重新登录。
 
-`GET /api/v1/auth/session` 查询当前账号，`POST /api/v1/auth/logout` 注销当前会话。
+每次已认证请求都会检查会话滑动续期：当距离当前到期时间不足 364 天（即距上次续期已满 24 小时）时，服务端自动将其延长至 `now + 365 天` 并持久化，Cookie 会话同时刷新 `Set-Cookie`；若被动续期写盘失败，服务端保留原有效期并放行已验证请求。客户端也可按需主动保活：
+
+```http
+POST /api/v1/auth/refresh
+Content-Type: application/json
+
+{}
+```
+
+需要有效会话，成功返回 `200 {"username":"admin","expires_in":31536000,"expires_at":"..."}`（距离新到期时间不足 1 分钟时合并写盘），Cookie 会话同时刷新 Cookie；持久化失败返回 `500` 并保留原有效期。`GET /api/v1/auth/session` 返回相同的 `username`、`expires_in` 和 `expires_at` 并遵循自动滑动续期；`POST /api/v1/auth/logout` 仅校验当前会话有效性而不触发续期，立即撤销并持久化。
 
 ## 音乐库
 
