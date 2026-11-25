@@ -1,5 +1,9 @@
 import Foundation
+#if os(macOS)
+import Darwin
+#else
 import Security
+#endif
 import SwiftUI
 
 struct Track: Codable, Identifiable, Equatable {
@@ -63,6 +67,76 @@ enum APIError: LocalizedError {
 }
 
 enum Credentials {
+#if os(macOS)
+    private static let defaultURL: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent(Bundle.main.bundleIdentifier ?? "app.resona.macos", isDirectory: true)
+        .appendingPathComponent("session.json")
+
+    static func load(from url: URL? = nil) -> Session? {
+        let target = url ?? defaultURL
+        let fd = open(target.path, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+        guard let data = try? FileHandle(fileDescriptor: fd, closeOnDealloc: false).readToEnd() else { return nil }
+        return try? JSONDecoder().decode(Session.self, from: data)
+    }
+
+    static func save(_ session: Session, to url: URL? = nil) throws {
+        let target = url ?? defaultURL
+        let directory = target.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(session)
+        let temporary = directory.appendingPathComponent(".session-\(UUID().uuidString).tmp")
+        let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
+        guard fd >= 0 else { throw APIError.message("无法安全保存登录凭据 (\(errno))") }
+        var closed = false
+        var moved = false
+        defer {
+            if !closed { close(fd) }
+            if !moved { unlink(temporary.path) }
+        }
+        guard fchmod(fd, mode_t(0o600)) == 0 else {
+            throw APIError.message("无法安全保存登录凭据 (\(errno))")
+        }
+        try data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress, raw.count > 0 else { return }
+            var offset = 0
+            while offset < raw.count {
+                let written = write(fd, base.advanced(by: offset), raw.count - offset)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw APIError.message("无法安全保存登录凭据 (\(errno))")
+                }
+                if written == 0 {
+                    throw APIError.message("无法安全保存登录凭据 (\(EIO))")
+                }
+                offset += written
+            }
+        }
+        guard fsync(fd) == 0 else { throw APIError.message("无法安全保存登录凭据 (\(errno))") }
+        closed = true
+        guard close(fd) == 0 else { throw APIError.message("无法安全保存登录凭据 (\(errno))") }
+        var excluded = temporary
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? excluded.setResourceValues(values)
+        guard rename(temporary.path, target.path) == 0 else {
+            throw APIError.message("无法安全保存登录凭据 (\(errno))")
+        }
+        moved = true
+    }
+
+    static func clear(at url: URL? = nil) {
+        let target = url ?? defaultURL
+        do {
+            try FileManager.default.removeItem(at: target)
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+            return
+        } catch {}
+    }
+#else
     private static let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: "app.resona.session",
@@ -92,6 +166,7 @@ enum Credentials {
     static func clear() {
         SecItemDelete(query as CFDictionary)
     }
+#endif
 }
 
 private final class RenewalCancel: @unchecked Sendable {

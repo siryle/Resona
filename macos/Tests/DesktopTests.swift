@@ -16,6 +16,56 @@ struct DesktopTests {
         } while !condition() && Date() < deadline
     }
 
+    static func credentialsTests() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("resona-credentials-test-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("session.json")
+        assert(Credentials.load(from: file) == nil, "Missing session file must return nil")
+
+        let first = Session(server: URL(string: "https://music.example.com/")!, username: "admin", token: "token-1")
+        let second = Session(server: URL(string: "https://music.example.com/")!, username: "admin", token: "token-2")
+        try Credentials.save(first, to: file)
+        let loadedFirst = Credentials.load(from: file)
+        assert(loadedFirst?.server == first.server && loadedFirst?.username == first.username &&
+               loadedFirst?.token == first.token, "Saved macOS session did not round-trip")
+
+        let firstAttrs = try FileManager.default.attributesOfItem(atPath: file.path)
+        assert((firstAttrs[.posixPermissions] as? Int) == 0o600, "macOS session file must keep 0600 permissions")
+        let resourceValues = try file.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        assert(resourceValues.isExcludedFromBackup == true, "macOS session file must be excluded from backups")
+
+        try Credentials.save(second, to: file)
+        let loadedSecond = Credentials.load(from: file)
+        assert(loadedSecond?.token == second.token, "Saving must atomically replace an existing session")
+        let secondAttrs = try FileManager.default.attributesOfItem(atPath: file.path)
+        assert((secondAttrs[.posixPermissions] as? Int) == 0o600, "Replaced session file must preserve 0600 permissions")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix(".session-") }
+        assert(leftovers.isEmpty, "Atomic session save must not leave temporary files behind")
+
+        let decoy = root.appendingPathComponent("decoy.json")
+        let decoyBytes = try JSONEncoder().encode(first)
+        try decoyBytes.write(to: decoy)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: decoy)
+        assert(Credentials.load(from: file) == nil, "Refuse to follow symlinks when loading credentials")
+
+        try Credentials.save(second, to: file)
+        let replacedAttrs = try FileManager.default.attributesOfItem(atPath: file.path)
+        assert((replacedAttrs[.type] as? FileAttributeType) == .typeRegular,
+               "Saving over a symlink must replace it with a regular file")
+        assert((replacedAttrs[.posixPermissions] as? Int) == 0o600)
+        assert(Credentials.load(from: file)?.token == second.token)
+        let currentDecoy = try Data(contentsOf: decoy)
+        assert(currentDecoy == decoyBytes, "Symlink target must remain untouched")
+
+        Credentials.clear(at: file)
+        assert(!FileManager.default.fileExists(atPath: file.path) && Credentials.load(from: file) == nil)
+        Credentials.clear(at: file)
+    }
+
     static func placementTests() {
         let domain = "app.resona.placement-tests." + UUID().uuidString
         let systemDomain = domain + ".system"
@@ -162,6 +212,7 @@ struct DesktopTests {
         player.volume = 0
         menuLyricTests()
         placementTests()
+        try credentialsTests()
         MenuBarPlacement.prepare(defaults: defaults, system: UserDefaults(suiteName: "com.apple.controlcenter"))
         let oldPosition = UserDefaults.standard.object(forKey: MenuBarPlacement.positionKey)
         UserDefaults.standard.set(defaults.double(forKey: MenuBarPlacement.positionKey), forKey: MenuBarPlacement.positionKey)
