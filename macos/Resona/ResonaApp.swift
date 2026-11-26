@@ -19,6 +19,7 @@ struct ResonaDesktopApp: App {
     init() {
         let library = LibraryModel()
         let player = PlayerModel()
+        player.configureDirectAirPlay(MacRAOPOutputBackend())
         _library = StateObject(wrappedValue: library)
         _player = StateObject(wrappedValue: player)
         let desktop = DesktopIntegration(player: player, library: library)
@@ -48,6 +49,7 @@ struct ResonaDesktopApp: App {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    player.disconnectDirectAirPlay()
                     player.savePlaybackState()
                 }
                 .onChange(of: library.session?.token) { _, _ in

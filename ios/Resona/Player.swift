@@ -73,6 +73,25 @@ private final class CoreAudioListeners {
         }
     }
 }
+
+@MainActor
+protocol MacDirectAirPlayBackend: AnyObject {
+    var devices: [AudioOutputDevice] { get }
+    var activeDeviceID: String? { get }
+    var connectingDeviceID: String? { get }
+    var hasAirPlay2Targets: Bool { get }
+    var lastError: String? { get }
+    var onStateChange: (() -> Void)? { get set }
+    var onDisconnect: ((String?) -> Void)? { get set }
+    func startDiscovery()
+    func refreshDiscovery()
+    func connect(deviceID: String, initialVolume: Float) async throws
+    func disconnect()
+    func setVolume(_ volume: Float)
+    func flush()
+    func attachTap(to item: AVPlayerItem) async
+    func detachTap(from item: AVPlayerItem)
+}
 #endif
 
 enum PlaybackMode: String, Codable, CaseIterable {
@@ -139,7 +158,19 @@ final class PlayerModel: ObservableObject {
     @Published var expanded = false
     @Published private(set) var queue: [Track] = []
     @Published var volume: Float = 0.8 {
-        didSet { player.volume = volume; savePlaybackState() }
+        didSet {
+            #if os(macOS)
+            if directAirPlayID != nil {
+                player.volume = 0
+                directAirPlay?.setVolume(volume)
+            } else {
+                player.volume = volume
+            }
+            #else
+            player.volume = volume
+            #endif
+            savePlaybackState()
+        }
     }
     @Published var playbackRate: Float = 1.0 {
         didSet {
@@ -160,6 +191,13 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var availableOutputs: [AudioOutputDevice] = []
     @Published private(set) var selectedOutputUID: String?
     @Published private(set) var airPlayActive = false
+    #if os(macOS)
+    @Published private(set) var directAirPlayOutputs: [AudioOutputDevice] = []
+    @Published private(set) var directAirPlayID: String?
+    @Published private(set) var directAirPlayConnectingID: String?
+    @Published private(set) var directAirPlayError: String?
+    @Published private(set) var hasAirPlay2Targets = false
+    #endif
     var avPlayer: AVPlayer { player }
 
     private let player: AVPlayer
@@ -185,6 +223,8 @@ final class PlayerModel: ObservableObject {
     private var externalPlaybackObserver: NSKeyValueObservation?
     #if os(macOS)
     private let audioListeners = CoreAudioListeners()
+    private var directAirPlay: (any MacDirectAirPlayBackend)?
+    private var tapAttachTask: Task<Void, Never>?
     #endif
     private var playbackRequested = false
     private var reachedEnd = false
@@ -417,6 +457,13 @@ final class PlayerModel: ObservableObject {
             Task { @MainActor [weak self] in self?.next(automatic: true) }
         }
         player.replaceCurrentItem(with: item)
+        #if os(macOS)
+        if directAirPlayID != nil {
+            player.volume = 0
+            directAirPlay?.flush()
+            scheduleDirectAirPlayTap(for: item)
+        }
+        #endif
         if position > 0 {
             player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         }
@@ -480,6 +527,11 @@ final class PlayerModel: ObservableObject {
     func pause() {
         playbackRequested = false
         player.pause()
+        #if os(macOS)
+        if directAirPlayID != nil {
+            directAirPlay?.flush()
+        }
+        #endif
         playing = false
         updateNowPlaying()
         savePlaybackState()
@@ -490,6 +542,11 @@ final class PlayerModel: ObservableObject {
         reachedEnd = false
         position = min(max(0, seconds), duration)
         player.seek(to: CMTime(seconds: position, preferredTimescale: 600))
+        #if os(macOS)
+        if directAirPlayID != nil {
+            directAirPlay?.flush()
+        }
+        #endif
         updateNowPlaying()
         savePlaybackState()
     }
@@ -550,6 +607,11 @@ final class PlayerModel: ObservableObject {
 
     func stop() {
         pause()
+        #if os(macOS)
+        if directAirPlayID != nil {
+            directAirPlay?.flush()
+        }
+        #endif
         player.replaceCurrentItem(with: nil)
         current = nil
         session = nil
@@ -659,19 +721,122 @@ final class PlayerModel: ObservableObject {
         } else {
             activeOutput = AudioOutputDevice(id: "system", name: "本机输出", kind: .speaker, isDefault: true)
         }
-        airPlayActive = player.isExternalPlaybackActive || activeOutput.kind == .airPlay
+        if let activeID = directAirPlayID {
+            activeOutput = directAirPlayOutputs.first(where: { $0.id == activeID })
+                ?? AudioOutputDevice(id: activeID, name: activeOutput.name, kind: .airPlay, isDefault: false)
+            airPlayActive = true
+        } else {
+            airPlayActive = player.isExternalPlaybackActive || activeOutput.kind == .airPlay
+        }
     }
 
     func selectAudioOutput(_ uid: String?) {
+        if directAirPlayID != nil || directAirPlayConnectingID != nil {
+            disconnectDirectAirPlay()
+        }
         selectedOutputUID = uid
         player.audioOutputDeviceUniqueID = uid
         handleAudioOutputChange(devices: availableOutputs)
     }
 
     func prepareForAirPlayRouting() {
+        if directAirPlayID != nil || directAirPlayConnectingID != nil {
+            disconnectDirectAirPlay()
+        }
         guard selectedOutputUID != nil || player.audioOutputDeviceUniqueID != nil else { return }
         selectedOutputUID = nil
         player.audioOutputDeviceUniqueID = nil
+        handleAudioOutputChange(devices: availableOutputs)
+    }
+
+    func configureDirectAirPlay(_ backend: any MacDirectAirPlayBackend) {
+        directAirPlay = backend
+        backend.onStateChange = { [weak self] in
+            self?.syncDirectAirPlayState()
+        }
+        backend.onDisconnect = { [weak self] reason in
+            guard let self else { return }
+            if self.playing || self.playbackRequested {
+                self.pause()
+            }
+            self.disconnectDirectAirPlay(errorMessage: reason ?? "AirPlay 连接已断开")
+        }
+        backend.startDiscovery()
+        syncDirectAirPlayState()
+    }
+
+    func refreshDirectAirPlayDevices() {
+        directAirPlay?.refreshDiscovery()
+    }
+
+    func selectDirectAirPlay(_ deviceID: String) {
+        if directAirPlayID == deviceID {
+            disconnectDirectAirPlay()
+            return
+        }
+        guard let backend = directAirPlay else { return }
+        selectedOutputUID = nil
+        player.audioOutputDeviceUniqueID = nil
+        directAirPlayError = nil
+        directAirPlayConnectingID = deviceID
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await backend.connect(deviceID: deviceID, initialVolume: self.volume)
+                guard self.directAirPlayConnectingID == deviceID else {
+                    if self.directAirPlayID == nil {
+                        backend.disconnect()
+                    }
+                    return
+                }
+                self.directAirPlayID = deviceID
+                self.directAirPlayConnectingID = nil
+                self.player.volume = 0
+                backend.setVolume(self.volume)
+                self.syncDirectAirPlayState()
+                if let item = self.player.currentItem {
+                    self.scheduleDirectAirPlayTap(for: item)
+                }
+            } catch {
+                if self.directAirPlayConnectingID == deviceID {
+                    self.directAirPlayConnectingID = nil
+                }
+                if self.directAirPlayID == nil {
+                    self.player.volume = self.volume
+                }
+                self.directAirPlayError = error.localizedDescription
+                self.refreshAudioOutputs()
+            }
+        }
+    }
+
+    func disconnectDirectAirPlay(errorMessage: String? = nil) {
+        tapAttachTask?.cancel()
+        tapAttachTask = nil
+        if let item = player.currentItem {
+            directAirPlay?.detachTap(from: item)
+        }
+        directAirPlay?.disconnect()
+        directAirPlayID = nil
+        directAirPlayConnectingID = nil
+        directAirPlayError = errorMessage
+        player.volume = volume
+        refreshAudioOutputs()
+    }
+
+    private func scheduleDirectAirPlayTap(for item: AVPlayerItem) {
+        tapAttachTask?.cancel()
+        tapAttachTask = Task { @MainActor [weak self] in
+            guard let self, let backend = self.directAirPlay,
+                  self.directAirPlayID != nil, self.player.currentItem === item else { return }
+            await backend.attachTap(to: item)
+        }
+    }
+
+    private func syncDirectAirPlayState() {
+        guard let backend = directAirPlay else { return }
+        directAirPlayOutputs = backend.devices
+        hasAirPlay2Targets = backend.hasAirPlay2Targets
         handleAudioOutputChange(devices: availableOutputs)
     }
 

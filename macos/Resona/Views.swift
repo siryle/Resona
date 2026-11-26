@@ -506,7 +506,7 @@ struct Artwork: View {
 struct ListeningView: View {
     @EnvironmentObject private var player: PlayerModel
     @State private var showSpeedPicker = false
-    @State private var showOutputPicker = false
+    @State private var showAirPlayPicker = false
     private var active: Int? { player.lyrics.last { $0.time <= player.position }?.id }
     var body: some View {
         GeometryReader { geometry in
@@ -526,31 +526,24 @@ struct ListeningView: View {
                                 .foregroundStyle(Theme.sageInk)
                                 .padding(.horizontal, 10).padding(.vertical, 4)
                                 .background(Theme.sage, in: Capsule())
+                            let directName = player.directAirPlayOutputs.first(where: { $0.id == player.directAirPlayID })?.name
+                            let isAirPlay = directName != nil || player.airPlayActive
+                            let displayTitle = directName.map { "AirPlay · \($0)" } ?? (player.airPlayActive ? "AirPlay · \(player.activeOutput.name)" : "AirPlay")
                             Button {
-                                showOutputPicker.toggle()
+                                showAirPlayPicker.toggle()
                             } label: {
-                                Label(
-                                    player.airPlayActive ? "AirPlay · \(player.activeOutput.name)" : "\(player.activeOutput.kind.label) · \(player.activeOutput.name)",
-                                    systemImage: player.airPlayActive ? "airplayaudio" : player.activeOutput.kind.symbol
-                                )
-                                .font(.caption.weight(.medium))
-                                .lineLimit(1)
-                                .foregroundStyle(player.airPlayActive || player.activeOutput.kind == .bluetooth || player.selectedOutputUID != nil ? Theme.accent : Theme.secondary)
-                                .padding(.horizontal, 10).padding(.vertical, 4)
-                                .background(Theme.surface, in: Capsule())
-                                .overlay { Capsule().strokeBorder(Theme.border) }
+                                Label(displayTitle, systemImage: "airplayaudio")
+                                    .font(.caption.weight(.medium))
+                                    .lineLimit(1)
+                                    .foregroundStyle(isAirPlay || player.directAirPlayConnectingID != nil ? Theme.accent : Theme.secondary)
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(Theme.surface, in: Capsule())
+                                    .overlay { Capsule().strokeBorder(Theme.border) }
                             }.buttonStyle(.plain)
-                                .help("切换蓝牙或本机音频输出")
-                                .popover(isPresented: $showOutputPicker, arrowEdge: .bottom) {
-                                    MacAudioOutputPopover()
+                                .help("选择 AirPlay 音箱")
+                                .popover(isPresented: $showAirPlayPicker, arrowEdge: .bottom) {
+                                    MacAirPlayPopover()
                                 }
-                            MacAirPlayPicker(player: player)
-                                .frame(width: 24, height: 22)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Theme.surface, in: Capsule())
-                                .overlay { Capsule().strokeBorder(Theme.border) }
-                                .help("AirPlay 隔空播放")
                             Button {
                                 showSpeedPicker.toggle()
                             } label: {

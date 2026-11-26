@@ -77,119 +77,120 @@ struct MacAirPlayPicker: NSViewRepresentable {
     }
 }
 
-struct MacAudioOutputPopover: View {
+struct MacAirPlayPopover: View {
     @EnvironmentObject private var player: PlayerModel
 
-    private var sortedOutputs: [AudioOutputDevice] {
-        let priority: (AudioOutputKind) -> Int = { kind in
-            switch kind {
-            case .bluetooth: return 0
-            case .airPlay: return 1
-            case .headphones: return 2
-            case .speaker: return 3
-            case .other: return 4
-            }
-        }
-        return player.availableOutputs.sorted {
-            let lhs = priority($0.kind), rhs = priority($1.kind)
-            if lhs != rhs { return lhs < rhs }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        }
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("AirPlay 隔空播放").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                HStack(alignment: .top, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("AirPlay")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.secondary)
+                Spacer()
+                Button {
+                    player.refreshDirectAirPlayDevices()
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accent)
+            }
+
+            if player.directAirPlayOutputs.isEmpty {
+                HStack(spacing: 8) {
                     Image(systemName: "airplayaudio")
-                        .font(.system(size: 16))
-                        .foregroundStyle(player.airPlayActive ? Theme.accent : Theme.secondary)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.secondary)
+                    Text("未发现局域网 AirPlay 音箱")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
+                }
+                .padding(.vertical, 6)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(player.directAirPlayOutputs) { device in
+                        let isSelected = player.directAirPlayID == device.id
+                        let isConnecting = player.directAirPlayConnectingID == device.id
+                        Button {
+                            if isSelected {
+                                player.disconnectDirectAirPlay()
+                            } else {
+                                player.selectDirectAirPlay(device.id)
+                            }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "airplayaudio")
+                                    .font(.system(size: 13))
+                                    .frame(width: 18)
+                                    .foregroundStyle(isSelected || isConnecting ? Theme.accent : Theme.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(device.name)
+                                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                                        .lineLimit(1)
+                                    Text(isConnecting ? "正在连接…" : (isSelected ? "已连接 · 点击断开" : "点击投送"))
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(Theme.muted)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                                if isConnecting {
+                                    ProgressView().controlSize(.small)
+                                } else if isSelected {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(Theme.accent)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(isSelected ? Theme.selected : .clear, in: RoundedRectangle(cornerRadius: 8))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if player.directAirPlayID != nil {
+                Divider()
+                Button {
+                    player.disconnectDirectAirPlay()
+                } label: {
+                    Label("断开连接，切回本机播放", systemImage: "speaker.wave.2")
+                        .font(.system(size: 12))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(Theme.accent)
+            }
+
+            if player.hasAirPlay2Targets {
+                Divider()
+                HStack {
+                    Text("其他 AirPlay 2 设备")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondary)
+                    Spacer()
+                    MacAirPlayPicker(player: player)
                         .frame(width: 24, height: 24)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(player.airPlayActive ? "AirPlay 正在投送" : "AirPlay 2 与传统 AirPlay 输出")
-                            .font(.system(size: 13, weight: .medium))
-                        Text("AirPlay 2 音箱可直接点击底部栏或播放页的隔空播放图标投送；旧款 AirPlay 1 音箱请在此选择“跟随系统默认”，并在系统声音设置中选择。")
-                            .font(.system(size: 11)).foregroundStyle(Theme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(10)
-                .background(Theme.paper, in: RoundedRectangle(cornerRadius: 8))
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("蓝牙与本机输出").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                outputRow(
-                    title: "跟随系统默认",
-                    subtitle: player.selectedOutputUID == nil ? player.activeOutput.name : "使用 macOS 系统声音输出",
-                    symbol: "speaker.wave.2",
-                    selected: player.selectedOutputUID == nil
-                ) {
-                    player.selectAudioOutput(nil)
-                }
-                ForEach(sortedOutputs) { device in
-                    outputRow(
-                        title: device.name,
-                        subtitle: device.kind.label + (device.isDefault ? " · 系统默认" : ""),
-                        symbol: device.kind.symbol,
-                        selected: player.selectedOutputUID == device.id
-                    ) {
-                        player.selectAudioOutput(device.id)
-                    }
                 }
             }
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Button {
-                    player.openSoundSettings()
-                } label: {
-                    Label("打开系统声音设置…", systemImage: "speaker.badge.exclamationmark")
-                        .font(.system(size: 12.5))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }.buttonStyle(.borderless).foregroundStyle(Theme.accent)
-                Button {
-                    player.openBluetoothSettings()
-                } label: {
-                    Label("打开系统蓝牙设置…", systemImage: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 12.5))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }.buttonStyle(.borderless).foregroundStyle(Theme.accent)
+            if let directError = player.directAirPlayError, !directError.isEmpty {
+                Text(directError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(16)
-        .frame(width: 290)
+        .padding(14)
+        .frame(width: 248)
         .foregroundStyle(Theme.ink)
         .background(Theme.surface)
-        .onAppear { player.refreshAudioOutputs() }
-    }
-
-    private func outputRow(title: String, subtitle: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .font(.system(size: 13))
-                    .frame(width: 20)
-                    .foregroundStyle(selected ? Theme.accent : Theme.secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular)).lineLimit(1)
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
-                }
-                Spacer()
-                if selected {
-                    Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(selected ? Theme.selected : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        .onAppear {
+            player.refreshDirectAirPlayDevices()
+        }
     }
 }
 
@@ -264,11 +265,11 @@ struct DesktopPlaybackBar: View {
     @Binding var showQueue: Bool
     @State private var playerBarHovered = false
     @State private var showSpeedPicker = false
-    @State private var showOutputPicker = false
+    @State private var showAirPlayPicker = false
     @FocusState private var focusedControl: Control?
 
     private enum Control: Hashable {
-        case progress, artwork, previous, play, next, volume, favorite, mode, speed, output, queue
+        case progress, artwork, previous, play, next, volume, favorite, mode, speed, airplay, queue
     }
 
     private var showTrackInfo: Bool {
@@ -399,18 +400,18 @@ struct DesktopPlaybackBar: View {
                         .popover(isPresented: $showSpeedPicker, arrowEdge: .top) {
                             MacPlaybackSpeedPopover()
                         }
-                    MacAirPlayPicker(player: player)
-                        .frame(width: 28, height: 36)
-                        .help("AirPlay 隔空播放")
-                    Button { showOutputPicker.toggle() } label: {
-                        Image(systemName: player.airPlayActive ? "airplayaudio" : player.activeOutput.kind.symbol)
+                    let directName = player.directAirPlayOutputs.first(where: { $0.id == player.directAirPlayID })?.name
+                    let isAirPlay = directName != nil || player.airPlayActive
+                    let activeTitle = directName ?? (player.airPlayActive ? player.activeOutput.name : "未连接")
+                    Button { showAirPlayPicker.toggle() } label: {
+                        Image(systemName: "airplayaudio")
                             .frame(width: 28, height: 36)
-                            .foregroundStyle(player.airPlayActive || player.activeOutput.kind == .bluetooth || player.selectedOutputUID != nil ? Theme.accent : Theme.ink)
-                    }.help("蓝牙与本机音频输出 · \(player.activeOutput.name)")
-                        .accessibilityLabel("音频输出 · \(player.activeOutput.name)")
-                        .focused($focusedControl, equals: .output)
-                        .popover(isPresented: $showOutputPicker, arrowEdge: .top) {
-                            MacAudioOutputPopover()
+                            .foregroundStyle(isAirPlay || player.directAirPlayConnectingID != nil ? Theme.accent : Theme.ink)
+                    }.help("AirPlay · \(activeTitle)")
+                        .accessibilityLabel("AirPlay · \(activeTitle)")
+                        .focused($focusedControl, equals: .airplay)
+                        .popover(isPresented: $showAirPlayPicker, arrowEdge: .top) {
+                            MacAirPlayPopover()
                         }
                     Button { withAnimation(.easeOut(duration: 0.2)) { showQueue.toggle() } } label: {
                         Image(systemName: "list.bullet").frame(width: 28, height: 36)

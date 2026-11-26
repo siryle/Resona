@@ -427,6 +427,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
     }
 
     func quit() {
+        player.disconnectDirectAirPlay()
         player.savePlaybackState()
         NSApp.terminate(nil)
     }
@@ -475,40 +476,45 @@ private struct MenuPlaybackView: View {
             }
             Divider()
             HStack(spacing: 10) {
-                Label(
-                    player.airPlayActive ? "AirPlay · \(player.activeOutput.name)" : player.activeOutput.name,
-                    systemImage: player.airPlayActive ? "airplayaudio" : player.activeOutput.kind.symbol
-                )
-                .font(.caption)
-                .lineLimit(1)
+                let directName = player.directAirPlayOutputs.first(where: { $0.id == player.directAirPlayID })?.name
+                let outputTitle = directName.map { "AirPlay · \($0)" } ?? (player.airPlayActive ? "AirPlay · \(player.activeOutput.name)" : "AirPlay")
+                Label(outputTitle, systemImage: "airplayaudio")
+                    .font(.caption)
+                    .lineLimit(1)
                 Spacer()
                 Menu {
-                    Button {
-                        player.selectAudioOutput(nil)
-                    } label: {
-                        HStack {
-                            Text("跟随系统默认")
-                            if player.selectedOutputUID == nil { Image(systemName: "checkmark") }
-                        }
-                    }
-                    ForEach(player.availableOutputs) { device in
-                        Button {
-                            player.selectAudioOutput(device.id)
-                        } label: {
-                            HStack {
-                                Text("\(device.name) (\(device.kind.label))")
-                                if player.selectedOutputUID == device.id { Image(systemName: "checkmark") }
+                    if player.directAirPlayOutputs.isEmpty {
+                        Button("未发现 AirPlay 音箱") {}.disabled(true)
+                    } else {
+                        ForEach(player.directAirPlayOutputs) { device in
+                            Button {
+                                if player.directAirPlayID == device.id {
+                                    player.disconnectDirectAirPlay()
+                                } else {
+                                    player.selectDirectAirPlay(device.id)
+                                }
+                            } label: {
+                                HStack {
+                                    Text(device.name)
+                                    if player.directAirPlayID == device.id { Image(systemName: "checkmark") }
+                                }
                             }
                         }
                     }
+                    if player.directAirPlayID != nil {
+                        Divider()
+                        Button("断开 AirPlay") { player.disconnectDirectAirPlay() }
+                    }
                     Divider()
-                    Button("打开蓝牙设置…") { player.openBluetoothSettings() }
+                    Button("刷新 AirPlay 音箱") { player.refreshDirectAirPlayDevices() }
                 } label: {
-                    Image(systemName: "speaker.wave.2")
-                }.menuStyle(.borderlessButton).fixedSize().help("切换蓝牙或本机输出")
-                MacAirPlayPicker(player: player) { presenting in
-                    desktop.setAirPlayPickerPresenting(presenting)
-                }.frame(width: 24, height: 24)
+                    Image(systemName: "airplayaudio")
+                }.menuStyle(.borderlessButton).fixedSize().help("选择 AirPlay 音箱")
+                if player.hasAirPlay2Targets {
+                    MacAirPlayPicker(player: player) { presenting in
+                        desktop.setAirPlayPickerPresenting(presenting)
+                    }.frame(width: 24, height: 24)
+                }
             }
             HStack(spacing: 8) {
                 Text("倍速播放").font(.caption)

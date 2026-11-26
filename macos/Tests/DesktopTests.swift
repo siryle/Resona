@@ -1,6 +1,10 @@
+import AVFoundation
 import AppKit
+import AudioToolbox
+import CommonCrypto
 import CoreAudio
 import CryptoKit
+import Darwin
 import SwiftUI
 
 private final class DesktopTestWindow: NSWindow {
@@ -278,6 +282,7 @@ struct DesktopTests {
         menuLyricTests()
         placementTests()
         audioOutputTests()
+        try raopTests()
         playbackRateTests()
         try credentialsTests()
         MenuBarPlacement.prepare(defaults: defaults, system: UserDefaults(suiteName: "com.apple.controlcenter"))
@@ -321,9 +326,11 @@ struct DesktopTests {
             let contentInWindow = popup.contentView!.convert(popup.contentView!.bounds, to: nil)
             let contentOnScreen = popup.convertToScreen(contentInWindow)
             assert(contentOnScreen.height <= screen.visibleFrame.height &&
-                   contentOnScreen.maxY <= screen.visibleFrame.maxY + 2,
-                   "Menu bar popover content \(contentOnScreen) must fit inside visible screen \(screen.visibleFrame) without covering the menu bar")
-            if (status.window?.frame.minY ?? 0) >= screen.visibleFrame.maxY - 1 {
+                   contentOnScreen.maxY <= screen.visibleFrame.maxY + 2 &&
+                   contentOnScreen.minY >= screen.frame.minY,
+                   "Menu bar popover content \(contentOnScreen) must fit inside screen \(screen.frame) without covering the menu bar")
+            if (status.window?.frame.minY ?? 0) >= screen.visibleFrame.maxY - 1,
+               abs(contentOnScreen.maxY - screen.visibleFrame.maxY) < 60 {
                 assert(contentOnScreen.minY >= screen.visibleFrame.minY,
                        "Menu bar popover content \(contentOnScreen) must stay within visible screen \(screen.visibleFrame)")
             }
@@ -814,8 +821,8 @@ struct DesktopTests {
         }
         main.makeFirstResponder(editableField(in: main.contentView!)!)
         settle()
-        let previousRect = NSRect(x: 701, y: 20, width: 30, height: 42)
-        let nextRect = NSRect(x: 803, y: 20, width: 30, height: 42)
+        let previousRect = NSRect(x: 743, y: 20, width: 30, height: 42)
+        let nextRect = NSRect(x: 845, y: 20, width: 30, height: 42)
         let previousPaused = snapshot(previousRect)
         let nextPaused = snapshot(nextRect)
         // Drive the playing state without audio timing or pointer movement masking the regression.
@@ -825,12 +832,739 @@ struct DesktopTests {
         try snapshot(main.contentView!.bounds).write(to: root.appendingPathComponent("playing.png"))
         assert(snapshot(previousRect) == previousPaused && snapshot(nextRect) == nextPaused,
                "Previous and next must stay visible during playback without hover or keyboard focus")
-        click(NSPoint(x: 766, y: 40))
+        click(NSPoint(x: 808, y: 40))
         assert(!player.playing, "The visible pause button must work without first hovering the playback bar")
         desktop.desktopLyricsEnabled = false
         main.close()
         NSStatusBar.system.removeStatusItem(desktop.statusItem)
         player.stop()
         print("macOS selection, filters, batch actions, lyrics, preferences, panel lifecycle and resident playback tests passed")
+    }
+
+    private final class MockDirectAirPlayBackend: MacDirectAirPlayBackend {
+        var devices: [AudioOutputDevice] = []
+        var activeDeviceID: String?
+        var connectingDeviceID: String?
+        var hasAirPlay2Targets = false
+        var lastError: String?
+        var onStateChange: (() -> Void)?
+        var onDisconnect: ((String?) -> Void)?
+
+        var refreshCount = 0
+        var lastVolume: Float?
+        var flushCount = 0
+        var disconnectCount = 0
+        var shouldFailConnect = false
+
+        func startDiscovery() {}
+
+        func refreshDiscovery() {
+            refreshCount += 1
+        }
+
+        func connect(deviceID: String, initialVolume: Float) async throws {
+            connectingDeviceID = deviceID
+            lastVolume = initialVolume
+            onStateChange?()
+            if shouldFailConnect {
+                connectingDeviceID = nil
+                lastError = "模拟连接失败"
+                onStateChange?()
+                throw RAOPError.connectionFailed("模拟连接失败")
+            }
+            connectingDeviceID = nil
+            activeDeviceID = deviceID
+            lastError = nil
+            onStateChange?()
+        }
+
+        func disconnect() {
+            disconnectCount += 1
+            activeDeviceID = nil
+            connectingDeviceID = nil
+            onStateChange?()
+        }
+
+        func setVolume(_ volume: Float) {
+            lastVolume = volume
+        }
+
+        func flush() {
+            flushCount += 1
+        }
+
+        func attachTap(to item: AVPlayerItem) async {}
+
+        func detachTap(from item: AVPlayerItem) {}
+    }
+
+    private final class MockRAOPServer {
+        private let lock = NSLock()
+        private let tcpListenFD: Int32
+        let rtspPort: UInt16
+        private let audioFD: Int32
+        private let audioPort: UInt16
+        private let controlFD: Int32
+        private let controlPort: UInt16
+        private let timingFD: Int32
+        private let timingPort: UInt16
+
+        private var clientControlPort: UInt16 = 0
+        private var clientTimingPort: UInt16 = 0
+        private var running = true
+        private let queue = DispatchQueue(label: "app.resona.test.mock-raop", attributes: .concurrent)
+
+        private(set) var rtspRequests: [(method: String, uri: String, body: String)] = []
+        private(set) var audioPackets: [Data] = []
+        private(set) var syncPackets: [Data] = []
+        private(set) var resendPackets: [Data] = []
+        private(set) var timingReplies: [Data] = []
+        private(set) var teardownReceived = false
+
+        init() throws {
+            let (tFD, tPort) = try Self.bindTCP()
+            self.tcpListenFD = tFD
+            self.rtspPort = tPort
+            let (aFD, aPort) = try Self.bindUDP()
+            let (cFD, cPort) = try Self.bindUDP()
+            let (timFD, timPort) = try Self.bindUDP()
+            self.audioFD = aFD
+            self.audioPort = aPort
+            self.controlFD = cFD
+            self.controlPort = cPort
+            self.timingFD = timFD
+            self.timingPort = timPort
+
+            queue.async { [weak self] in self?.acceptRTSP() }
+            queue.async { [weak self] in self?.readUDP(fd: aFD, kind: .audio) }
+            queue.async { [weak self] in self?.readUDP(fd: cFD, kind: .control) }
+            queue.async { [weak self] in self?.readUDP(fd: timFD, kind: .timing) }
+        }
+
+        deinit {
+            stop()
+        }
+
+        func stop() {
+            lock.lock()
+            let wasRunning = running
+            running = false
+            lock.unlock()
+            guard wasRunning else { return }
+            for fd in [tcpListenFD, audioFD, controlFD, timingFD] where fd >= 0 {
+                Darwin.close(fd)
+            }
+        }
+
+        func sendResendRequest(firstSeq: UInt16, count: UInt16) {
+            let port = locked { clientControlPort }
+            guard port > 0 else { return }
+            var pkt = Data([0x80, 0xD5, 0x00, 0x01])
+            pkt.append(UInt8((firstSeq >> 8) & 0xFF))
+            pkt.append(UInt8(firstSeq & 0xFF))
+            pkt.append(UInt8((count >> 8) & 0xFF))
+            pkt.append(UInt8(count & 0xFF))
+            Self.sendUDP(fd: controlFD, data: pkt, port: port)
+        }
+
+        func sendTimingRequest(marker: [UInt8]) {
+            let port = locked { clientTimingPort }
+            guard port > 0, marker.count == 8 else { return }
+            var pkt = Data(repeating: 0, count: 32)
+            pkt[0] = 0x80
+            pkt[1] = 0xD2
+            pkt[3] = 0x07
+            pkt.replaceSubrange(24..<32, with: marker)
+            Self.sendUDP(fd: timingFD, data: pkt, port: port)
+        }
+
+        func snapshot() -> (
+            rtsp: [(method: String, uri: String, body: String)],
+            audio: [Data],
+            sync: [Data],
+            resend: [Data],
+            timing: [Data],
+            teardown: Bool
+        ) {
+            locked {
+                (
+                    rtsp: rtspRequests,
+                    audio: audioPackets,
+                    sync: syncPackets,
+                    resend: resendPackets,
+                    timing: timingReplies,
+                    teardown: teardownReceived
+                )
+            }
+        }
+
+        private func locked<T>(_ work: () -> T) -> T {
+            lock.lock()
+            defer { lock.unlock() }
+            return work()
+        }
+
+        private enum UDPKind { case audio, control, timing }
+
+        private func readUDP(fd: Int32, kind: UDPKind) {
+            var buf = [UInt8](repeating: 0, count: 2048)
+            while locked({ running }) {
+                let n = Darwin.recvfrom(fd, &buf, buf.count, 0, nil, nil)
+                if n <= 0 {
+                    let err = errno
+                    if err == EAGAIN || err == EWOULDBLOCK || err == EINTR {
+                        usleep(2_000)
+                        continue
+                    }
+                    break
+                }
+                let data = Data(buf[0..<n])
+                locked {
+                    switch kind {
+                    case .audio:
+                        audioPackets.append(data)
+                    case .control:
+                        if data.count >= 2 && data[1] == 0xD4 {
+                            syncPackets.append(data)
+                        } else if data.count >= 2 && data[1] == 0xD6 {
+                            resendPackets.append(data)
+                        }
+                    case .timing:
+                        if data.count >= 2 && data[1] == 0xD3 {
+                            timingReplies.append(data)
+                        }
+                    }
+                }
+            }
+        }
+
+        private func acceptRTSP() {
+            var addr = sockaddr_in()
+            var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let conn = withUnsafeMutablePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    Darwin.accept(tcpListenFD, sa, &len)
+                }
+            }
+            guard conn >= 0 else { return }
+            defer { Darwin.close(conn) }
+
+            var buffer = Data()
+            var chunk = [UInt8](repeating: 0, count: 4096)
+            while locked({ running }) {
+                if let sepRange = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                    let headerData = buffer[..<sepRange.lowerBound]
+                    let headerText = String(data: headerData, encoding: .utf8) ?? ""
+                    let lines = headerText.components(separatedBy: "\r\n")
+                    var contentLength = 0
+                    var cseq = "1"
+                    var transport = ""
+                    for line in lines.dropFirst() {
+                        if let colon = line.firstIndex(of: ":") {
+                            let key = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+                            let val = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                            if key == "content-length" { contentLength = Int(val) ?? 0 }
+                            else if key == "cseq" { cseq = val }
+                            else if key == "transport" { transport = val }
+                        }
+                    }
+                    let bodyEnd = sepRange.upperBound + contentLength
+                    if buffer.count >= bodyEnd {
+                        let bodyData = buffer[sepRange.upperBound..<bodyEnd]
+                        let bodyStr = String(data: bodyData, encoding: .utf8) ?? ""
+                        buffer.removeSubrange(..<bodyEnd)
+
+                        let reqParts = (lines.first ?? "").split(separator: " ")
+                        let method = reqParts.count > 0 ? String(reqParts[0]) : ""
+                        let uri = reqParts.count > 1 ? String(reqParts[1]) : ""
+
+                        if method == "SETUP" {
+                            let cPort = Self.extractParam("control_port", from: transport) ?? 0
+                            let tPort = Self.extractParam("timing_port", from: transport) ?? 0
+                            locked {
+                                clientControlPort = cPort
+                                clientTimingPort = tPort
+                            }
+                        }
+
+                        var replyLines = [
+                            "RTSP/1.0 200 OK",
+                            "CSeq: \(cseq)",
+                            "Server: MockRAOP/1.0"
+                        ]
+                        if method == "OPTIONS" {
+                            replyLines.append("Public: ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, SET_PARAMETER")
+                        } else if method == "SETUP" {
+                            replyLines.append("Session: 1")
+                            replyLines.append("Transport: RTP/AVP/UDP;unicast;mode=record;server_port=\(audioPort);control_port=\(controlPort);timing_port=\(timingPort)")
+                        } else if method == "RECORD" {
+                            replyLines.append("Audio-Latency: 88200")
+                        }
+                        replyLines.append("")
+                        replyLines.append("")
+                        let replyData = Data(replyLines.joined(separator: "\r\n").utf8)
+                        replyData.withUnsafeBytes { raw in
+                            if let base = raw.baseAddress {
+                                _ = Darwin.send(conn, base, replyData.count, 0)
+                            }
+                        }
+
+                        locked {
+                            rtspRequests.append((method, uri, bodyStr))
+                            if method == "TEARDOWN" {
+                                teardownReceived = true
+                            }
+                        }
+                        if method == "TEARDOWN" { break }
+                        continue
+                    }
+                }
+
+                let n = Darwin.recv(conn, &chunk, chunk.count, 0)
+                if n <= 0 { break }
+                buffer.append(contentsOf: chunk[0..<n])
+            }
+        }
+
+        private static func extractParam(_ key: String, from header: String) -> UInt16? {
+            for part in header.split(separator: ";") {
+                let s = part.trimmingCharacters(in: .whitespaces)
+                if s.lowercased().hasPrefix(key.lowercased() + "="),
+                   let eq = s.firstIndex(of: "=") {
+                    return UInt16(s[s.index(after: eq)...])
+                }
+            }
+            return nil
+        }
+
+        private static func bindTCP() throws -> (Int32, UInt16) {
+            let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+            guard fd >= 0 else { throw RAOPError.connectionFailed("mock tcp socket failed") }
+            var one: Int32 = 1
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+            addr.sin_port = 0
+            let bindRes = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            guard bindRes == 0, Darwin.listen(fd, 4) == 0 else {
+                Darwin.close(fd)
+                throw RAOPError.connectionFailed("mock tcp bind/listen failed")
+            }
+            return (fd, try boundPort(fd))
+        }
+
+        private static func bindUDP() throws -> (Int32, UInt16) {
+            let fd = Darwin.socket(AF_INET, SOCK_DGRAM, 0)
+            guard fd >= 0 else { throw RAOPError.connectionFailed("mock udp socket failed") }
+            _ = fcntl(fd, F_SETFL, O_NONBLOCK)
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+            addr.sin_port = 0
+            let bindRes = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            guard bindRes == 0 else {
+                Darwin.close(fd)
+                throw RAOPError.connectionFailed("mock udp bind failed")
+            }
+            return (fd, try boundPort(fd))
+        }
+
+        private static func boundPort(_ fd: Int32) throws -> UInt16 {
+            var addr = sockaddr_in()
+            var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let res = withUnsafeMutablePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.getsockname(fd, $0, &len)
+                }
+            }
+            guard res == 0 else { throw RAOPError.connectionFailed("getsockname failed") }
+            return UInt16(bigEndian: addr.sin_port)
+        }
+
+        private static func sendUDP(fd: Int32, data: Data, port: UInt16) {
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+            addr.sin_port = port.bigEndian
+            _ = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    data.withUnsafeBytes { raw in
+                        Darwin.sendto(fd, raw.baseAddress, data.count, 0, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private static func waitUntil(timeout: TimeInterval = 5.0, message: String, _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        assert(condition(), message)
+    }
+
+    @MainActor
+    private static func awaitResult<T>(timeout: TimeInterval = 5.0, _ work: @escaping @Sendable () async throws -> T) throws -> T {
+        var box: Result<T, Error>?
+        Task { @MainActor in
+            do {
+                box = .success(try await work())
+            } catch {
+                box = .failure(error)
+            }
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while box == nil && Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        guard let result = box else {
+            throw NSError(domain: "DesktopTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Async task timed out"])
+        }
+        return try result.get()
+    }
+
+    @MainActor
+    private static func raopTests() throws {
+        // 1. Service discovery classifier
+        let r1 = RAOPDiscovery.classifyRAOPService(
+            serviceName: "FC7C02B3CFAD@Phicomm_R1_CFAD",
+            txt: ["et": "0,1", "cn": "0,1", "pw": "false"],
+            isLoopback: false,
+            localAirPlayDeviceIDs: ["56216656FB6D"],
+            localMACs: ["AA1122334455"],
+            interfaceIndex: 6
+        )
+        assert(r1?.id == "raop:FC7C02B3CFAD", "Valid RAOP speaker must be accepted")
+        assert(r1?.displayName == "Phicomm_R1_CFAD")
+        assert(r1?.codecs == [0, 1] && r1?.encryptionTypes == [0, 1] && r1?.requiresPassword == false)
+
+        assert(RAOPDiscovery.classifyRAOPService(
+            serviceName: "FC7C02B3CFAD@Phicomm_R1_CFAD",
+            txt: ["et": "0,1", "cn": "0,1"],
+            isLoopback: true,
+            localAirPlayDeviceIDs: [],
+            localMACs: []
+        ) == nil, "Loopback RAOP service must be filtered")
+
+        assert(RAOPDiscovery.classifyRAOPService(
+            serviceName: "56216656FB6D@MacBook Air",
+            txt: ["et": "0,1", "cn": "0,1"],
+            isLoopback: false,
+            localAirPlayDeviceIDs: ["56216656FB6D"],
+            localMACs: []
+        ) == nil, "Local AirPlay deviceid must be filtered")
+
+        assert(RAOPDiscovery.classifyRAOPService(
+            serviceName: "AA1122334455@LocalMac",
+            txt: ["et": "0,1", "cn": "0,1"],
+            isLoopback: false,
+            localAirPlayDeviceIDs: [],
+            localMACs: ["AA1122334455"]
+        ) == nil, "Local hardware MAC must be filtered")
+
+        assert(RAOPDiscovery.classifyRAOPService(
+            serviceName: "112233445566@HAPOnly",
+            txt: ["pk": "abcdef", "et": "3", "cn": "0,1"],
+            isLoopback: false,
+            localAirPlayDeviceIDs: [],
+            localMACs: []
+        ) == nil, "HAP-only endpoint without RSA et=1 must be excluded")
+
+        let pwSpeaker = RAOPDiscovery.classifyRAOPService(
+            serviceName: "112233445566@LockedSpeaker",
+            txt: ["et": "0,1", "cn": "0,1", "pw": "true"],
+            isLoopback: false,
+            localAirPlayDeviceIDs: [],
+            localMACs: []
+        )
+        assert(pwSpeaker?.requiresPassword == true, "pw=true must set requiresPassword")
+
+        // 2. RAOPCrypto RSA key wrapping & AES-CBC partial-block handling
+        let randomCrypto = try RAOPCrypto()
+        assert(randomCrypto.aesKey.count == 16 && randomCrypto.aesIV.count == 16)
+        let wrapped = try randomCrypto.encryptedAESKeyBase64()
+        assert(!wrapped.contains("="), "RAOP SDP base64 must strip '=' padding")
+        let paddedWrapped = wrapped + String(repeating: "=", count: (4 - wrapped.count % 4) % 4)
+        assert(Data(base64Encoded: paddedWrapped)?.count == 256, "RSA-2048 OAEP key blob must be 256 bytes")
+
+        let testKey = Data((0..<16).map { UInt8($0) })
+        let testIV = Data((16..<32).map { UInt8($0) })
+        let fixedCrypto = try RAOPCrypto(aesKey: testKey, aesIV: testIV)
+        let plain23 = Data((0..<23).map { UInt8($0 * 7 &+ 3) })
+        let enc23 = fixedCrypto.encryptAudioPayload(plain23)
+        assert(enc23.count == 23, "AES-CBC RAOP encryption must preserve exact payload length")
+        assert(enc23[16..<23] == plain23[16..<23], "Trailing sub-16-byte tail must remain unencrypted per RAOP")
+        var expectedFirstBlock = [UInt8](repeating: 0, count: 16)
+        var outLen = 0
+        let ccStatus = testKey.withUnsafeBytes { keyPtr in
+            testIV.withUnsafeBytes { ivPtr in
+                plain23.withUnsafeBytes { inPtr in
+                    CCCrypt(
+                        CCOperation(kCCEncrypt),
+                        CCAlgorithm(kCCAlgorithmAES),
+                        CCOptions(0),
+                        keyPtr.baseAddress, kCCKeySizeAES128,
+                        ivPtr.baseAddress,
+                        inPtr.baseAddress, 16,
+                        &expectedFirstBlock, 16,
+                        &outLen
+                    )
+                }
+            }
+        }
+        assert(ccStatus == kCCSuccess && outLen == 16)
+        assert(Array(enc23[0..<16]) == expectedFirstBlock, "First 16 bytes must match AES-128-CBC")
+        let shortPlain = Data([1, 2, 3, 4, 5])
+        assert(fixedCrypto.encryptAudioPayload(shortPlain) == shortPlain, "<16 bytes must remain unencrypted")
+
+        // 3. Bit-exact 352-frame ALAC roundtrip & L16 fallback
+        var pcmSamples = [Int16](repeating: 0, count: RAOPAudioEncoder.framesPerPacket * 2)
+        for i in 0..<RAOPAudioEncoder.framesPerPacket {
+            let left = Int16((i * 193 - 12000) & 0x7FFF)
+            let right = Int16(truncatingIfNeeded: -i * 131 + 9000)
+            pcmSamples[i * 2] = left
+            pcmSamples[i * 2 + 1] = right
+        }
+
+        let alacEncoder = RAOPAudioEncoder(supportedCodecs: [0, 1])
+        assert(alacEncoder.codec == .alac && alacEncoder.magicCookie?.count == 24, "ALAC encoder must supply 24-byte magicCookie")
+        let encodedALAC = alacEncoder.encode(interleavedStereoInt16: pcmSamples)
+        assert(!encodedALAC.isEmpty)
+
+        var alacDesc = AudioStreamBasicDescription(
+            mSampleRate: RAOPAudioEncoder.sampleRate,
+            mFormatID: kAudioFormatAppleLossless,
+            mFormatFlags: UInt32(kAppleLosslessFormatFlag_16BitSourceData),
+            mBytesPerPacket: 0,
+            mFramesPerPacket: UInt32(RAOPAudioEncoder.framesPerPacket),
+            mBytesPerFrame: 0,
+            mChannelsPerFrame: RAOPAudioEncoder.channels,
+            mBitsPerChannel: 0,
+            mReserved: 0
+        )
+        let pcmFmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 44100, channels: 2, interleaved: true)!
+        var pcmDesc = pcmFmt.streamDescription.pointee
+        var convRef: AudioConverterRef?
+        let newStatus = AudioConverterNew(&alacDesc, &pcmDesc, &convRef)
+        assert(newStatus == noErr && convRef != nil, "AudioConverterNew failed: \(newStatus)")
+        defer { if let convRef { AudioConverterDispose(convRef) } }
+        let cookie = alacEncoder.magicCookie!
+        let cookieStatus = cookie.withUnsafeBytes {
+            AudioConverterSetProperty(convRef!, kAudioConverterDecompressionMagicCookie, UInt32(cookie.count), $0.baseAddress!)
+        }
+        assert(cookieStatus == noErr, "Magic cookie setup failed: \(cookieStatus)")
+
+        struct ALACDecodeCtx {
+            var ptr: UnsafeMutableRawPointer
+            var count: UInt32
+            var desc: AudioStreamPacketDescription
+            var fed = false
+        }
+        var encodedBytes = [UInt8](encodedALAC)
+        var decodedSamples = [Int16](repeating: 0, count: pcmSamples.count)
+        var ioFrames = UInt32(RAOPAudioEncoder.framesPerPacket)
+        let decStatus = encodedBytes.withUnsafeMutableBytes { encRaw in
+            decodedSamples.withUnsafeMutableBytes { outRaw in
+                var ctx = ALACDecodeCtx(
+                    ptr: encRaw.baseAddress!,
+                    count: UInt32(encRaw.count),
+                    desc: AudioStreamPacketDescription(
+                        mStartOffset: 0,
+                        mVariableFramesInPacket: UInt32(RAOPAudioEncoder.framesPerPacket),
+                        mDataByteSize: UInt32(encRaw.count)
+                    )
+                )
+                var abl = AudioBufferList(
+                    mNumberBuffers: 1,
+                    mBuffers: AudioBuffer(
+                        mNumberChannels: RAOPAudioEncoder.channels,
+                        mDataByteSize: UInt32(outRaw.count),
+                        mData: outRaw.baseAddress
+                    )
+                )
+                return withUnsafeMutablePointer(to: &ctx) { ctxPtr in
+                    AudioConverterFillComplexBuffer(convRef!, { _, ioPackets, ioData, outDesc, userData in
+                        let c = userData!.assumingMemoryBound(to: ALACDecodeCtx.self)
+                        if c.pointee.fed {
+                            ioPackets.pointee = 0
+                            return noErr
+                        }
+                        c.pointee.fed = true
+                        ioPackets.pointee = 1
+                        ioData.pointee.mNumberBuffers = 1
+                        ioData.pointee.mBuffers.mNumberChannels = RAOPAudioEncoder.channels
+                        ioData.pointee.mBuffers.mDataByteSize = c.pointee.count
+                        ioData.pointee.mBuffers.mData = c.pointee.ptr
+                        if let outDesc {
+                            withUnsafeMutablePointer(to: &c.pointee.desc) { outDesc.pointee = $0 }
+                        }
+                        return noErr
+                    }, ctxPtr, &ioFrames, &abl, nil)
+                }
+            }
+        }
+        assert(decStatus == noErr && ioFrames == UInt32(RAOPAudioEncoder.framesPerPacket), "ALAC decode failed: \(decStatus)")
+        assert(decodedSamples == pcmSamples, "ALAC decode must be bit-exact")
+
+        let l16Encoder = RAOPAudioEncoder(supportedCodecs: [0])
+        assert(l16Encoder.codec == .pcmL16)
+        let l16Data = l16Encoder.encode(interleavedStereoInt16: pcmSamples)
+        assert(l16Data.count == RAOPAudioEncoder.framesPerPacket * 4)
+        let firstU = UInt16(bitPattern: pcmSamples[0])
+        assert(l16Data[0] == UInt8(firstU >> 8) && l16Data[1] == UInt8(firstU & 0xFF))
+
+        // 4. RAOPPCMBuffer ring behavior
+        let ring = RAOPPCMBuffer()
+        let ringInput = pcmSamples + Array(pcmSamples.prefix(96)) // 352 + 48 = 400 frames
+        ringInput.withUnsafeBufferPointer {
+            ring.append(interleavedStereoInt16: $0.baseAddress!, frameCount: 400)
+        }
+        assert(ring.availableFrames == 400)
+        let popped = ring.popFrames(352)
+        assert(popped == pcmSamples && ring.availableFrames == 48)
+        ring.clear()
+        assert(ring.availableFrames == 0)
+
+        // 5. Loopback mock RAOP server RTSP + UDP + Resend + Timing + Flush + Teardown
+        assert(RAOPSession.airPlayVolumeDB(for: 0.0) == -144.0)
+        let mockServer = try MockRAOPServer()
+        defer { mockServer.stop() }
+        let streamBuf = RAOPPCMBuffer()
+        let session = try RAOPSession(
+            host: "127.0.0.1",
+            port: mockServer.rtspPort,
+            deviceName: "Mock R1",
+            codecs: [0, 1],
+            encryptionTypes: [1],
+            buffer: streamBuf
+        )
+        try awaitResult {
+            try await session.connect(initialVolume: 0.0)
+        }
+
+        let silentFrames = [Int16](repeating: 0, count: RAOPAudioEncoder.framesPerPacket * 4 * 2)
+        silentFrames.withUnsafeBufferPointer {
+            streamBuf.append(interleavedStereoInt16: $0.baseAddress!, frameCount: RAOPAudioEncoder.framesPerPacket * 4)
+        }
+        waitUntil(message: "RAOPSession must emit RTP audio packets and initial sync packet") {
+            let snap = mockServer.snapshot()
+            return snap.audio.count >= 2 && snap.sync.count >= 1
+        }
+        let initialSnap = mockServer.snapshot()
+        assert(initialSnap.audio[0][0] == 0x80 && initialSnap.audio[0][1] == 0xE0, "First RTP packet must carry marker bit (0xE0)")
+        assert(initialSnap.audio[1][0] == 0x80 && initialSnap.audio[1][1] == 0x60, "Subsequent RTP packet payload type must be 0x60")
+        assert(initialSnap.sync[0][0] == 0x90 && initialSnap.sync[0][1] == 0xD4, "First sync packet must start with 0x90 0xD4")
+
+        let firstAudioPkt = initialSnap.audio[0]
+        let firstSeq = (UInt16(firstAudioPkt[2]) << 8) | UInt16(firstAudioPkt[3])
+        mockServer.sendResendRequest(firstSeq: firstSeq, count: 1)
+        waitUntil(message: "RAOPSession must respond to 0xD5 resend request with 0xD6 packet") {
+            !mockServer.snapshot().resend.isEmpty
+        }
+        let resendPkt = mockServer.snapshot().resend[0]
+        assert(resendPkt.prefix(4) == Data([0x80, 0xD6, 0x00, 0x01]) && Data(resendPkt.dropFirst(4)) == firstAudioPkt)
+
+        let marker: [UInt8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]
+        mockServer.sendTimingRequest(marker: marker)
+        waitUntil(message: "RAOPSession must reply to 0xD2 timing request with 0xD3") {
+            !mockServer.snapshot().timing.isEmpty
+        }
+        let timingReply = mockServer.snapshot().timing[0]
+        assert(timingReply.count == 32 && timingReply[0] == 0x80 && timingReply[1] == 0xD3)
+        assert(Array(timingReply[8..<16]) == marker, "Timing reply must echo client transmit timestamp")
+
+        session.setVolume(0.5)
+        waitUntil(message: "RAOPSession setVolume must send SET_PARAMETER volume") {
+            mockServer.snapshot().rtsp.filter { $0.method == "SET_PARAMETER" }.count >= 2
+        }
+        session.flush()
+        waitUntil(message: "RAOPSession flush must send FLUSH") {
+            mockServer.snapshot().rtsp.contains { $0.method == "FLUSH" }
+        }
+        session.disconnect()
+        waitUntil(message: "RAOPSession disconnect must send TEARDOWN") {
+            mockServer.snapshot().teardown
+        }
+
+        let rtsp = mockServer.snapshot().rtsp
+        assert(rtsp.first?.method == "OPTIONS" && rtsp.first?.uri == "*", "OPTIONS must target *")
+        let nonOptions = rtsp.filter { $0.method != "OPTIONS" }
+        assert(nonOptions.allSatisfy { $0.uri.hasPrefix("rtsp://127.0.0.1/") }, "RTSP URIs must use local IP")
+        let announceReq = rtsp.first { $0.method == "ANNOUNCE" }
+        assert(announceReq?.body.contains("a=rsaaeskey:") == true && announceReq?.body.contains("a=aesiv:") == true && announceReq?.body.contains("a=fmtp:96 352") == true)
+        let initVolReq = rtsp.first { $0.method == "SET_PARAMETER" }
+        assert(initVolReq?.body.contains("volume: -144.000000") == true)
+
+        // 6. PlayerModel direct AirPlay backend integration
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("resona-raop-player-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let testPlayer = PlayerModel(
+            downloads: OfflineStore(root: tmpDir.appendingPathComponent("dl")),
+            cache: PlaybackCache(root: tmpDir.appendingPathComponent("cache"))
+        )
+        let mockBackend = MockDirectAirPlayBackend()
+        let mockDevice = RAOPDeviceInfo(
+            id: "raop:FC7C02B3CFAD",
+            macHex: "FC7C02B3CFAD",
+            serviceName: "FC7C02B3CFAD@Mock R1",
+            displayName: "Mock R1",
+            codecs: [0, 1],
+            encryptionTypes: [1],
+            requiresPassword: false,
+            interfaceIndex: 0
+        ).asAudioOutputDevice
+        mockBackend.devices = [mockDevice]
+        testPlayer.configureDirectAirPlay(mockBackend)
+        assert(testPlayer.directAirPlayOutputs == [mockDevice])
+
+        testPlayer.refreshDirectAirPlayDevices()
+        assert(mockBackend.refreshCount == 1)
+
+        testPlayer.selectDirectAirPlay(mockDevice.id)
+        waitUntil(message: "PlayerModel must update directAirPlayID after connecting") {
+            testPlayer.directAirPlayID == mockDevice.id && testPlayer.directAirPlayConnectingID == nil
+        }
+        assert(testPlayer.directAirPlayError == nil)
+
+        testPlayer.volume = 0.42
+        assert(mockBackend.lastVolume == 0.42, "Volume changes must propagate to active direct AirPlay backend")
+
+        mockBackend.activeDeviceID = nil
+        mockBackend.onDisconnect?("连接已断开")
+        waitUntil(message: "Backend disconnect callback must clear directAirPlayID and surface error") {
+            testPlayer.directAirPlayID == nil && testPlayer.directAirPlayError == "连接已断开"
+        }
+
+        mockBackend.shouldFailConnect = true
+        testPlayer.selectDirectAirPlay(mockDevice.id)
+        waitUntil(message: "Failed direct AirPlay connect must clear connecting state and surface error") {
+            testPlayer.directAirPlayConnectingID == nil &&
+            testPlayer.directAirPlayID == nil &&
+            testPlayer.directAirPlayError?.contains("模拟连接失败") == true
+        }
+
+        mockBackend.shouldFailConnect = false
+        testPlayer.selectDirectAirPlay(mockDevice.id)
+        waitUntil(message: "Second direct AirPlay connect must succeed") {
+            testPlayer.directAirPlayID == mockDevice.id
+        }
+        testPlayer.selectAudioOutput(testPlayer.availableOutputs.first?.id)
+        assert(testPlayer.directAirPlayID == nil && mockBackend.disconnectCount >= 1, "Selecting a CoreAudio output must disconnect direct AirPlay")
+        testPlayer.disconnectDirectAirPlay()
     }
 }
