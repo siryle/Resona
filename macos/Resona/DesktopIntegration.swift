@@ -139,6 +139,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
     let statusItem: NSStatusItem
     let lyricButton = MenuBarLyricButton()
     private let popover = NSPopover()
+    private var popoverHost: NSHostingController<MenuPlaybackView>?
     private var panel: NSPanel?
     private let previousButton = MenuBarIconButton()
     private let playButton = MenuBarIconButton()
@@ -260,7 +261,10 @@ final class DesktopIntegration: NSObject, ObservableObject {
         ])
         popover.behavior = .transient
         popover.appearance = NSAppearance(named: .aqua)
-        popover.contentViewController = NSHostingController(rootView: MenuPlaybackView(desktop: self))
+        let host = NSHostingController(rootView: MenuPlaybackView(desktop: self))
+        host.sizingOptions = [.preferredContentSize]
+        popoverHost = host
+        popover.contentViewController = host
     }
 
     private func menuImage(_ symbol: String) -> NSImage? {
@@ -399,8 +403,21 @@ final class DesktopIntegration: NSObject, ObservableObject {
     @objc private func togglePopover(_ sender: NSButton) {
         if popover.isShown { popover.performClose(nil) }
         else if let button = statusItem.button {
-            popover.show(relativeTo: sender.convert(sender.bounds, to: button), of: button, preferredEdge: .minY)
+            popoverHost?.view.layoutSubtreeIfNeeded()
+            let fitting = popoverHost?.view.fittingSize ?? NSSize(width: 300, height: 480)
+            let visibleHeight = button.window?.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 720
+            popover.contentSize = NSSize(
+                width: max(300, fitting.width),
+                height: min(max(fitting.height, 200), max(240, visibleHeight - 24))
+            )
+            let converted = sender.convert(sender.bounds, to: button)
+            let anchor = (sender === button || converted.isEmpty) ? button.bounds : converted
+            popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
         }
+    }
+
+    func setAirPlayPickerPresenting(_ presenting: Bool) {
+        popover.behavior = presenting ? .applicationDefined : .transient
     }
 
     func showMainWindow() {
@@ -488,17 +505,40 @@ private struct MenuPlaybackView: View {
                 } label: {
                     Image(systemName: "speaker.wave.2")
                 }.menuStyle(.borderlessButton).fixedSize().help("切换蓝牙或本机输出")
-                MacAirPlayPicker(player: player).frame(width: 24, height: 24)
+                MacAirPlayPicker(player: player) { presenting in
+                    desktop.setAirPlayPickerPresenting(presenting)
+                }.frame(width: 24, height: 24)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("倍速播放").font(.caption).foregroundStyle(Theme.secondary)
-                    Text(PlayerModel.formatCompactPlaybackRate(player.playbackRate))
-                        .font(.caption.weight(.bold).monospacedDigit())
-                        .foregroundStyle(Theme.ink)
-                    Spacer()
-                }
-                MacPlaybackSpeedRuler(player: player, compact: true)
+            HStack(spacing: 8) {
+                Text("倍速播放").font(.caption)
+                Spacer()
+                Button("-") { player.stepPlaybackRate(by: -1) }
+                    .buttonStyle(.bordered).controlSize(.mini)
+                    .disabled(player.playbackRate <= 0.5)
+                    .accessibilityLabel("减速 0.1 倍")
+                Menu {
+                    Button("恢复原速 (1.0x)") { player.setPlaybackRate(1.0) }
+                        .disabled(abs(player.playbackRate - 1.0) < 0.001)
+                    Divider()
+                    ForEach(PlayerModel.supportedPlaybackRates, id: \.self) { rate in
+                        Button {
+                            player.setPlaybackRate(rate)
+                        } label: {
+                            HStack {
+                                Text(PlayerModel.formatPlaybackRate(rate))
+                                if abs(player.playbackRate - rate) < 0.001 { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                } label: {
+                    Text(PlayerModel.formatPlaybackRate(player.playbackRate))
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .frame(minWidth: 38)
+                }.menuStyle(.borderlessButton).fixedSize()
+                Button("+") { player.stepPlaybackRate(by: 1) }
+                    .buttonStyle(.bordered).controlSize(.mini)
+                    .disabled(player.playbackRate >= 2.0)
+                    .accessibilityLabel("加速 0.1 倍")
             }
             if let error = desktop.library.error {
                 Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)

@@ -44,7 +44,7 @@ const listening = {
 };
 const audio = $("audio");
 const SESSION_RENEW_INTERVAL_MS = 12 * 60 * 60 * 1000;
-let toastTimer, searchTimer, pollTimer;
+let toastTimer, searchTimer, pollTimer, outputController;
 let lastSessionRenew = 0,
   renewingSession = false;
 function el(tag, className, text) {
@@ -1969,7 +1969,7 @@ document.addEventListener("keydown", (event) => {
     outputController?.setPanelOpen(false);
     return;
   }
-  if (event.key === "Escape" && isSpeedOpen()) {
+  if (event.key === "Escape" && $("speed-panel") && !$("speed-panel").hidden) {
     setSpeedOpen(false);
     return;
   }
@@ -2017,18 +2017,9 @@ function applyAudioPlaybackRate() {
   audio.defaultPlaybackRate = rate;
   audio.playbackRate = rate;
 }
-const supportsNativePopover = Object.hasOwn(HTMLElement.prototype, "popover");
-const supportsInvokerCommands = "commandForElement" in HTMLButtonElement.prototype;
-function isSpeedOpen() {
-  const panel = $("speed-panel");
-  if (!panel) return false;
-  return supportsNativePopover ? panel.matches(":popover-open") : panel.classList.contains("is-open");
-}
 function renderSpeedControls() {
   const rate = ResonaPlayback.normalizeRate(state.playbackRate);
   const label = ResonaPlayback.formatRate(rate);
-  const compact = ResonaPlayback.formatCompactRate(rate);
-  const activeStep = Math.round(rate * 10) - 5;
   const toggle = $("speed-toggle");
   if (toggle) {
     toggle.textContent = label;
@@ -2036,20 +2027,13 @@ function renderSpeedControls() {
     toggle.title = `倍速播放 · ${label}（0.5x–2.0x）`;
     toggle.setAttribute("aria-pressed", String(rate !== 1));
   }
-  if ($("speed-value")) $("speed-value").textContent = compact;
-  const slider = $("speed-slider");
-  if (slider) {
-    slider.value = String(rate);
-    slider.setAttribute("aria-valuetext", compact);
-    slider.style.setProperty("--attr-min", slider.min || "0.5");
-    slider.style.setProperty("--attr-max", slider.max || "2");
-    slider.style.setProperty("--control-value", String(rate));
-  }
-  document.querySelectorAll("#speed-ticks .speed-tick").forEach((tick, index) => {
-    tick.classList.toggle("active", index === activeStep);
-  });
-  for (const mark of document.querySelectorAll(".speed-mark[data-rate]")) {
-    mark.setAttribute("aria-pressed", String(Number(mark.dataset.rate) === rate));
+  if ($("speed-value")) $("speed-value").textContent = `当前 ${label}`;
+  if ($("speed-slider")) $("speed-slider").value = String(rate);
+  if ($("speed-down")) $("speed-down").disabled = rate <= ResonaPlayback.minRate;
+  if ($("speed-up")) $("speed-up").disabled = rate >= ResonaPlayback.maxRate;
+  if ($("speed-reset")) $("speed-reset").disabled = rate === 1;
+  for (const chip of document.querySelectorAll("#speed-grid [data-rate]")) {
+    chip.setAttribute("aria-pressed", String(Number(chip.dataset.rate) === rate));
   }
   if ($("speed-dlna-hint")) {
     $("speed-dlna-hint").hidden = !(
@@ -2069,35 +2053,23 @@ function setPlaybackRate(value, { persist = true } = {}) {
   renderSpeedControls();
   if (typeof outputController !== "undefined") outputController?.updateMediaSession();
 }
-function syncSpeedPanelState(open, focus = true) {
-  const toggle = $("speed-toggle");
-  if (open) {
-    setQueueOpen(false, false);
-    if (typeof outputController !== "undefined") outputController?.setPanelOpen(false, false);
-    renderSpeedControls();
-    if (focus) $("speed-slider")?.focus({ preventScroll: true });
-  } else if (focus && !$("player-bar").hidden && toggle) {
-    toggle.focus({ preventScroll: true });
-  }
-  toggle?.setAttribute("aria-expanded", String(open));
-}
 function setSpeedOpen(open, focus = true) {
   const panel = $("speed-panel");
   const toggle = $("speed-toggle");
   if (!panel || !toggle) return;
   open = Boolean(open && state.user);
-  if (supportsNativePopover) {
-    const currentlyOpen = panel.matches(":popover-open");
-    if (open && !currentlyOpen) {
-      panel.showPopover();
-    } else if (!open && currentlyOpen) {
-      panel.hidePopover();
-      if (focus && !$("player-bar").hidden) toggle.focus({ preventScroll: true });
-    }
-    return;
+  if (open) {
+    setQueueOpen(false, false);
+    if (typeof outputController !== "undefined") outputController?.setPanelOpen(false, false);
   }
-  panel.classList.toggle("is-open", open);
-  syncSpeedPanelState(open, focus);
+  panel.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    renderSpeedControls();
+    if (focus) $("speed-close")?.focus({ preventScroll: true });
+  } else if (focus && !$("player-bar").hidden) {
+    toggle.focus({ preventScroll: true });
+  }
 }
 function renderPlaybackControls() {
   const labels = {
@@ -2348,7 +2320,7 @@ $("select-all-tracks").addEventListener("change", () => {
     renderBulkControls();
   }
 });
-const outputController = globalThis.ResonaOutput?.createOutputController({
+outputController = globalThis.ResonaOutput?.createOutputController({
   $,
   el,
   api,
@@ -2364,55 +2336,42 @@ const outputController = globalThis.ResonaOutput?.createOutputController({
   onPanelToggle: () => setSpeedOpen(false, false),
 });
 applyAudioPlaybackRate();
-const speedTicks = $("speed-ticks");
-if (speedTicks) {
-  for (let index = 0; index < ResonaPlayback.rates.length; index++) {
-    const tick = el("span", index % 5 === 0 ? "speed-tick major" : "speed-tick");
-    speedTicks.append(tick);
+const speedGrid = $("speed-grid");
+if (speedGrid) {
+  for (const rate of ResonaPlayback.rates) {
+    const chip = el("button", "speed-chip", ResonaPlayback.formatRate(rate));
+    chip.type = "button";
+    chip.dataset.rate = String(rate);
+    chip.addEventListener("click", () => setPlaybackRate(rate));
+    speedGrid.append(chip);
   }
 }
-for (const mark of document.querySelectorAll(".speed-mark[data-rate]")) {
-  mark.addEventListener("click", () => setPlaybackRate(Number(mark.dataset.rate)));
-}
-const speedPanel = $("speed-panel");
-const speedToggle = $("speed-toggle");
-if (supportsNativePopover && speedPanel) {
-  speedPanel.addEventListener("beforetoggle", (event) => {
-    if (event.newState === "open" && !state.user) event.preventDefault();
-  });
-  speedPanel.addEventListener("toggle", (event) => {
-    syncSpeedPanelState(event.newState === "open", event.newState === "open");
-  });
-}
-if (!supportsInvokerCommands && speedToggle) {
-  let openBeforePointerDown = false;
-  speedToggle.addEventListener("pointerdown", () => {
-    openBeforePointerDown = isSpeedOpen();
-  });
-  speedToggle.addEventListener("click", () => {
-    if (supportsNativePopover) {
-      if (!openBeforePointerDown) setSpeedOpen(!isSpeedOpen());
-      openBeforePointerDown = false;
-    } else {
-      setSpeedOpen(!isSpeedOpen());
-    }
-  });
-}
+$("speed-toggle")?.addEventListener("click", () =>
+  setSpeedOpen($("speed-panel")?.hidden),
+);
+$("speed-close")?.addEventListener("click", () => setSpeedOpen(false));
+$("speed-reset")?.addEventListener("click", () => setPlaybackRate(1));
+$("speed-down")?.addEventListener("click", () =>
+  setPlaybackRate(ResonaPlayback.stepRate(state.playbackRate, -1)),
+);
+$("speed-up")?.addEventListener("click", () =>
+  setPlaybackRate(ResonaPlayback.stepRate(state.playbackRate, 1)),
+);
 $("speed-slider")?.addEventListener("input", () =>
   setPlaybackRate(Number($("speed-slider").value)),
 );
-if (!supportsNativePopover) {
-  document.addEventListener("pointerdown", (event) => {
-    if (
-      isSpeedOpen() &&
-      speedPanel &&
-      !speedPanel.contains(event.target) &&
-      !speedToggle?.contains(event.target)
-    ) {
-      setSpeedOpen(false, false);
-    }
-  });
-}
+document.addEventListener("pointerdown", (event) => {
+  const panel = $("speed-panel");
+  const toggle = $("speed-toggle");
+  if (
+    panel &&
+    !panel.hidden &&
+    !panel.contains(event.target) &&
+    !toggle?.contains(event.target)
+  ) {
+    setSpeedOpen(false, false);
+  }
+});
 renderSpeedControls();
 
 $("play-pause").addEventListener("click", () => {

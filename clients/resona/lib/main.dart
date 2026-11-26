@@ -3777,6 +3777,12 @@ class _PlaybackSpeedRulerState extends State<PlaybackSpeedRuler> {
     return Semantics(
       label: '倍速播放',
       value: MusicController.formatCompactPlaybackRate(widget.value),
+      increasedValue: active >= 15
+          ? null
+          : MusicController.formatCompactPlaybackRate((6 + active) / 10),
+      decreasedValue: active <= 0
+          ? null
+          : MusicController.formatCompactPlaybackRate((4 + active) / 10),
       slider: true,
       onIncrease: active >= 15 ? null : () => _stepBy(1),
       onDecrease: active <= 0 ? null : () => _stepBy(-1),
@@ -3953,6 +3959,134 @@ class _SpeedRulerPainter extends CustomPainter {
 }
 
 Future<void> showPlaybackSpeedSheet(
+  BuildContext context,
+  MusicController c,
+) => Theme.of(context).platform == TargetPlatform.windows
+    ? _showWindowsPlaybackSpeedSheet(context, c)
+    : _showMobilePlaybackSpeedRuler(context, c);
+
+Future<void> _showWindowsPlaybackSpeedSheet(
+  BuildContext context,
+  MusicController c,
+) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  useSafeArea: true,
+  showDragHandle: true,
+  constraints: const BoxConstraints(maxWidth: 460),
+  builder: (context) => AnimatedBuilder(
+    animation: c,
+    builder: (context, _) {
+      final scheme = Theme.of(context).colorScheme;
+      final isDefault = (c.playbackRate - 1.0).abs() < 0.001;
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '倍速播放',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '当前 ${c.playbackRateLabel}',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: isDefault
+                        ? null
+                        : () => unawaited(c.setPlaybackRate(1.0)),
+                    child: const Text('重置 1.0x'),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              if (c.isCastingDlna)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, bottom: 4),
+                  child: Text(
+                    'DLNA 投屏时保持原速播放，切回本机播放后自动生效。',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  OutlinedButton(
+                    onPressed: c.playbackRate <= MusicController.minPlaybackRate
+                        ? null
+                        : () => unawaited(c.stepPlaybackRate(-1)),
+                    child: const Text('-0.1x'),
+                  ),
+                  Expanded(
+                    child: Slider(
+                      value: c.playbackRate,
+                      min: MusicController.minPlaybackRate,
+                      max: MusicController.maxPlaybackRate,
+                      divisions: 15,
+                      label: c.playbackRateLabel,
+                      onChanged: (value) => unawaited(c.setPlaybackRate(value)),
+                    ),
+                  ),
+                  OutlinedButton(
+                    onPressed: c.playbackRate >= MusicController.maxPlaybackRate
+                        ? null
+                        : () => unawaited(c.stepPlaybackRate(1)),
+                    child: const Text('+0.1x'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final rate in MusicController.playbackRates)
+                    ChoiceChip(
+                      label: Text(
+                        '${rate.toStringAsFixed(1)}x',
+                        style: const TextStyle(
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                      selected: (c.playbackRate - rate).abs() < 0.001,
+                      onSelected: (_) => unawaited(c.setPlaybackRate(rate)),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  ),
+);
+
+Future<void> _showMobilePlaybackSpeedRuler(
   BuildContext context,
   MusicController c,
 ) => showGeneralDialog<void>(

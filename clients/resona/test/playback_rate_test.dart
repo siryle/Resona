@@ -143,35 +143,103 @@ void main() {
       if (size.width >= 1200) {
         await tester.tap(find.byTooltip('倍速播放 · 1.0x'));
         await tester.pumpAndSettle();
-        expect(find.byType(PlaybackSpeedRuler), findsOneWidget);
-        expect(find.text('倍速播放'), findsOneWidget);
+        expect(find.text('重置 1.0x'), findsOneWidget);
+        expect(find.byType(Slider), findsOneWidget);
+        expect(find.byType(PlaybackSpeedRuler), findsNothing);
 
         await tester.tap(find.text('1.5x'));
         await tester.pumpAndSettle();
         expect(c.playbackRate, 1.5);
         expect(find.byTooltip('倍速播放 · 1.5x'), findsOneWidget);
 
-        final rulerPaint = find.descendant(
-          of: find.byType(PlaybackSpeedRuler),
-          matching: find.byType(CustomPaint),
-        );
-        await tester.drag(rulerPaint, const Offset(400, 0));
+        await tester.tap(find.text('+0.1x'));
         await tester.pumpAndSettle();
-        expect(c.playbackRate, 2.0);
+        expect(c.playbackRate, 1.6);
 
-        await tester.drag(rulerPaint, const Offset(-400, 0));
+        await tester.tap(find.text('-0.1x'));
         await tester.pumpAndSettle();
-        expect(c.playbackRate, 0.5);
+        expect(c.playbackRate, 1.5);
 
-        await tester.tap(find.text('1x'));
+        await tester.tap(find.text('重置 1.0x'));
         await tester.pumpAndSettle();
         expect(c.playbackRate, 1.0);
-
-        await tester.tapAt(const Offset(20, 20));
-        await tester.pumpAndSettle();
-        expect(find.byType(PlaybackSpeedRuler), findsNothing);
         expect(tester.takeException(), isNull);
       }
     }
   }, variant: TargetPlatformVariant({TargetPlatform.windows}));
+
+  testWidgets('Mobile speed sheet shows floating tick-ruler slider and dismisses on barrier tap', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final dir = Directory.systemTemp.createTempSync('resona_mobile_speed_');
+    addTearDown(() {
+      try {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      } catch (_) {
+        /* Temp cleanup is best-effort. */
+      }
+    });
+
+    final c = MusicController(supportDirectory: dir)
+      ..current = Track({
+        'id': 's1',
+        'title': 'Mobile Song',
+        'artist': 'Artist',
+        'duration': 180,
+      });
+    addTearDown(c.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ResonaApp(controller: c).theme(Brightness.dark),
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: FilledButton(
+                onPressed: () => showPlaybackSpeedSheet(context, c),
+                child: const Text('打开倍速'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('打开倍速'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PlaybackSpeedRuler), findsOneWidget);
+    expect(find.text('倍速播放'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('1.5x'));
+    await tester.pumpAndSettle();
+    expect(c.playbackRate, 1.5);
+
+    final rulerPaint = find.descendant(
+      of: find.byType(PlaybackSpeedRuler),
+      matching: find.byType(CustomPaint),
+    );
+    await tester.drag(rulerPaint, const Offset(400, 0));
+    await tester.pumpAndSettle();
+    expect(c.playbackRate, 2.0);
+
+    await tester.drag(rulerPaint, const Offset(-400, 0));
+    await tester.pumpAndSettle();
+    expect(c.playbackRate, 0.5);
+
+    await tester.tap(find.text('1x'));
+    await tester.pumpAndSettle();
+    expect(c.playbackRate, 1.0);
+
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+    expect(find.byType(PlaybackSpeedRuler), findsNothing);
+    expect(tester.takeException(), isNull);
+  }, variant: TargetPlatformVariant({TargetPlatform.android}));
 }

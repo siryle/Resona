@@ -540,10 +540,17 @@ struct ListeningView: View {
                                 .background(Theme.surface, in: Capsule())
                                 .overlay { Capsule().strokeBorder(Theme.border) }
                             }.buttonStyle(.plain)
-                                .help("切换 AirPlay 或蓝牙音频输出")
+                                .help("切换蓝牙或本机音频输出")
                                 .popover(isPresented: $showOutputPicker, arrowEdge: .bottom) {
                                     MacAudioOutputPopover()
                                 }
+                            MacAirPlayPicker(player: player)
+                                .frame(width: 24, height: 22)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Theme.surface, in: Capsule())
+                                .overlay { Capsule().strokeBorder(Theme.border) }
+                                .help("AirPlay 隔空播放")
                             Button {
                                 showSpeedPicker.toggle()
                             } label: {

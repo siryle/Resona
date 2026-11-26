@@ -681,6 +681,12 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    func openSoundSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     private static func enumerateCoreAudioOutputs() -> [AudioOutputDevice] {
         var defaultDevice = AudioObjectID(kAudioObjectUnknown)
         var defaultAddress = AudioObjectPropertyAddress(

@@ -316,6 +316,13 @@ struct DesktopTests {
         buttons[4].performClick(nil)
         settle()
         let popup = NSApp.windows.first { $0.isVisible && !existingWindows.contains($0.windowNumber) }!
+        if let screen = status.window?.screen ?? NSScreen.main {
+            let contentInWindow = popup.contentView!.convert(popup.contentView!.bounds, to: nil)
+            let contentOnScreen = popup.convertToScreen(contentInWindow)
+            assert(contentOnScreen.maxY <= screen.visibleFrame.maxY + 2 &&
+                   contentOnScreen.minY >= screen.visibleFrame.minY,
+                   "Menu bar popover content \(contentOnScreen) must fit inside visible screen \(screen.visibleFrame) without covering the menu bar")
+        }
         desktop.menuIconEnabled = false
         settle(until: { !popup.isVisible })
         assert(!desktop.statusItem.isVisible && desktop.statusItem.length == 0,
@@ -802,8 +809,8 @@ struct DesktopTests {
         }
         main.makeFirstResponder(editableField(in: main.contentView!)!)
         settle()
-        let previousRect = NSRect(x: 743, y: 20, width: 30, height: 42)
-        let nextRect = NSRect(x: 845, y: 20, width: 30, height: 42)
+        let previousRect = NSRect(x: 701, y: 20, width: 30, height: 42)
+        let nextRect = NSRect(x: 803, y: 20, width: 30, height: 42)
         let previousPaused = snapshot(previousRect)
         let nextPaused = snapshot(nextRect)
         // Drive the playing state without audio timing or pointer movement masking the regression.
@@ -813,7 +820,7 @@ struct DesktopTests {
         try snapshot(main.contentView!.bounds).write(to: root.appendingPathComponent("playing.png"))
         assert(snapshot(previousRect) == previousPaused && snapshot(nextRect) == nextPaused,
                "Previous and next must stay visible during playback without hover or keyboard focus")
-        click(NSPoint(x: 808, y: 40))
+        click(NSPoint(x: 766, y: 40))
         assert(!player.playing, "The visible pause button must work without first hovering the playback bar")
         desktop.desktopLyricsEnabled = false
         main.close()

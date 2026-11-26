@@ -1,45 +1,77 @@
 import AVKit
 import SwiftUI
 
-struct MacAirPlayPicker: NSViewRepresentable {
-    @ObservedObject var player: PlayerModel
+private final class StyledAirPlayRoutePickerView: AVRoutePickerView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        applyThemeColors()
+    }
 
-    func makeCoordinator() -> Coordinator { Coordinator(player: player) }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        applyThemeColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyThemeColors()
+    }
+
+    private func applyThemeColors() {
+        let ink = NSColor(Theme.ink)
+        let accent = NSColor(Theme.accent)
+        setRoutePickerButtonColor(ink, for: .normal)
+        setRoutePickerButtonColor(ink.withAlphaComponent(0.75), for: .normalHighlighted)
+        setRoutePickerButtonColor(accent, for: .active)
+        setRoutePickerButtonColor(accent.withAlphaComponent(0.8), for: .activeHighlighted)
+    }
+}
+
+struct MacAirPlayPicker: NSViewRepresentable {
+    let player: PlayerModel
+    var onPresentingChange: ((Bool) -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(player: player, onPresentingChange: onPresentingChange)
+    }
 
     func makeNSView(context: Context) -> AVRoutePickerView {
-        let picker = AVRoutePickerView()
+        let picker = StyledAirPlayRoutePickerView()
         picker.isRoutePickerButtonBordered = false
         picker.player = player.avPlayer
         picker.delegate = context.coordinator
         picker.setAccessibilityLabel("AirPlay 隔空播放")
-        applyColors(picker)
         return picker
     }
 
     func updateNSView(_ nsView: AVRoutePickerView, context: Context) {
         context.coordinator.player = player
+        context.coordinator.onPresentingChange = onPresentingChange
         if nsView.player !== player.avPlayer {
             nsView.player = player.avPlayer
         }
-        applyColors(nsView)
-    }
-
-    private func applyColors(_ picker: AVRoutePickerView) {
-        let ink = NSColor(Theme.ink)
-        let accent = NSColor(Theme.accent)
-        picker.setRoutePickerButtonColor(ink, for: .normal)
-        picker.setRoutePickerButtonColor(ink.withAlphaComponent(0.75), for: .normalHighlighted)
-        picker.setRoutePickerButtonColor(accent, for: .active)
-        picker.setRoutePickerButtonColor(accent.withAlphaComponent(0.8), for: .activeHighlighted)
     }
 
     final class Coordinator: NSObject, AVRoutePickerViewDelegate {
         var player: PlayerModel
-        init(player: PlayerModel) { self.player = player }
+        var onPresentingChange: ((Bool) -> Void)?
+
+        init(player: PlayerModel, onPresentingChange: ((Bool) -> Void)?) {
+            self.player = player
+            self.onPresentingChange = onPresentingChange
+        }
 
         func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) {
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 player.prepareForAirPlayRouting()
+                onPresentingChange?(true)
+            }
+        }
+
+        func routePickerViewDidEndPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+            MainActor.assumeIsolated {
+                onPresentingChange?(false)
+                player.refreshAudioOutputs()
             }
         }
     }
@@ -69,13 +101,17 @@ struct MacAudioOutputPopover: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("AirPlay 隔空播放").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                HStack(spacing: 10) {
-                    MacAirPlayPicker(player: player).frame(width: 28, height: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(player.airPlayActive ? "AirPlay 正在投送" : "选择 AirPlay 音箱或设备")
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "airplayaudio")
+                        .font(.system(size: 16))
+                        .foregroundStyle(player.airPlayActive ? Theme.accent : Theme.secondary)
+                        .frame(width: 24, height: 24)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(player.airPlayActive ? "AirPlay 正在投送" : "AirPlay 2 与传统 AirPlay 输出")
                             .font(.system(size: 13, weight: .medium))
-                        Text("点击左侧隔空播放图标切换房间的兼容音箱")
+                        Text("AirPlay 2 音箱可直接点击底部栏或播放页的隔空播放图标投送；旧款 AirPlay 1 音箱请在此选择“跟随系统默认”，并在系统声音设置中选择。")
                             .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
                 }
@@ -109,13 +145,22 @@ struct MacAudioOutputPopover: View {
 
             Divider()
 
-            Button {
-                player.openBluetoothSettings()
-            } label: {
-                Label("打开系统蓝牙设置…", systemImage: "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 12.5))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }.buttonStyle(.borderless).foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    player.openSoundSettings()
+                } label: {
+                    Label("打开系统声音设置…", systemImage: "speaker.badge.exclamationmark")
+                        .font(.system(size: 12.5))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.borderless).foregroundStyle(Theme.accent)
+                Button {
+                    player.openBluetoothSettings()
+                } label: {
+                    Label("打开系统蓝牙设置…", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 12.5))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.borderless).foregroundStyle(Theme.accent)
+            }
         }
         .padding(16)
         .frame(width: 290)
@@ -148,119 +193,64 @@ struct MacAudioOutputPopover: View {
     }
 }
 
-struct MacPlaybackSpeedRuler: View {
-    @ObservedObject var player: PlayerModel
-    var compact: Bool = false
-
-    private static let marks: [(index: Int, rate: Float, label: String)] = [
-        (0, 0.5, "0.5x"),
-        (5, 1.0, "1x"),
-        (10, 1.5, "1.5x"),
-        (15, 2.0, "2x"),
-    ]
-
-    private var selectedIndex: Int {
-        min(max(Int((player.playbackRate * 10).rounded()) - 5, 0), 15)
-    }
-
-    var body: some View {
-        let inset: CGFloat = compact ? 6 : 8
-        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
-            GeometryReader { geometry in
-                let usable = max(geometry.size.width - inset * 2, 1)
-                let active = selectedIndex
-                ZStack {
-                    ForEach(0..<16, id: \.self) { index in
-                        let isSelected = index == active
-                        let isMajor = index % 5 == 0
-                        let x = inset + usable * CGFloat(index) / 15
-                        Capsule()
-                            .fill(isSelected ? Theme.ink : (isMajor ? Theme.secondary.opacity(0.65) : Theme.muted.opacity(0.42)))
-                            .frame(
-                                width: isSelected ? (compact ? 3.5 : 4) : 2,
-                                height: isSelected ? (compact ? 24 : 28) : (isMajor ? (compact ? 14 : 18) : (compact ? 8 : 10))
-                            )
-                            .shadow(color: isSelected ? Theme.ink.opacity(0.25) : .clear, radius: 5)
-                            .position(x: x, y: geometry.size.height / 2)
-                    }
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            let ratio = min(max((value.location.x - inset) / usable, 0), 1)
-                            let step = min(max(Int((ratio * 15).rounded()), 0), 15)
-                            player.setPlaybackRate(Float(5 + step) / 10)
-                        }
-                )
-            }
-            .frame(height: compact ? 36 : 42)
-            .focusable()
-            .onKeyPress(.leftArrow) {
-                player.stepPlaybackRate(by: -1)
-                return .handled
-            }
-            .onKeyPress(.rightArrow) {
-                player.stepPlaybackRate(by: 1)
-                return .handled
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("倍速播放")
-            .accessibilityValue(PlayerModel.formatCompactPlaybackRate(player.playbackRate))
-            .accessibilityAdjustableAction { direction in
-                switch direction {
-                case .increment: player.stepPlaybackRate(by: 1)
-                case .decrement: player.stepPlaybackRate(by: -1)
-                @unknown default: break
-                }
-            }
-
-            GeometryReader { geometry in
-                let usable = max(geometry.size.width - inset * 2, 1)
-                let active = selectedIndex
-                ZStack(alignment: .leading) {
-                    ForEach(Self.marks, id: \.index) { mark in
-                        let isActive = mark.index == active
-                        let button = Button {
-                            player.setPlaybackRate(mark.rate)
-                        } label: {
-                            Text(mark.label)
-                                .font(.system(size: compact ? 11 : 12, weight: isActive ? .semibold : .regular).monospacedDigit())
-                                .foregroundStyle(isActive ? Theme.ink : Theme.muted)
-                        }.buttonStyle(.plain)
-
-                        if mark.index == 0 {
-                            button.frame(maxWidth: .infinity, alignment: .leading)
-                        } else if mark.index == 15 {
-                            button.frame(maxWidth: .infinity, alignment: .trailing)
-                        } else {
-                            button.position(x: inset + usable * CGFloat(mark.index) / 15, y: geometry.size.height / 2)
-                        }
-                    }
-                }
-            }
-            .frame(height: 18)
-        }
-    }
-}
-
 struct MacPlaybackSpeedPopover: View {
     @EnvironmentObject private var player: PlayerModel
 
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("倍速播放").font(.subheadline).foregroundStyle(Theme.secondary)
-                Text(PlayerModel.formatCompactPlaybackRate(player.playbackRate))
-                    .font(.subheadline.weight(.bold).monospacedDigit())
-                    .foregroundStyle(Theme.ink)
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("倍速播放").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                    Text("当前 \(PlayerModel.formatPlaybackRate(player.playbackRate))")
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                }
                 Spacer()
+                Button("重置 1.0x") { player.setPlaybackRate(1.0) }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(abs(player.playbackRate - 1.0) > 0.001 ? Theme.accent : Theme.muted)
+                    .disabled(abs(player.playbackRate - 1.0) < 0.001)
             }
-            MacPlaybackSpeedRuler(player: player)
+
+            HStack(spacing: 8) {
+                Button("-0.1x") { player.stepPlaybackRate(by: -1) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(player.playbackRate <= 0.5)
+                Slider(
+                    value: Binding(
+                        get: { Double(player.playbackRate) },
+                        set: { player.setPlaybackRate(Float($0)) }
+                    ),
+                    in: 0.5...2.0,
+                    step: 0.1
+                ).accessibilityLabel("倍速滑块")
+                Button("+0.1x") { player.stepPlaybackRate(by: 1) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(player.playbackRate >= 2.0)
+            }
+
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(PlayerModel.supportedPlaybackRates, id: \.self) { rate in
+                    let selected = abs(player.playbackRate - rate) < 0.001
+                    Button {
+                        player.setPlaybackRate(rate)
+                    } label: {
+                        Text(PlayerModel.formatPlaybackRate(rate))
+                            .font(.system(size: 12, weight: selected ? .semibold : .regular).monospacedDigit())
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .foregroundStyle(selected ? Theme.accentOn : Theme.ink)
+                            .background(selected ? Theme.accentFill : Theme.paper, in: RoundedRectangle(cornerRadius: 6))
+                    }.buttonStyle(.plain)
+                }
+            }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .frame(width: 300)
+        .padding(14)
+        .frame(width: 268)
         .foregroundStyle(Theme.ink)
         .background(Theme.surface)
     }
@@ -409,11 +399,14 @@ struct DesktopPlaybackBar: View {
                         .popover(isPresented: $showSpeedPicker, arrowEdge: .top) {
                             MacPlaybackSpeedPopover()
                         }
+                    MacAirPlayPicker(player: player)
+                        .frame(width: 28, height: 36)
+                        .help("AirPlay 隔空播放")
                     Button { showOutputPicker.toggle() } label: {
                         Image(systemName: player.airPlayActive ? "airplayaudio" : player.activeOutput.kind.symbol)
                             .frame(width: 28, height: 36)
                             .foregroundStyle(player.airPlayActive || player.activeOutput.kind == .bluetooth || player.selectedOutputUID != nil ? Theme.accent : Theme.ink)
-                    }.help("AirPlay 与蓝牙音频输出 · \(player.activeOutput.name)")
+                    }.help("蓝牙与本机音频输出 · \(player.activeOutput.name)")
                         .accessibilityLabel("音频输出 · \(player.activeOutput.name)")
                         .focused($focusedControl, equals: .output)
                         .popover(isPresented: $showOutputPicker, arrowEdge: .top) {
