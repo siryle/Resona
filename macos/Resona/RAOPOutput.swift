@@ -770,6 +770,26 @@ final class RAOPAudioTap {
         }
     }
 
+    private static func invokeTapCreate(
+        _ fn: (CFAllocator?, UnsafePointer<MTAudioProcessingTapCallbacks>, MTAudioProcessingTapCreationFlags, UnsafeMutablePointer<MTAudioProcessingTap?>) -> OSStatus,
+        callbacks: inout MTAudioProcessingTapCallbacks,
+        flags: MTAudioProcessingTapCreationFlags
+    ) -> (OSStatus, MTAudioProcessingTap?) {
+        var tap: MTAudioProcessingTap?
+        let status = fn(kCFAllocatorDefault, &callbacks, flags, &tap)
+        return (status, tap)
+    }
+
+    private static func invokeTapCreate(
+        _ fn: (CFAllocator?, UnsafePointer<MTAudioProcessingTapCallbacks>, MTAudioProcessingTapCreationFlags, UnsafeMutablePointer<Unmanaged<MTAudioProcessingTap>?>) -> OSStatus,
+        callbacks: inout MTAudioProcessingTapCallbacks,
+        flags: MTAudioProcessingTapCreationFlags
+    ) -> (OSStatus, MTAudioProcessingTap?) {
+        var tap: Unmanaged<MTAudioProcessingTap>?
+        let status = fn(kCFAllocatorDefault, &callbacks, flags, &tap)
+        return (status, tap?.takeRetainedValue())
+    }
+
     @MainActor
     func attach(to item: AVPlayerItem, buffer: RAOPPCMBuffer) async {
         guard let tracks = try? await item.asset.loadTracks(withMediaType: .audio),
@@ -777,9 +797,11 @@ final class RAOPAudioTap {
         let context = Context(buffer: buffer)
         var callbacks = MTAudioProcessingTapCallbacks(
             version: kMTAudioProcessingTapCallbacksVersion_0,
-            clientInfo: Unmanaged.passRetained(context).toOpaque(),
+            clientInfo: Unmanaged.passUnretained(context).toOpaque(),
             init: { _, clientInfo, tapStorageOut in
-                tapStorageOut.pointee = clientInfo
+                guard let clientInfo else { return }
+                let ctx = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
+                tapStorageOut.pointee = Unmanaged.passRetained(ctx).toOpaque()
             },
             finalize: { tap in
                 Unmanaged<Context>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).release()
@@ -802,13 +824,13 @@ final class RAOPAudioTap {
                 }
             }
         )
-        var tap: MTAudioProcessingTap?
-        let status = MTAudioProcessingTapCreate(
-            kCFAllocatorDefault,
-            &callbacks,
-            kMTAudioProcessingTapCreationFlag_PostEffects,
-            &tap
-        )
+        let (status, tap) = withExtendedLifetime(context) {
+            Self.invokeTapCreate(
+                MTAudioProcessingTapCreate,
+                callbacks: &callbacks,
+                flags: kMTAudioProcessingTapCreationFlag_PostEffects
+            )
+        }
         guard status == noErr, let tap else { return }
         let params = AVMutableAudioMixInputParameters(track: track)
         params.audioTapProcessor = tap
