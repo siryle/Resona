@@ -8,6 +8,48 @@ import tempfile
 from pathlib import Path
 from version import ROOT
 
+BOOT_TIMEOUT = 240
+INSTALL_TIMEOUT = 240
+LAUNCH_TIMEOUT = 240
+PASS_MARKER = "PASS: iOS music routing,"
+
+
+def _decode_output(output):
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
+
+
+def launch_and_verify(udid, bundle, *, attempts=2, timeout=LAUNCH_TIMEOUT):
+    """Launch the test runner on the simulator, retrying once on a cold-launch stall."""
+    for attempt in range(attempts):
+        try:
+            result = subprocess.run(
+                ["xcrun", "simctl", "launch", "--console", "--terminate-running-process", udid, bundle],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            partial = _decode_output(exc.stdout if exc.stdout is not None else exc.output)
+            if partial:
+                print(partial, end="", flush=True)
+            subprocess.run(["xcrun", "simctl", "terminate", udid, bundle], capture_output=True)
+            if attempt + 1 < attempts:
+                print(f"iOS audio-route launch timed out after {timeout}s "
+                      f"(attempt {attempt + 1}/{attempts}); retrying...", flush=True)
+                continue
+            raise SystemExit(f"iOS audio-route tests timed out after {attempts} attempts ({timeout}s each)")
+        print(result.stdout, end="", flush=True)
+        if result.returncode == 0 and PASS_MARKER in result.stdout:
+            return
+        if "FAIL:" not in result.stdout and attempt + 1 < attempts:
+            subprocess.run(["xcrun", "simctl", "terminate", udid, bundle], capture_output=True)
+            print(f"iOS audio-route launch exited prematurely without assertion output "
+                  f"(attempt {attempt + 1}/{attempts}); retrying...", flush=True)
+            continue
+        raise SystemExit("iOS audio-route tests did not complete successfully")
+
 
 def main():
     devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "--json"]))
@@ -49,15 +91,10 @@ def main():
         try:
             if boot:
                 subprocess.run(["xcrun", "simctl", "boot", simulator["udid"]], check=True)
-            subprocess.run(["xcrun", "simctl", "bootstatus", simulator["udid"], "-b"], check=True, timeout=120)
+            subprocess.run(["xcrun", "simctl", "bootstatus", simulator["udid"], "-b"], check=True, timeout=BOOT_TIMEOUT)
             # Audio services need the UIKit application lifecycle on hosted simulators.
-            subprocess.run(["xcrun", "simctl", "install", simulator["udid"], str(app)], check=True)
-            result = subprocess.run(["xcrun", "simctl", "launch", "--console", "--terminate-running-process",
-                                     simulator["udid"], bundle],
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
-            print(result.stdout, end="")
-            if result.returncode or "PASS: iOS music routing," not in result.stdout:
-                raise SystemExit("iOS audio-route tests did not complete successfully")
+            subprocess.run(["xcrun", "simctl", "install", simulator["udid"], str(app)], check=True, timeout=INSTALL_TIMEOUT)
+            launch_and_verify(simulator["udid"], bundle)
         finally:
             subprocess.run(["xcrun", "simctl", "uninstall", simulator["udid"], bundle], capture_output=True)
             if boot:
