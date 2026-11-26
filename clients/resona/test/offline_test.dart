@@ -670,6 +670,7 @@ class RecordingPlayer implements Player {
   final List<Media> opened = [];
   bool failOpen = false;
   int stops = 0;
+  double rate = 1.0;
   Future<void>? nextOpenGate;
   Completer<void>? openStarted;
   @override
@@ -691,6 +692,11 @@ class RecordingPlayer implements Player {
 
   @override
   Future<void> setVolume(double volume) async {}
+  @override
+  Future<void> setRate(double rate) async {
+    this.rate = rate;
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
 }

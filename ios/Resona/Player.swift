@@ -199,7 +199,11 @@ final class PlayerModel: ObservableObject {
         playbackObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.playing = self.player.timeControlStatus != .paused
+                let active = self.player.timeControlStatus != .paused
+                if active && !self.playbackRequested && self.player.rate == 0 {
+                    return
+                }
+                self.playing = active
                 self.updateNowPlaying()
             }
         }
