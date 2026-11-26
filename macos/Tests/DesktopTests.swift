@@ -311,6 +311,7 @@ struct DesktopTests {
         assert(buttons[0...3].allSatisfy(\.isHidden) && !buttons[4].isHidden)
         assert(!lyrics.isHidden && desktop.statusItem.isVisible, "Lyrics can remain visible with playback controls off")
         desktop.menuLyricsEnabled = false
+        settle()
         assert(lyrics.isHidden && desktop.statusItem.length == 24, "The app logo remains when both switches are off")
         let existingWindows = Set(NSApp.windows.map(\.windowNumber))
         buttons[4].performClick(nil)
@@ -319,9 +320,13 @@ struct DesktopTests {
         if let screen = status.window?.screen ?? NSScreen.main {
             let contentInWindow = popup.contentView!.convert(popup.contentView!.bounds, to: nil)
             let contentOnScreen = popup.convertToScreen(contentInWindow)
-            assert(contentOnScreen.maxY <= screen.visibleFrame.maxY + 2 &&
-                   contentOnScreen.minY >= screen.visibleFrame.minY,
+            assert(contentOnScreen.height <= screen.visibleFrame.height &&
+                   contentOnScreen.maxY <= screen.visibleFrame.maxY + 2,
                    "Menu bar popover content \(contentOnScreen) must fit inside visible screen \(screen.visibleFrame) without covering the menu bar")
+            if (status.window?.frame.minY ?? 0) >= screen.visibleFrame.maxY - 1 {
+                assert(contentOnScreen.minY >= screen.visibleFrame.minY,
+                       "Menu bar popover content \(contentOnScreen) must stay within visible screen \(screen.visibleFrame)")
+            }
         }
         desktop.menuIconEnabled = false
         settle(until: { !popup.isVisible })

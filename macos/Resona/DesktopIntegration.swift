@@ -403,6 +403,7 @@ final class DesktopIntegration: NSObject, ObservableObject {
     @objc private func togglePopover(_ sender: NSButton) {
         if popover.isShown { popover.performClose(nil) }
         else if let button = statusItem.button {
+            button.layoutSubtreeIfNeeded()
             popoverHost?.view.layoutSubtreeIfNeeded()
             let fitting = popoverHost?.view.fittingSize ?? NSSize(width: 300, height: 480)
             let visibleHeight = button.window?.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 720
