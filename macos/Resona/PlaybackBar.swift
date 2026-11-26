@@ -1,5 +1,3 @@
-import SwiftUI
-
 import AVKit
 import SwiftUI
 
@@ -150,6 +148,69 @@ struct MacAudioOutputPopover: View {
     }
 }
 
+struct MacPlaybackSpeedPopover: View {
+    @EnvironmentObject private var player: PlayerModel
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("倍速播放").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                    Text("当前 \(PlayerModel.formatPlaybackRate(player.playbackRate))")
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                }
+                Spacer()
+                Button("重置 1.0x") { player.setPlaybackRate(1.0) }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(abs(player.playbackRate - 1.0) > 0.001 ? Theme.accent : Theme.muted)
+                    .disabled(abs(player.playbackRate - 1.0) < 0.001)
+            }
+
+            HStack(spacing: 8) {
+                Button("-0.1x") { player.stepPlaybackRate(by: -1) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(player.playbackRate <= 0.5)
+                Slider(
+                    value: Binding(
+                        get: { Double(player.playbackRate) },
+                        set: { player.setPlaybackRate(Float($0)) }
+                    ),
+                    in: 0.5...2.0,
+                    step: 0.1
+                ).accessibilityLabel("倍速滑块")
+                Button("+0.1x") { player.stepPlaybackRate(by: 1) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(player.playbackRate >= 2.0)
+            }
+
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(PlayerModel.supportedPlaybackRates, id: \.self) { rate in
+                    let selected = abs(player.playbackRate - rate) < 0.001
+                    Button {
+                        player.setPlaybackRate(rate)
+                    } label: {
+                        Text(PlayerModel.formatPlaybackRate(rate))
+                            .font(.system(size: 12, weight: selected ? .semibold : .regular).monospacedDigit())
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .foregroundStyle(selected ? Theme.accentOn : Theme.ink)
+                            .background(selected ? Theme.accentFill : Theme.paper, in: RoundedRectangle(cornerRadius: 6))
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 268)
+        .foregroundStyle(Theme.ink)
+        .background(Theme.surface)
+    }
+}
+
 struct DesktopPlaybackBar: View {
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var player: PlayerModel
@@ -157,11 +218,12 @@ struct DesktopPlaybackBar: View {
     @Binding var showingSettings: Bool
     @Binding var showQueue: Bool
     @State private var playerBarHovered = false
+    @State private var showSpeedPicker = false
     @State private var showOutputPicker = false
     @FocusState private var focusedControl: Control?
 
     private enum Control: Hashable {
-        case progress, artwork, previous, play, next, volume, favorite, mode, output, queue
+        case progress, artwork, previous, play, next, volume, favorite, mode, speed, output, queue
     }
 
     private var showTrackInfo: Bool {
@@ -281,6 +343,17 @@ struct DesktopPlaybackBar: View {
                             .foregroundStyle(player.mode == .sequential ? Theme.ink : Theme.accent)
                     }.help(player.mode.title + "，点击切换").disabled(player.current == nil)
                         .accessibilityLabel(player.mode.title).focused($focusedControl, equals: .mode)
+                    Button { showSpeedPicker.toggle() } label: {
+                        Text(PlayerModel.formatPlaybackRate(player.playbackRate))
+                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                            .frame(width: 36, height: 36)
+                            .foregroundStyle(abs(player.playbackRate - 1.0) > 0.001 ? Theme.accent : Theme.ink)
+                    }.help("倍速播放 · \(PlayerModel.formatPlaybackRate(player.playbackRate))")
+                        .accessibilityLabel("倍速播放 · \(PlayerModel.formatPlaybackRate(player.playbackRate))")
+                        .focused($focusedControl, equals: .speed)
+                        .popover(isPresented: $showSpeedPicker, arrowEdge: .top) {
+                            MacPlaybackSpeedPopover()
+                        }
                     Button { showOutputPicker.toggle() } label: {
                         Image(systemName: player.airPlayActive ? "airplayaudio" : player.activeOutput.kind.symbol)
                             .frame(width: 28, height: 36)

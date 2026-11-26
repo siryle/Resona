@@ -1,6 +1,24 @@
 "use strict";
 (() => {
   const modes = ["off", "all", "one", "shuffle"];
+  const minRate = 0.5;
+  const maxRate = 2.0;
+  const rateStep = 0.1;
+  const rates = Array.from({ length: 16 }, (_, index) => (5 + index) / 10);
+  function normalizeRate(value) {
+    if (value === null || value === undefined || value === "") return 1;
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 1;
+    const clamped = Math.min(maxRate, Math.max(minRate, num));
+    return Math.round(clamped * 10) / 10;
+  }
+  function stepRate(value, deltaSteps) {
+    const current = normalizeRate(value);
+    return normalizeRate((Math.round(current * 10) + deltaSteps) / 10);
+  }
+  function formatRate(value) {
+    return `${normalizeRate(value).toFixed(1)}x`;
+  }
   function nextIndex(length, current, direction, mode, ended = false, random = Math.random) {
     if (length < 1 || current < 0 || current >= length) return -1;
     if (ended && mode === "one") return current;
@@ -31,7 +49,19 @@
       }),
     ];
   }
-  const api = { modes, nextIndex, shuffled, appendUnique };
+  const api = {
+    modes,
+    minRate,
+    maxRate,
+    rateStep,
+    rates,
+    normalizeRate,
+    stepRate,
+    formatRate,
+    nextIndex,
+    shuffled,
+    appendUnique,
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else globalThis.ResonaPlayback = api;
 })();

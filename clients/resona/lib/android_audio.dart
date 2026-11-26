@@ -55,6 +55,7 @@ class AndroidAudioHandler extends BaseAudioHandler {
             ? AudioProcessingState.loading
             : AudioProcessingState.ready,
         playing: controller.playing && track != null,
+        speed: controller.isCastingDlna ? 1.0 : controller.playbackRate,
         updatePosition: controller.position,
         bufferedPosition: controller.position,
       ),
@@ -87,44 +88,11 @@ class AndroidAudioHandler extends BaseAudioHandler {
   Future<void> skipToPrevious() => controller.next(delta: -1);
   @override
   Future<void> stop() => controller.stopPlayback();
+  @override
+  Future<void> setSpeed(double speed) => controller.setPlaybackRate(speed);
 }
 
-Future<void> initializeAndroidAudio(MusicController controller) async {
-  await AudioService.init(
-    builder: () => AndroidAudioHandler(controller),
-    config: const AudioServiceConfig(
-      androidNotificationChannelId: 'app.resona.client.playback',
-      androidNotificationChannelName: '音乐播放',
-      androidNotificationIcon: 'drawable/resona_notification',
-      androidNotificationOngoing: true,
-      androidStopForegroundOnPause: true,
-    ),
-  );
-  final session = await AudioSession.instance;
-  await session.configure(
-    const AudioSessionConfiguration.music().copyWith(
-      androidWillPauseWhenDucked: true,
-    ),
-  );
-  controller.activateAudio = () async => await session.setActive(true);
-  String? interruptedTrack;
-  session.interruptionEventStream.listen((event) {
-    if (event.begin) {
-      interruptedTrack = controller.playing ? controller.current?.id : null;
-      if (controller.playing) unawaited(controller.toggle());
-    } else if (event.type == AudioInterruptionType.pause &&
-        interruptedTrack != null &&
-        interruptedTrack == controller.current?.id &&
-        !controller.playing) {
-      interruptedTrack = null;
-      unawaited(controller.toggle());
-    }
-  });
-  session.becomingNoisyEventStream.listen((_) {
-    interruptedTrack = null;
-    if (controller.playing) unawaited(controller.toggle());
-  });
-
+Future<void> bindAndroidAudioChannel(MusicController controller) async {
   androidAudioChannel.setMethodCallHandler((call) async {
     if (call.method == 'outputsChanged' && call.arguments is Map) {
       final args = Map<Object?, Object?>.from(call.arguments as Map);
@@ -178,4 +146,43 @@ Future<void> initializeAndroidAudio(MusicController controller) async {
   } catch (_) {
     /* Older or mocked hosts may not expose android_audio method handlers. */
   }
+}
+
+Future<void> initializeAndroidAudio(MusicController controller) async {
+  await AudioService.init(
+    builder: () => AndroidAudioHandler(controller),
+    config: const AudioServiceConfig(
+      androidNotificationChannelId: 'app.resona.client.playback',
+      androidNotificationChannelName: '音乐播放',
+      androidNotificationIcon: 'drawable/resona_notification',
+      androidNotificationOngoing: true,
+      androidStopForegroundOnPause: true,
+    ),
+  );
+  final session = await AudioSession.instance;
+  await session.configure(
+    const AudioSessionConfiguration.music().copyWith(
+      androidWillPauseWhenDucked: true,
+    ),
+  );
+  controller.activateAudio = () async => await session.setActive(true);
+  String? interruptedTrack;
+  session.interruptionEventStream.listen((event) {
+    if (event.begin) {
+      interruptedTrack = controller.playing ? controller.current?.id : null;
+      if (controller.playing) unawaited(controller.toggle());
+    } else if (event.type == AudioInterruptionType.pause &&
+        interruptedTrack != null &&
+        interruptedTrack == controller.current?.id &&
+        !controller.playing) {
+      interruptedTrack = null;
+      unawaited(controller.toggle());
+    }
+  });
+  session.becomingNoisyEventStream.listen((_) {
+    interruptedTrack = null;
+    if (controller.playing) unawaited(controller.toggle());
+  });
+
+  await bindAndroidAudioChannel(controller);
 }

@@ -106,6 +106,26 @@ struct DesktopTests {
         assert(model.selectedOutputUID == nil && model.avPlayer.audioOutputDeviceUniqueID == nil)
     }
 
+    @MainActor static func playbackRateTests() {
+        let root = URL(fileURLWithPath: CommandLine.arguments[1])
+        let store = OfflineStore(root: root.appendingPathComponent("downloads"))
+        let cache = PlaybackCache(root: root.appendingPathComponent("cache"))
+        let model = PlayerModel(downloads: store, cache: cache)
+        assert(PlayerModel.supportedPlaybackRates.count == 16 &&
+               PlayerModel.supportedPlaybackRates.first == 0.5 &&
+               PlayerModel.supportedPlaybackRates.last == 2.0,
+               "macOS supported playback rates must cover 0.5x to 2.0x per 0.1x")
+        assert(model.playbackRate == 1.0 && model.avPlayer.defaultRate == 1.0)
+        model.stepPlaybackRate(by: 2)
+        assert(model.playbackRate == 1.2 && PlayerModel.formatPlaybackRate(model.playbackRate) == "1.2x")
+        model.stepPlaybackRate(by: 100)
+        assert(model.playbackRate == 2.0)
+        model.stepPlaybackRate(by: -100)
+        assert(model.playbackRate == 0.5)
+        model.setPlaybackRate(.nan)
+        assert(model.playbackRate == 1.0)
+    }
+
     static func placementTests() {
         let domain = "app.resona.placement-tests." + UUID().uuidString
         let systemDomain = domain + ".system"
@@ -253,6 +273,7 @@ struct DesktopTests {
         menuLyricTests()
         placementTests()
         audioOutputTests()
+        playbackRateTests()
         try credentialsTests()
         MenuBarPlacement.prepare(defaults: defaults, system: UserDefaults(suiteName: "com.apple.controlcenter"))
         let oldPosition = UserDefaults.standard.object(forKey: MenuBarPlacement.positionKey)
@@ -776,8 +797,8 @@ struct DesktopTests {
         }
         main.makeFirstResponder(editableField(in: main.contentView!)!)
         settle()
-        let previousRect = NSRect(x: 793, y: 20, width: 30, height: 42)
-        let nextRect = NSRect(x: 895, y: 20, width: 30, height: 42)
+        let previousRect = NSRect(x: 743, y: 20, width: 30, height: 42)
+        let nextRect = NSRect(x: 845, y: 20, width: 30, height: 42)
         let previousPaused = snapshot(previousRect)
         let nextPaused = snapshot(nextRect)
         // Drive the playing state without audio timing or pointer movement masking the regression.
@@ -787,7 +808,7 @@ struct DesktopTests {
         try snapshot(main.contentView!.bounds).write(to: root.appendingPathComponent("playing.png"))
         assert(snapshot(previousRect) == previousPaused && snapshot(nextRect) == nextPaused,
                "Previous and next must stay visible during playback without hover or keyboard focus")
-        click(NSPoint(x: 858, y: 40))
+        click(NSPoint(x: 808, y: 40))
         assert(!player.playing, "The visible pause button must work without first hovering the playback bar")
         desktop.desktopLyricsEnabled = false
         main.close()

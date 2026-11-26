@@ -32,10 +32,24 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   bool _renewingSession = false;
   bool _manualOffline = false;
   final Set<String> downloading = {};
+  static const double minPlaybackRate = 0.5;
+  static const double maxPlaybackRate = 2.0;
+  static final List<double> playbackRates = List.unmodifiable([
+    for (var i = 5; i <= 20; i++) i / 10.0,
+  ]);
+
+  static double normalizePlaybackRate(double value) {
+    if (!value.isFinite) return 1.0;
+    final clamped = value.clamp(minPlaybackRate, maxPlaybackRate);
+    return (clamped * 10).round() / 10.0;
+  }
+
   String collectionTitle = "";
   String collectionArtist = '';
   bool shuffle = false;
   double volume = 1;
+  double playbackRate = 1.0;
+  String get playbackRateLabel => '${playbackRate.toStringAsFixed(1)}x';
   ResonaAPI? api;
   PlaybackCache? cache;
   PlaybackRelay? relay;
@@ -253,6 +267,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       shuffle = restoredShuffle;
       repeat = restoredRepeat;
       repeatOne = state['repeat_one'] == true;
+      final rawRate = state['playback_rate'];
+      playbackRate = rawRate is num ? normalizePlaybackRate(rawRate.toDouble()) : 1.0;
       playing = false;
       _needsPlaybackOpen = current != null;
     } catch (_) {
@@ -309,6 +325,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       'shuffle': shuffle,
       'repeat': repeat,
       'repeat_one': repeatOne,
+      'playback_rate': playbackRate,
     });
     _savedPosition = position;
     return _stateWork = _stateWork
@@ -1123,6 +1140,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
           if (chosen != null) await player.setAudioDevice(chosen);
         }
         await player.setVolume(volume * 100);
+        await player.setRate(playbackRate);
         if (request != _playRequest) return;
         try {
           await player.open(Media(uri.toString(), start: nextPosition));
@@ -1599,6 +1617,24 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     }
     await savePlaybackState();
     notifyListeners();
+  }
+
+  Future<void> setPlaybackRate(double value) async {
+    playbackRate = normalizePlaybackRate(value);
+    if (!isCastingDlna && _player != null) {
+      try {
+        await _player!.setRate(playbackRate);
+      } catch (_) {
+        /* Keep chosen speed ready for the next local playback session. */
+      }
+    }
+    await savePlaybackState();
+    notifyListeners();
+  }
+
+  Future<void> stepPlaybackRate(int tenths) {
+    final currentTenths = (playbackRate * 10).round();
+    return setPlaybackRate((currentTenths + tenths) / 10.0);
   }
 
   void setShuffle(bool value) {

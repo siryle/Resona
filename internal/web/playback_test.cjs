@@ -2,11 +2,43 @@
 const assert = require("node:assert/strict");
 const {
   modes,
+  minRate,
+  maxRate,
+  rateStep,
+  rates,
+  normalizeRate,
+  stepRate,
+  formatRate,
   nextIndex,
   shuffled,
   appendUnique,
 } = require("./static/playback.js");
 assert.deepEqual(modes, ["off", "all", "one", "shuffle"]);
+assert.equal(minRate, 0.5);
+assert.equal(maxRate, 2.0);
+assert.equal(rateStep, 0.1);
+assert.deepEqual(
+  rates,
+  [0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2],
+);
+assert.equal(normalizeRate(undefined), 1);
+assert.equal(normalizeRate(null), 1);
+assert.equal(normalizeRate(""), 1);
+assert.equal(normalizeRate(NaN), 1);
+assert.equal(normalizeRate(Infinity), 1);
+assert.equal(normalizeRate(0.1), 0.5);
+assert.equal(normalizeRate(3.4), 2);
+assert.equal(normalizeRate("1.25"), 1.3);
+assert.equal(normalizeRate(0.1 + 0.2), 0.5);
+assert.equal(normalizeRate(1.1 + 0.2), 1.3);
+assert.equal(stepRate(1, 1), 1.1);
+assert.equal(stepRate(1, -1), 0.9);
+assert.equal(stepRate(0.5, -1), 0.5);
+assert.equal(stepRate(2.0, 1), 2.0);
+assert.equal(formatRate(0.5), "0.5x");
+assert.equal(formatRate(1), "1.0x");
+assert.equal(formatRate(1.2), "1.2x");
+assert.equal(formatRate(2), "2.0x");
 for (const mode of modes.filter((mode) => mode !== "shuffle")) {
   assert.equal(nextIndex(0, 0, 1, mode), -1);
   assert.equal(nextIndex(3, -1, 1, mode), -1);

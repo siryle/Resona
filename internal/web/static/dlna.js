@@ -135,7 +135,7 @@
         ) {
           navigator.mediaSession.setPositionState({
             duration,
-            playbackRate: isPaused() ? 0 : 1,
+            playbackRate: isPaused() ? 0 : isCasting() ? 1 : state.playbackRate || 1,
             position: Math.max(0, position),
           });
         }

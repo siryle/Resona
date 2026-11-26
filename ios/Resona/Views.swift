@@ -587,11 +587,40 @@ struct NowPlayingView: View {
                             Spacer()
                             Button { showQueue = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }.accessibilityLabel("播放列表")
                         }
-                        Text("\(track.format.uppercased()) · \(track.sampleRate / 1000) kHz · \(track.bitrate / 1000) kbps")
-                            .font(.caption2.weight(.medium).monospacedDigit())
-                            .foregroundStyle(Theme.sageInk)
-                            .padding(.horizontal, 12).padding(.vertical, 5)
-                            .background(Theme.sage, in: Capsule())
+                        HStack(spacing: 8) {
+                            Text("\(track.format.uppercased()) · \(track.sampleRate / 1000) kHz · \(track.bitrate / 1000) kbps")
+                                .font(.caption2.weight(.medium).monospacedDigit())
+                                .foregroundStyle(Theme.sageInk)
+                                .padding(.horizontal, 12).padding(.vertical, 5)
+                                .background(Theme.sage, in: Capsule())
+                            Menu {
+                                Button("减速 (-0.1x)") { player.stepPlaybackRate(by: -1) }
+                                    .disabled(player.playbackRate <= 0.5)
+                                Button("加速 (+0.1x)") { player.stepPlaybackRate(by: 1) }
+                                    .disabled(player.playbackRate >= 2.0)
+                                Button("恢复原速 (1.0x)") { player.setPlaybackRate(1.0) }
+                                    .disabled(abs(player.playbackRate - 1.0) < 0.001)
+                                Divider()
+                                ForEach(PlayerModel.supportedPlaybackRates, id: \.self) { rate in
+                                    Button {
+                                        player.setPlaybackRate(rate)
+                                    } label: {
+                                        if abs(player.playbackRate - rate) < 0.001 {
+                                            Label(PlayerModel.formatPlaybackRate(rate), systemImage: "checkmark")
+                                        } else {
+                                            Text(PlayerModel.formatPlaybackRate(rate))
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Label(PlayerModel.formatPlaybackRate(player.playbackRate), systemImage: "speedometer")
+                                    .font(.caption2.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(abs(player.playbackRate - 1.0) > 0.001 ? Theme.accent : Theme.secondary)
+                                    .padding(.horizontal, 12).padding(.vertical, 5)
+                                    .background(Theme.surface, in: Capsule())
+                                    .overlay(Capsule().stroke(Theme.border))
+                            }.accessibilityLabel("倍速播放 · \(PlayerModel.formatPlaybackRate(player.playbackRate))")
+                        }
                         if player.activeOutput.kind == .airPlay || player.activeOutput.kind == .bluetooth {
                             Label("\(player.activeOutput.kind.label) · \(player.activeOutput.name)",
                                   systemImage: player.activeOutput.kind.symbol)

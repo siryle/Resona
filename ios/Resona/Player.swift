@@ -105,10 +105,23 @@ private struct PlaybackState: Codable {
     let position: Double
     let mode: PlaybackMode
     let volume: Float
+    let playbackRate: Float?
 }
 
 @MainActor
 final class PlayerModel: ObservableObject {
+    static let supportedPlaybackRates: [Float] = (5...20).map { Float($0) / 10 }
+
+    static func normalizePlaybackRate(_ value: Float) -> Float {
+        guard value.isFinite else { return 1.0 }
+        let clamped = min(max(value, 0.5), 2.0)
+        return (clamped * 10).rounded() / 10
+    }
+
+    static func formatPlaybackRate(_ value: Float) -> String {
+        String(format: "%.1fx", normalizePlaybackRate(value))
+    }
+
     @Published var current: Track?
     @Published var playing = false
     @Published var position: Double = 0
@@ -121,6 +134,21 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var queue: [Track] = []
     @Published var volume: Float = 0.8 {
         didSet { player.volume = volume; savePlaybackState() }
+    }
+    @Published var playbackRate: Float = 1.0 {
+        didSet {
+            let normalized = Self.normalizePlaybackRate(playbackRate)
+            if abs(playbackRate - normalized) > 0.0001 {
+                playbackRate = normalized
+                return
+            }
+            player.defaultRate = playbackRate
+            if playing || player.timeControlStatus != .paused {
+                player.rate = playbackRate
+            }
+            updateNowPlaying()
+            savePlaybackState()
+        }
     }
     @Published private(set) var activeOutput = AudioOutputDevice(id: "system", name: "本机输出", kind: .speaker, isDefault: true)
     @Published private(set) var availableOutputs: [AudioOutputDevice] = []
@@ -166,6 +194,7 @@ final class PlayerModel: ObservableObject {
         self.cache = cache ?? .shared
         self.stateURL = downloads.root.appendingPathComponent("playback.json")
         player.volume = volume
+        player.defaultRate = playbackRate
         player.allowsExternalPlayback = true
         playbackObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
@@ -251,6 +280,21 @@ final class PlayerModel: ObservableObject {
             Task { @MainActor in self?.seek(event.positionTime) }
             return .success
         }
+        center.changePlaybackRateCommand.supportedPlaybackRates = Self.supportedPlaybackRates.map { NSNumber(value: $0) }
+        center.changePlaybackRateCommand.addTarget { [weak self] event in
+            guard let event = event as? MPChangePlaybackRateCommandEvent else { return .commandFailed }
+            Task { @MainActor in self?.setPlaybackRate(event.playbackRate) }
+            return .success
+        }
+    }
+
+    func setPlaybackRate(_ value: Float) {
+        playbackRate = Self.normalizePlaybackRate(value)
+    }
+
+    func stepPlaybackRate(by tenths: Int) {
+        let currentTenths = Int((playbackRate * 10).rounded())
+        setPlaybackRate(Float(currentTenths + tenths) / 10)
     }
 
     func restorePlayback(session: Session?) {
@@ -273,12 +317,15 @@ final class PlayerModel: ObservableObject {
         savedPosition = position
         mode = state.mode
         volume = min(max(0, state.volume), 1)
+        playbackRate = Self.normalizePlaybackRate(state.playbackRate ?? 1.0)
+        player.defaultRate = playbackRate
     }
 
     func savePlaybackState() {
         guard restored, !restoring else { return }
         let state = PlaybackState(server: session?.server, username: session?.username,
-                                  current: current, queue: queue, position: position, mode: mode, volume: volume)
+                                  current: current, queue: queue, position: position, mode: mode,
+                                  volume: volume, playbackRate: playbackRate)
         do {
             try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
@@ -335,6 +382,8 @@ final class PlayerModel: ObservableObject {
             asset = AVURLAsset(url: url, options: [AVURLAssetHTTPCookiesKey: [cookie]])
         } else { return }
         let item = AVPlayerItem(asset: asset)
+        item.audioTimePitchAlgorithm = .timeDomain
+        player.defaultRate = playbackRate
         statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
             let message = item.error?.localizedDescription ?? "音频格式不受支持"
@@ -409,6 +458,7 @@ final class PlayerModel: ObservableObject {
             refreshAudioOutputs()
             #endif
             playbackRequested = true
+            player.defaultRate = playbackRate
             player.play()
             playing = player.timeControlStatus != .paused
             updateNowPlaying()
@@ -513,7 +563,7 @@ final class PlayerModel: ObservableObject {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: current.title, MPMediaItemPropertyArtist: current.artist,
             MPMediaItemPropertyAlbumTitle: current.album, MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: position, MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: position, MPNowPlayingInfoPropertyPlaybackRate: playing ? playbackRate : 0.0
         ]
         if let nowPlayingArtwork { info[MPMediaItemPropertyArtwork] = nowPlayingArtwork }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
@@ -540,11 +590,15 @@ final class PlayerModel: ObservableObject {
 
     func refreshAudioOutputs() {
         let routeOutputs = AVAudioSession.sharedInstance().currentRoute.outputs
-        let mapped = routeOutputs.map {
-            AudioOutputDevice(
-                id: $0.uid,
-                name: $0.portName,
-                kind: Self.classifyPort($0.portType),
+        let mapped = routeOutputs.map { output -> AudioOutputDevice in
+            let kind = Self.classifyPort(output.portType)
+            let trimmedName = output.portName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = trimmedName.isEmpty ? kind.label : trimmedName
+            let id = output.uid.isEmpty ? kind.rawValue : output.uid
+            return AudioOutputDevice(
+                id: id,
+                name: name,
+                kind: kind,
                 isDefault: true
             )
         }

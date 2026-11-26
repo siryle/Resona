@@ -73,6 +73,20 @@ struct ResonaDesktopApp: App {
                 Button("上一首") { player.previous() }.keyboardShortcut(.leftArrow, modifiers: [.command])
                 Button("随机播放") { player.shuffle.toggle() }
                 Button("切换播放模式") { player.cycleMode() }
+                Menu("倍速播放 · \(PlayerModel.formatPlaybackRate(player.playbackRate))") {
+                    Button("减速 (-0.1x)") { player.stepPlaybackRate(by: -1) }
+                        .disabled(player.playbackRate <= 0.5)
+                    Button("加速 (+0.1x)") { player.stepPlaybackRate(by: 1) }
+                        .disabled(player.playbackRate >= 2.0)
+                    Button("恢复原速 (1.0x)") { player.setPlaybackRate(1.0) }
+                        .disabled(abs(player.playbackRate - 1.0) < 0.001)
+                    Divider()
+                    ForEach(PlayerModel.supportedPlaybackRates, id: \.self) { rate in
+                        Button(PlayerModel.formatPlaybackRate(rate)) {
+                            player.setPlaybackRate(rate)
+                        }
+                    }
+                }
                 Divider()
                 Toggle("桌面歌词", isOn: $desktop.desktopLyricsEnabled)
                     .keyboardShortcut("d", modifiers: [.command, .shift])

@@ -38,72 +38,87 @@ struct AudioRouteTests: App {
         let player = PlayerModel(downloads: store, cache: PlaybackCache(root: root.appendingPathComponent("cache")), player: engine)
         player.volume = 0
         player.play(track, queue: [track], session: nil)
-        await settle()
-        assert(engine.rate > 0, player.error ?? "Playback did not start")
+        for _ in 0..<30 {
+            if engine.rate > 0 { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        check(engine.rate > 0, player.error ?? "Playback did not start")
         let session = AVAudioSession.sharedInstance()
-        assert(session.category == .playback && session.routeSharingPolicy == .longFormAudio,
-               "Music must participate in the system long-form audio route")
-        assert(PlayerModel.classifyPort(.airPlay) == .airPlay)
-        assert(PlayerModel.classifyPort(.bluetoothA2DP) == .bluetooth)
-        assert(PlayerModel.classifyPort(.bluetoothHFP) == .bluetooth)
-        assert(PlayerModel.classifyPort(.bluetoothLE) == .bluetooth)
-        assert(PlayerModel.classifyPort(.builtInSpeaker) == .speaker)
-        assert(!player.activeOutput.name.isEmpty)
+        check(session.category == .playback && session.routeSharingPolicy == .longFormAudio,
+              "Music must participate in the system long-form audio route")
+        check(PlayerModel.classifyPort(.airPlay) == .airPlay, "AirPlay port must classify as airPlay")
+        check(PlayerModel.classifyPort(.bluetoothA2DP) == .bluetooth, "Bluetooth A2DP must classify as bluetooth")
+        check(PlayerModel.classifyPort(.bluetoothHFP) == .bluetooth, "Bluetooth HFP must classify as bluetooth")
+        check(PlayerModel.classifyPort(.bluetoothLE) == .bluetooth, "Bluetooth LE must classify as bluetooth")
+        check(PlayerModel.classifyPort(.builtInSpeaker) == .speaker, "BuiltInSpeaker must classify as speaker")
+        check(!player.activeOutput.name.isEmpty, "Active output name must never be empty")
 
         for reason in [AVAudioSession.RouteChangeReason.newDeviceAvailable, .routeConfigurationChange] {
             // AVPlayer can pause independently of the user's playback intent during a route transition.
             engine.pause()
             await settle()
-            assert(!player.playing)
+            check(!player.playing, "Paused engine must report playing == false")
             await route(reason)
-            assert(engine.rate > 0 && player.playing, "Active playback did not recover after \(reason)")
+            check(engine.rate > 0 && player.playing, "Active playback did not recover after \(reason)")
         }
 
         player.pause()
         await route(.newDeviceAvailable)
         await route(.routeConfigurationChange)
-        assert(engine.rate == 0 && !player.playing, "Connecting headphones restarted user-paused audio")
+        check(engine.rate == 0 && !player.playing, "Connecting headphones restarted user-paused audio")
 
         player.resume()
+        await settle()
         await route(.oldDeviceUnavailable)
-        assert(engine.rate == 0 && !player.playing, "Headphone removal did not pause playback")
+        check(engine.rate == 0 && !player.playing, "Headphone removal did not pause playback")
         await route(.newDeviceAvailable)
         await route(.routeConfigurationChange)
-        assert(engine.rate == 0, "Reconnecting headphones restarted disconnected audio")
+        check(engine.rate == 0, "Reconnecting headphones restarted disconnected audio")
 
         player.resume()
+        await settle()
         await interruption(.began)
         await route(.newDeviceAvailable)
         await route(.routeConfigurationChange)
-        assert(engine.rate == 0, "A route change resumed audio during an interruption")
+        check(engine.rate == 0, "A route change resumed audio during an interruption")
         await interruption(.ended, options: [.shouldResume])
-        assert(engine.rate > 0, "Resumable interruption lost playback intent")
+        check(engine.rate > 0, "Resumable interruption lost playback intent")
 
         await interruption(.began)
         await interruption(.ended)
         await route(.newDeviceAvailable)
-        assert(engine.rate == 0, "A non-resumable interruption restarted audio")
+        check(engine.rate == 0, "A non-resumable interruption restarted audio")
 
         player.resume()
+        await settle()
         await interruption(.began)
         player.pause()
         await interruption(.ended, options: [.shouldResume])
         await route(.newDeviceAvailable)
-        assert(engine.rate == 0, "Pausing during an interruption lost user intent")
+        check(engine.rate == 0, "Pausing during an interruption lost user intent")
 
         player.resume()
+        await settle()
         engine.pause()
         await route(.categoryChange)
         await route(.override)
-        assert(engine.rate == 0, "An unrelated route notification restarted audio")
+        check(engine.rate == 0, "An unrelated route notification restarted audio")
         NotificationCenter.default.post(name: AVAudioSession.routeChangeNotification, object: session,
                                         userInfo: [AVAudioSessionRouteChangeReasonKey: UInt.max])
         await settle()
-        assert(engine.rate == 0, "An unknown route notification restarted audio")
+        check(engine.rate == 0, "An unknown route notification restarted audio")
         player.stop()
         await route(.newDeviceAvailable)
-        assert(engine.currentItem == nil && !player.playing, "A route notification restarted stopped audio")
+        check(engine.currentItem == nil && !player.playing, "A route notification restarted stopped audio")
         print("PASS: iOS music routing, device connection/configuration recovery, disconnect pause, user pause, interruptions and stopped playback")
+    }
+
+    static func check(_ condition: Bool, _ message: String) {
+        guard condition else {
+            print("FAIL: \(message)")
+            fflush(stdout)
+            exit(EXIT_FAILURE)
+        }
     }
 
     @MainActor static func route(_ reason: AVAudioSession.RouteChangeReason) async {

@@ -20,7 +20,10 @@ void main() {
       'com.ryanheise.audio_service.handler.methods',
     );
     const audio = MethodChannel('com.ryanheise.audio_session');
+    const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+    final tempDir = Directory.systemTemp.createTempSync('resona_audio_init_');
     Map<dynamic, dynamic>? configured;
+
     messenger.setMockMethodCallHandler(
       service,
       (_) async => <String, dynamic>{},
@@ -35,12 +38,30 @@ void main() {
       }
       return null;
     });
-    addTearDown(() {
+    messenger.setMockMethodCallHandler(pathProvider, (call) async {
+      if (call.method == 'getTemporaryDirectory' ||
+          call.method == 'getApplicationSupportDirectory') {
+        return tempDir.path;
+      }
+      return null;
+    });
+    messenger.setMockMethodCallHandler(androidAudioChannel, (_) async => null);
+
+    addTearDown(() async {
+      await Future<void>.delayed(Duration.zero);
       messenger.setMockMethodCallHandler(service, null);
       messenger.setMockMethodCallHandler(handler, null);
       messenger.setMockMethodCallHandler(audio, null);
+      messenger.setMockMethodCallHandler(pathProvider, null);
+      messenger.setMockMethodCallHandler(androidAudioChannel, null);
+      try {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      } catch (_) {
+        /* Ignore locked cache handles during teardown on Windows. */
+      }
     });
-    final controller = MusicController();
+
+    final controller = MusicController(supportDirectory: tempDir);
     addTearDown(controller.dispose);
     await initializeAndroidAudio(controller);
     expect(configured?['androidWillPauseWhenDucked'], isTrue);
@@ -49,25 +70,11 @@ void main() {
     expect(controller.activateAudio, isNotNull);
   });
 
-  test('android audio channel tracks Bluetooth outputs, AVRCP actions and disconnect pause', () async {
+  test('android audio channel tracks Bluetooth outputs, AVRCP actions, speed and disconnect pause', () async {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    const service = MethodChannel('com.ryanheise.audio_service.client.methods');
-    const handler = MethodChannel(
-      'com.ryanheise.audio_service.handler.methods',
-    );
-    const audio = MethodChannel('com.ryanheise.audio_session');
     final nativeCalls = <String>[];
 
-    messenger.setMockMethodCallHandler(
-      service,
-      (_) async => <String, dynamic>{},
-    );
-    messenger.setMockMethodCallHandler(
-      handler,
-      (_) async => <String, dynamic>{},
-    );
-    messenger.setMockMethodCallHandler(audio, (_) async => null);
     messenger.setMockMethodCallHandler(androidAudioChannel, (call) async {
       nativeCalls.add(call.method);
       if (call.method == 'getAudioOutputs') {
@@ -85,16 +92,17 @@ void main() {
 
     final tempDir = Directory.systemTemp.createTempSync('resona_android_audio_');
     addTearDown(() {
-      messenger.setMockMethodCallHandler(service, null);
-      messenger.setMockMethodCallHandler(handler, null);
-      messenger.setMockMethodCallHandler(audio, null);
       messenger.setMockMethodCallHandler(androidAudioChannel, null);
-      if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      try {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      } catch (_) {
+        /* Ignore transient temp cleanup errors on Windows. */
+      }
     });
 
     final controller = MusicController(supportDirectory: tempDir);
     addTearDown(controller.dispose);
-    await initializeAndroidAudio(controller);
+    await bindAndroidAudioChannel(controller);
 
     expect(
       controller.localOutputs.any(
@@ -133,6 +141,10 @@ void main() {
         MediaAction.rewind,
       ]),
     );
+    expect(audioHandler.playbackState.value.speed, 1.0);
+    await audioHandler.setSpeed(1.5);
+    expect(controller.playbackRate, 1.5);
+    expect(audioHandler.playbackState.value.speed, 1.5);
 
     controller.playing = true;
     await messenger.handlePlatformMessage(

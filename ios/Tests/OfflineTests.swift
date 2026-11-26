@@ -112,6 +112,19 @@ struct OfflineTests {
         snapshotPlayer.seek(3)
         snapshotPlayer.mode = .repeatAll
         snapshotPlayer.volume = 0.25
+        assert(PlayerModel.supportedPlaybackRates.count == 16 &&
+               PlayerModel.supportedPlaybackRates.first == 0.5 &&
+               PlayerModel.supportedPlaybackRates.last == 2.0,
+               "Supported playback rates must span 0.5x to 2.0x in 0.1x steps")
+        assert(PlayerModel.normalizePlaybackRate(0.1) == 0.5 &&
+               PlayerModel.normalizePlaybackRate(3.0) == 2.0 &&
+               PlayerModel.normalizePlaybackRate(.nan) == 1.0 &&
+               PlayerModel.formatPlaybackRate(1.24) == "1.2x")
+        snapshotPlayer.setPlaybackRate(1.4)
+        snapshotPlayer.stepPlaybackRate(by: 1)
+        assert(snapshotPlayer.playbackRate == 1.5)
+        snapshotPlayer.stepPlaybackRate(by: -1)
+        assert(snapshotPlayer.playbackRate == 1.4)
         snapshotPlayer.append([track], session: library.session)
         let restoredEngine = AVPlayer()
         let restoredPlayer = PlayerModel(downloads: store, cache: cache, player: restoredEngine)
@@ -119,8 +132,9 @@ struct OfflineTests {
         assert(restoredPlayer.current == track && restoredPlayer.queue.map(\.id) == [cloud.id, track.id],
                "Restart lost the current song or queue order, including uncached cloud tracks")
         assert(restoredPlayer.position == 3 && restoredPlayer.duration == track.duration &&
-               restoredPlayer.mode == .repeatAll && restoredPlayer.volume == 0.25,
-               "Restart lost progress, playback mode or volume")
+               restoredPlayer.mode == .repeatAll && restoredPlayer.volume == 0.25 &&
+               restoredPlayer.playbackRate == 1.4 && restoredEngine.defaultRate == 1.4,
+               "Restart lost progress, playback mode, volume or playback rate")
         assert(!restoredPlayer.playing && restoredEngine.currentItem == nil, "Restart unexpectedly opened audio")
         restoredPlayer.seek(4)
         restoredPlayer.restorePlayback(session: library.session)
@@ -131,8 +145,16 @@ struct OfflineTests {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         assert(restoredPlayer.isLocal && restoredEngine.currentItem != nil && restoredPlayer.playing &&
-               restoredEngine.currentTime().seconds >= 4, restoredPlayer.error ?? "Restored song did not resume from saved progress")
+               restoredEngine.currentTime().seconds >= 4 && abs(restoredEngine.rate - 1.4) < 0.01,
+               restoredPlayer.error ?? "Restored song did not resume from saved progress at restored playback rate")
         restoredPlayer.pause()
+        let snapshotData = try Data(contentsOf: root.appendingPathComponent("playback.json"))
+        var legacyObject = try JSONSerialization.jsonObject(with: snapshotData) as! [String: Any]
+        legacyObject.removeValue(forKey: "playbackRate")
+        try JSONSerialization.data(withJSONObject: legacyObject).write(to: root.appendingPathComponent("playback.json"))
+        let legacyPlayer = PlayerModel(downloads: store, cache: cache)
+        legacyPlayer.restorePlayback(session: library.session)
+        assert(legacyPlayer.playbackRate == 1.0, "Legacy snapshots without playbackRate must default to 1.0x")
         let anotherAccount = PlayerModel(downloads: store, cache: cache)
         anotherAccount.restorePlayback(session: Session(server: library.session!.server, username: "other", token: "test-session"))
         assert(anotherAccount.current == nil && anotherAccount.queue.isEmpty, "Playback state leaked between accounts")

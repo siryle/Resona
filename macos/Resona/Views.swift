@@ -505,6 +505,7 @@ struct Artwork: View {
 
 struct ListeningView: View {
     @EnvironmentObject private var player: PlayerModel
+    @State private var showSpeedPicker = false
     @State private var showOutputPicker = false
     private var active: Int? { player.lyrics.last { $0.time <= player.position }?.id }
     var body: some View {
@@ -542,6 +543,23 @@ struct ListeningView: View {
                                 .help("切换 AirPlay 或蓝牙音频输出")
                                 .popover(isPresented: $showOutputPicker, arrowEdge: .bottom) {
                                     MacAudioOutputPopover()
+                                }
+                            Button {
+                                showSpeedPicker.toggle()
+                            } label: {
+                                Label(
+                                    PlayerModel.formatPlaybackRate(player.playbackRate),
+                                    systemImage: "speedometer"
+                                )
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(abs(player.playbackRate - 1.0) > 0.001 ? Theme.accent : Theme.secondary)
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .background(Theme.surface, in: Capsule())
+                                .overlay { Capsule().strokeBorder(Theme.border) }
+                            }.buttonStyle(.plain)
+                                .help("倍速播放 · \(PlayerModel.formatPlaybackRate(player.playbackRate))")
+                                .popover(isPresented: $showSpeedPicker, arrowEdge: .bottom) {
+                                    MacPlaybackSpeedPopover()
                                 }
                         }
                     }.frame(maxWidth: .infinity)

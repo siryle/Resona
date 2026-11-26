@@ -29,6 +29,7 @@ Resona 是一个自托管音乐库：Go 服务端负责本地音乐的识别、�
 - iOS / macOS 直接进入音乐界面，服务器登录位于设置；下载音频、海报与歌词后可在未登录、登录过期和服务器断连时离线播放。
 - 三端播放列表与统一播放模式按钮：顺序 / 列表循环 / 单曲循环 / 随机循环；全部音乐支持全部播放、随机播放、选择歌曲与加入播放列表，批量操作覆盖全部匹配结果。
 - 多平台无线与外部音频输出：iOS / macOS 原生客户端支持 AirPlay 2 投屏与蓝牙路由切换（macOS 支持 CoreAudio 枚举 USB DAC / 蓝牙设备并快速打开蓝牙设置）；Web 与 Docker 服务端支持浏览器音频输出 / 蓝牙设备切换与服务端 UPnP/DLNA 投屏；Windows 与 Android 客户端支持本机 WASAPI / 系统输出切换、蓝牙断连自动暂停以及 UPnP/DLNA 局域网投屏。
+- 全平台倍速播放：Web、iOS、macOS、Android 与 Windows 客户端均支持 0.5x–2.0x（每 0.1x 一档，共 16 档）倍速播放、保持音调并持久化倍速偏好；DLNA 投屏期间保持原速，切回本机播放后自动恢复所选倍速。
 - GitHub Actions 构建 Android、Windows、iOS、macOS 客户端，以及 Linux amd64 / arm64 服务端和 Docker 镜像；安装包、离线镜像包及 SHA-256 通过 GitHub Release 分发，多架构镜像发布至 GHCR。
 
 ## Docker 部署

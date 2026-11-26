@@ -11,6 +11,7 @@ const state = {
   bulkBusy: false,
   bulkToken: 0,
   repeatMode: readRepeatMode(),
+  playbackRate: readPlaybackRate(),
   current: null,
   linkRetried: false,
   playbackPosition: 0,
@@ -123,6 +124,7 @@ async function renewSessionIfNeeded(force = false) {
 function showLogin() {
   resetSelection();
   setQueueOpen(false, false);
+  setSpeedOpen(false, false);
   outputController?.onLogout();
   setExpanded(false, false);
   listening.controller?.abort();
@@ -1687,6 +1689,7 @@ function playTrackLocally(track, queue, autoplay = true, startPosition = 0) {
   const request = state.playbackRequest;
   audio.src = `/api/v1/tracks/${track.id}/stream`;
   audio.volume = Number($("volume").value);
+  applyAudioPlaybackRate();
   if (startPosition > 0) {
     audio.addEventListener(
       "loadedmetadata",
@@ -1966,6 +1969,10 @@ document.addEventListener("keydown", (event) => {
     outputController?.setPanelOpen(false);
     return;
   }
+  if (event.key === "Escape" && $("speed-panel") && !$("speed-panel").hidden) {
+    setSpeedOpen(false);
+    return;
+  }
   if (event.key === "Escape" && !$("queue-panel").hidden) {
     setQueueOpen(false);
     return;
@@ -1994,6 +2001,75 @@ function readRepeatMode() {
     if (ResonaPlayback.modes.includes(mode)) return mode;
   } catch {}
   return "off";
+}
+function readPlaybackRate() {
+  try {
+    return ResonaPlayback.normalizeRate(localStorage.getItem("resona.playbackRate"));
+  } catch {
+    return 1;
+  }
+}
+function applyAudioPlaybackRate() {
+  const rate = ResonaPlayback.normalizeRate(state.playbackRate);
+  for (const prop of ["preservesPitch", "mozPreservesPitch", "webkitPreservesPitch"]) {
+    if (prop in audio) audio[prop] = true;
+  }
+  audio.defaultPlaybackRate = rate;
+  audio.playbackRate = rate;
+}
+function renderSpeedControls() {
+  const rate = ResonaPlayback.normalizeRate(state.playbackRate);
+  const label = ResonaPlayback.formatRate(rate);
+  const toggle = $("speed-toggle");
+  if (toggle) {
+    toggle.textContent = label;
+    toggle.setAttribute("aria-label", `倍速播放 · ${label}`);
+    toggle.title = `倍速播放 · ${label}（0.5x–2.0x）`;
+    toggle.setAttribute("aria-pressed", String(rate !== 1));
+  }
+  if ($("speed-value")) $("speed-value").textContent = `当前 ${label}`;
+  if ($("speed-slider")) $("speed-slider").value = String(rate);
+  if ($("speed-down")) $("speed-down").disabled = rate <= ResonaPlayback.minRate;
+  if ($("speed-up")) $("speed-up").disabled = rate >= ResonaPlayback.maxRate;
+  if ($("speed-reset")) $("speed-reset").disabled = rate === 1;
+  for (const chip of document.querySelectorAll("#speed-grid [data-rate]")) {
+    chip.setAttribute("aria-pressed", String(Number(chip.dataset.rate) === rate));
+  }
+  if ($("speed-dlna-hint")) {
+    $("speed-dlna-hint").hidden = !(
+      typeof outputController !== "undefined" && outputController?.isCasting()
+    );
+  }
+}
+function setPlaybackRate(value, { persist = true } = {}) {
+  const rate = ResonaPlayback.normalizeRate(value);
+  state.playbackRate = rate;
+  applyAudioPlaybackRate();
+  if (persist) {
+    try {
+      localStorage.setItem("resona.playbackRate", String(rate));
+    } catch {}
+  }
+  renderSpeedControls();
+  if (typeof outputController !== "undefined") outputController?.updateMediaSession();
+}
+function setSpeedOpen(open, focus = true) {
+  const panel = $("speed-panel");
+  const toggle = $("speed-toggle");
+  if (!panel || !toggle) return;
+  open = Boolean(open && state.user);
+  if (open) {
+    setQueueOpen(false, false);
+    if (typeof outputController !== "undefined") outputController?.setPanelOpen(false, false);
+  }
+  panel.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    renderSpeedControls();
+    if (focus) $("speed-close")?.focus({ preventScroll: true });
+  } else if (focus && !$("player-bar").hidden) {
+    toggle.focus({ preventScroll: true });
+  }
 }
 function renderPlaybackControls() {
   const labels = {
@@ -2037,6 +2113,7 @@ function renderPlaybackControls() {
       ResonaPlayback.nextIndex(state.queue.length, current, direction, mode) <
       0;
   }
+  renderSpeedControls();
 }
 function renderQueue() {
   $("queue-count").textContent =
@@ -2073,7 +2150,10 @@ function renderQueue() {
 }
 function setQueueOpen(open, focus = true) {
   open = Boolean(open && state.queue.length && state.user);
-  if (open) outputController?.setPanelOpen(false, false);
+  if (open) {
+    outputController?.setPanelOpen(false, false);
+    setSpeedOpen(false, false);
+  }
   $("queue-panel").hidden = !open;
   $("queue-toggle").setAttribute("aria-expanded", String(open));
   if (open) {
@@ -2253,7 +2333,46 @@ const outputController = globalThis.ResonaOutput?.createOutputController({
   renderPlayerProgress,
   updateListeningLyrics,
   setQueueOpen,
+  onPanelToggle: () => setSpeedOpen(false, false),
 });
+applyAudioPlaybackRate();
+const speedGrid = $("speed-grid");
+if (speedGrid) {
+  for (const rate of ResonaPlayback.rates) {
+    const chip = el("button", "speed-chip", ResonaPlayback.formatRate(rate));
+    chip.type = "button";
+    chip.dataset.rate = String(rate);
+    chip.addEventListener("click", () => setPlaybackRate(rate));
+    speedGrid.append(chip);
+  }
+}
+$("speed-toggle")?.addEventListener("click", () =>
+  setSpeedOpen($("speed-panel")?.hidden),
+);
+$("speed-close")?.addEventListener("click", () => setSpeedOpen(false));
+$("speed-reset")?.addEventListener("click", () => setPlaybackRate(1));
+$("speed-down")?.addEventListener("click", () =>
+  setPlaybackRate(ResonaPlayback.stepRate(state.playbackRate, -1)),
+);
+$("speed-up")?.addEventListener("click", () =>
+  setPlaybackRate(ResonaPlayback.stepRate(state.playbackRate, 1)),
+);
+$("speed-slider")?.addEventListener("input", () =>
+  setPlaybackRate(Number($("speed-slider").value)),
+);
+document.addEventListener("pointerdown", (event) => {
+  const panel = $("speed-panel");
+  const toggle = $("speed-toggle");
+  if (
+    panel &&
+    !panel.hidden &&
+    !panel.contains(event.target) &&
+    !toggle?.contains(event.target)
+  ) {
+    setSpeedOpen(false, false);
+  }
+});
+renderSpeedControls();
 
 $("play-pause").addEventListener("click", () => {
   if (outputController) outputController.togglePlayPause();
