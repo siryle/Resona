@@ -144,7 +144,15 @@ void main() {
         await tester.tap(find.byTooltip('倍速播放 · 1.0x'));
         await tester.pumpAndSettle();
         expect(find.text('重置 1.0x'), findsOneWidget);
-        expect(find.byType(Slider), findsOneWidget);
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is Slider &&
+                widget.min == MusicController.minPlaybackRate &&
+                widget.max == MusicController.maxPlaybackRate,
+          ),
+          findsOneWidget,
+        );
         expect(find.byType(PlaybackSpeedRuler), findsNothing);
 
         await tester.tap(find.text('1.5x'));
