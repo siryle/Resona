@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import CryptoKit
 import SwiftUI
 
@@ -64,6 +65,45 @@ struct DesktopTests {
         Credentials.clear(at: file)
         assert(!FileManager.default.fileExists(atPath: file.path) && Credentials.load(from: file) == nil)
         Credentials.clear(at: file)
+    }
+
+    @MainActor static func audioOutputTests() {
+        assert(PlayerModel.classifyTransport(kAudioDeviceTransportTypeAirPlay) == .airPlay)
+        assert(PlayerModel.classifyTransport(kAudioDeviceTransportTypeBluetooth) == .bluetooth)
+        assert(PlayerModel.classifyTransport(kAudioDeviceTransportTypeBluetoothLE) == .bluetooth)
+        assert(PlayerModel.classifyTransport(kAudioDeviceTransportTypeBuiltIn) == .speaker)
+        assert(PlayerModel.classifyTransport(kAudioDeviceTransportTypeUSB) == .headphones)
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("resona-audio-output-test-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OfflineStore(root: root.appendingPathComponent("downloads"))
+        let cache = PlaybackCache(root: root.appendingPathComponent("cache"))
+        let model = PlayerModel(downloads: store, cache: cache)
+
+        let builtIn = AudioOutputDevice(id: "BuiltInSpeaker", name: "MacBook Speakers", kind: .speaker, isDefault: true)
+        let bluetooth = AudioOutputDevice(id: "BT-AirPods", name: "AirPods Pro", kind: .bluetooth, isDefault: false)
+        let airPlay = AudioOutputDevice(id: "AirPlay-HomePod", name: "HomePod", kind: .airPlay, isDefault: false)
+
+        model.handleAudioOutputChange(devices: [builtIn, bluetooth, airPlay])
+        assert(model.availableOutputs.count == 3)
+        assert(model.activeOutput.id == builtIn.id && !model.airPlayActive)
+
+        model.selectAudioOutput(bluetooth.id)
+        assert(model.selectedOutputUID == bluetooth.id)
+        assert(model.avPlayer.audioOutputDeviceUniqueID == bluetooth.id)
+        assert(model.activeOutput.id == bluetooth.id)
+
+        model.playing = true
+        model.handleAudioOutputChange(devices: [builtIn, airPlay])
+        assert(!model.playing, "Disconnecting the active Bluetooth device must pause playback")
+        assert(model.selectedOutputUID == nil && model.avPlayer.audioOutputDeviceUniqueID == nil)
+        assert(model.activeOutput.id == builtIn.id)
+
+        model.selectAudioOutput(airPlay.id)
+        assert(model.airPlayActive, "Selecting an AirPlay device must report active AirPlay state")
+        model.prepareForAirPlayRouting()
+        assert(model.selectedOutputUID == nil && model.avPlayer.audioOutputDeviceUniqueID == nil)
     }
 
     static func placementTests() {
@@ -212,6 +252,7 @@ struct DesktopTests {
         player.volume = 0
         menuLyricTests()
         placementTests()
+        audioOutputTests()
         try credentialsTests()
         MenuBarPlacement.prepare(defaults: defaults, system: UserDefaults(suiteName: "com.apple.controlcenter"))
         let oldPosition = UserDefaults.standard.object(forKey: MenuBarPlacement.positionKey)
@@ -735,8 +776,8 @@ struct DesktopTests {
         }
         main.makeFirstResponder(editableField(in: main.contentView!)!)
         settle()
-        let previousRect = NSRect(x: 835, y: 20, width: 30, height: 42)
-        let nextRect = NSRect(x: 937, y: 20, width: 30, height: 42)
+        let previousRect = NSRect(x: 793, y: 20, width: 30, height: 42)
+        let nextRect = NSRect(x: 895, y: 20, width: 30, height: 42)
         let previousPaused = snapshot(previousRect)
         let nextPaused = snapshot(nextRect)
         // Drive the playing state without audio timing or pointer movement masking the regression.
@@ -746,7 +787,7 @@ struct DesktopTests {
         try snapshot(main.contentView!.bounds).write(to: root.appendingPathComponent("playing.png"))
         assert(snapshot(previousRect) == previousPaused && snapshot(nextRect) == nextPaused,
                "Previous and next must stay visible during playback without hover or keyboard focus")
-        click(NSPoint(x: 900, y: 40))
+        click(NSPoint(x: 858, y: 40))
         assert(!player.playing, "The visible pause button must work without first hovering the playback bar")
         desktop.desktopLyricsEnabled = false
         main.close()

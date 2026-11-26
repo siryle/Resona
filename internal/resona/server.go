@@ -32,6 +32,7 @@ type Server struct {
 	logbook             *LogBook
 	plugins             *Plugins
 	cloud               *Cloud115
+	dlna                *dlnaManager
 	scanScheduleChanged chan struct{}
 	artistArtworkGate   chan struct{}
 }
@@ -76,6 +77,7 @@ func NewServer(ctx context.Context, c Config) (*Server, error) {
 	}
 	s.plugins = newPlugins(s)
 	s.cloud = newCloud115(s)
+	s.dlna = newDLNAManager(s)
 	if err := s.cloud.pruneMissingSTRMs(); err != nil {
 		return nil, err
 	}
@@ -172,6 +174,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/tracks/{id}/stream", s.protect(s.stream))
 	mux.HandleFunc("GET /api/v1/tracks/{id}/cover", s.protect(s.cover))
 	mux.HandleFunc("GET /api/v1/tracks/{id}/lyrics", s.protect(s.lyrics))
+	mux.HandleFunc("GET /api/v1/dlna/devices", s.protect(s.dlnaDevices))
+	mux.HandleFunc("POST /api/v1/dlna/devices/manual", s.protect(s.dlnaAddManual))
+	mux.HandleFunc("DELETE /api/v1/dlna/devices/manual", s.protect(s.dlnaRemoveManual))
+	mux.HandleFunc("GET /api/v1/dlna/settings", s.protect(s.dlnaGetSettings))
+	mux.HandleFunc("PUT /api/v1/dlna/settings", s.protect(s.dlnaPutSettings))
+	mux.HandleFunc("GET /api/v1/dlna/status", s.protect(s.dlnaStatusHandler))
+	mux.HandleFunc("POST /api/v1/dlna/play", s.protect(s.dlnaPlayHandler))
+	mux.HandleFunc("POST /api/v1/dlna/control", s.protect(s.dlnaControlHandler))
+	mux.HandleFunc("POST /api/v1/dlna/ticket", s.protect(s.dlnaTicketHandler))
+	mux.HandleFunc("GET /api/v1/dlna/media/{ticket}/{filename}", s.dlnaMedia)
+	mux.HandleFunc("GET /api/v1/dlna/cover/{ticket}", s.dlnaCover)
 	mux.HandleFunc("GET /api/v1/albums", s.protect(s.albums))
 	mux.HandleFunc("GET /api/v1/artists", s.protect(s.artists))
 	mux.HandleFunc("GET /api/v1/artists/avatar", s.protect(s.artistAvatar))
@@ -247,7 +260,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		if r.URL.Path != "/" && r.URL.Path != "/index.html" && r.URL.Path != "/app.js" &&
 			r.URL.Path != "/style.css" && r.URL.Path != "/icon.png" && r.URL.Path != "/lyrics.js" &&
-			r.URL.Path != "/playback.js" && r.URL.Path != "/plugins.js" && r.URL.Path != "/logs.js" && r.URL.Path != "/files.js" && r.URL.Path != "/cloud115.js" {
+			r.URL.Path != "/playback.js" && r.URL.Path != "/dlna.js" && r.URL.Path != "/plugins.js" && r.URL.Path != "/logs.js" && r.URL.Path != "/files.js" && r.URL.Path != "/cloud115.js" {
 			http.NotFound(w, r)
 			return
 		}
@@ -258,7 +271,7 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: https://115.com https://*.115.com https://115cdn.com https://*.115cdn.com https://115cdn.net https://*.115cdn.net https://anxia.com https://*.anxia.com; style-src 'self'; script-src 'self'; "+cloudMediaCSP+"; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/v1/dlna/media/") && !strings.HasPrefix(r.URL.Path, "/api/v1/dlna/cover/") {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -442,6 +455,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 500, "无法保存退出状态，请稍后重试")
 		return
 	}
+	s.dlna.revokeAll()
 	jsonResponse(w, 200, map[string]bool{"ok": true})
 }
 
@@ -532,9 +546,19 @@ func (s *Server) favorite(w http.ResponseWriter, r *http.Request) {
 	s.track(w, r)
 }
 
+func trackMimeType(format string) string {
+	types := map[string]string{"mp3": "audio/mpeg", "flac": "audio/flac", "m4a": "audio/mp4", "alac": "audio/mp4",
+		"aac": "audio/aac", "wav": "audio/wav", "ogg": "audio/ogg", "opus": "audio/ogg", "aif": "audio/aiff", "aiff": "audio/aiff", "wma": "audio/x-ms-wma"}
+	return types[format]
+}
+
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
+	s.streamTrack(w, r, r.PathValue("id"))
+}
+
+func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id string) {
 	s.store.mu.RLock()
-	disk, ok := s.store.state.Tracks[r.PathValue("id")]
+	disk, ok := s.store.state.Tracks[id]
 	t := publicTrack(disk)
 	if !ok {
 		s.store.mu.RUnlock()
@@ -591,15 +615,17 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 404, "audio file unavailable")
 		return
 	}
-	types := map[string]string{"mp3": "audio/mpeg", "flac": "audio/flac", "m4a": "audio/mp4", "alac": "audio/mp4",
-		"aac": "audio/aac", "wav": "audio/wav", "ogg": "audio/ogg", "opus": "audio/ogg", "aif": "audio/aiff", "aiff": "audio/aiff", "wma": "audio/x-ms-wma"}
-	w.Header().Set("Content-Type", types[t.Format])
+	w.Header().Set("Content-Type", trackMimeType(t.Format))
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": trackFileName(t)}))
 	http.ServeContent(w, r, trackFileName(t), info.ModTime(), f)
 }
 
 func (s *Server) cover(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.store.Track(r.PathValue("id"))
+	s.coverTrack(w, r, r.PathValue("id"))
+}
+
+func (s *Server) coverTrack(w http.ResponseWriter, r *http.Request, id string) {
+	t, ok := s.store.Track(id)
 	if !ok || t.Artwork == "" {
 		http.NotFound(w, r)
 		return

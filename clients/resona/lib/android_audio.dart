@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/services.dart';
 import 'controller.dart';
+
+const androidAudioChannel = MethodChannel('app.resona/android_audio');
 
 class AndroidAudioHandler extends BaseAudioHandler {
   final MusicController controller;
@@ -35,7 +38,16 @@ class AndroidAudioHandler extends BaseAudioHandler {
           MediaControl.skipToNext,
           MediaControl.stop,
         ],
-        systemActions: const {MediaAction.seek},
+        systemActions: const {
+          MediaAction.play,
+          MediaAction.pause,
+          MediaAction.playPause,
+          MediaAction.skipToNext,
+          MediaAction.skipToPrevious,
+          MediaAction.seek,
+          MediaAction.fastForward,
+          MediaAction.rewind,
+        },
         androidCompactActionIndices: const [0, 1, 2],
         processingState: track == null
             ? AudioProcessingState.idle
@@ -62,6 +74,13 @@ class AndroidAudioHandler extends BaseAudioHandler {
   @override
   Future<void> seek(Duration position) =>
       controller.seek(position.inMilliseconds / 1000);
+  @override
+  Future<void> fastForward() =>
+      controller.seek(controller.position.inMilliseconds / 1000 + 10);
+  @override
+  Future<void> rewind() => controller.seek(
+    (controller.position.inMilliseconds / 1000 - 10).clamp(0, double.infinity),
+  );
   @override
   Future<void> skipToNext() => controller.next();
   @override
@@ -105,4 +124,58 @@ Future<void> initializeAndroidAudio(MusicController controller) async {
     interruptedTrack = null;
     if (controller.playing) unawaited(controller.toggle());
   });
+
+  androidAudioChannel.setMethodCallHandler((call) async {
+    if (call.method == 'outputsChanged' && call.arguments is Map) {
+      final args = Map<Object?, Object?>.from(call.arguments as Map);
+      final rawDevices = (args['devices'] as List? ?? const [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      controller.updateNativeAudioOutputs(
+        rawDevices,
+        bluetoothDisconnected: args['bluetoothDisconnected'] == true,
+      );
+    }
+  });
+  controller.onDlnaScanStart = () async {
+    try {
+      await androidAudioChannel.invokeMethod<void>('acquireMulticastLock');
+    } catch (_) {
+      /* MulticastLock is optional on hosts without the native Android channel. */
+    }
+  };
+  controller.onDlnaScanEnd = () async {
+    try {
+      await androidAudioChannel.invokeMethod<void>('releaseMulticastLock');
+    } catch (_) {
+      /* Ignore lock release failures when channel or lock is unavailable. */
+    }
+  };
+  controller.onOpenOutputSwitcher = () async {
+    try {
+      await androidAudioChannel.invokeMethod<void>('openOutputSwitcher');
+    } catch (_) {
+      /* Older Android versions or tests may not implement system output switcher. */
+    }
+  };
+  controller.onOpenBluetoothSettings = () async {
+    try {
+      await androidAudioChannel.invokeMethod<void>('openBluetoothSettings');
+    } catch (_) {
+      /* Ignore settings launch failure if no Bluetooth settings activity exists. */
+    }
+  };
+  try {
+    final initial = await androidAudioChannel.invokeListMethod<dynamic>(
+      'getAudioOutputs',
+    );
+    if (initial != null) {
+      controller.updateNativeAudioOutputs(
+        initial.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList(),
+      );
+    }
+  } catch (_) {
+    /* Older or mocked hosts may not expose android_audio method handlers. */
+  }
 }

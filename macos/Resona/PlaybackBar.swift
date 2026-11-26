@@ -1,5 +1,155 @@
 import SwiftUI
 
+import AVKit
+import SwiftUI
+
+struct MacAirPlayPicker: NSViewRepresentable {
+    @ObservedObject var player: PlayerModel
+
+    func makeCoordinator() -> Coordinator { Coordinator(player: player) }
+
+    func makeNSView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.isRoutePickerButtonBordered = false
+        picker.player = player.avPlayer
+        picker.delegate = context.coordinator
+        picker.setAccessibilityLabel("AirPlay 隔空播放")
+        applyColors(picker)
+        return picker
+    }
+
+    func updateNSView(_ nsView: AVRoutePickerView, context: Context) {
+        context.coordinator.player = player
+        if nsView.player !== player.avPlayer {
+            nsView.player = player.avPlayer
+        }
+        applyColors(nsView)
+    }
+
+    private func applyColors(_ picker: AVRoutePickerView) {
+        let ink = NSColor(Theme.ink)
+        let accent = NSColor(Theme.accent)
+        picker.setRoutePickerButtonColor(ink, for: .normal)
+        picker.setRoutePickerButtonColor(ink.withAlphaComponent(0.75), for: .normalHighlighted)
+        picker.setRoutePickerButtonColor(accent, for: .active)
+        picker.setRoutePickerButtonColor(accent.withAlphaComponent(0.8), for: .activeHighlighted)
+    }
+
+    final class Coordinator: NSObject, AVRoutePickerViewDelegate {
+        var player: PlayerModel
+        init(player: PlayerModel) { self.player = player }
+
+        func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+            Task { @MainActor in
+                player.prepareForAirPlayRouting()
+            }
+        }
+    }
+}
+
+struct MacAudioOutputPopover: View {
+    @EnvironmentObject private var player: PlayerModel
+
+    private var sortedOutputs: [AudioOutputDevice] {
+        let priority: (AudioOutputKind) -> Int = { kind in
+            switch kind {
+            case .bluetooth: return 0
+            case .airPlay: return 1
+            case .headphones: return 2
+            case .speaker: return 3
+            case .other: return 4
+            }
+        }
+        return player.availableOutputs.sorted {
+            let lhs = priority($0.kind), rhs = priority($1.kind)
+            if lhs != rhs { return lhs < rhs }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AirPlay 隔空播放").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                HStack(spacing: 10) {
+                    MacAirPlayPicker(player: player).frame(width: 28, height: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(player.airPlayActive ? "AirPlay 正在投送" : "选择 AirPlay 音箱或设备")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("点击左侧隔空播放图标切换房间的兼容音箱")
+                            .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .background(Theme.paper, in: RoundedRectangle(cornerRadius: 8))
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("蓝牙与本机输出").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                outputRow(
+                    title: "跟随系统默认",
+                    subtitle: player.selectedOutputUID == nil ? player.activeOutput.name : "使用 macOS 系统声音输出",
+                    symbol: "speaker.wave.2",
+                    selected: player.selectedOutputUID == nil
+                ) {
+                    player.selectAudioOutput(nil)
+                }
+                ForEach(sortedOutputs) { device in
+                    outputRow(
+                        title: device.name,
+                        subtitle: device.kind.label + (device.isDefault ? " · 系统默认" : ""),
+                        symbol: device.kind.symbol,
+                        selected: player.selectedOutputUID == device.id
+                    ) {
+                        player.selectAudioOutput(device.id)
+                    }
+                }
+            }
+
+            Divider()
+
+            Button {
+                player.openBluetoothSettings()
+            } label: {
+                Label("打开系统蓝牙设置…", systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 12.5))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(.borderless).foregroundStyle(Theme.accent)
+        }
+        .padding(16)
+        .frame(width: 290)
+        .foregroundStyle(Theme.ink)
+        .background(Theme.surface)
+        .onAppear { player.refreshAudioOutputs() }
+    }
+
+    private func outputRow(title: String, subtitle: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13))
+                    .frame(width: 20)
+                    .foregroundStyle(selected ? Theme.accent : Theme.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular)).lineLimit(1)
+                    Text(subtitle).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
+                }
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(selected ? Theme.selected : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+}
+
 struct DesktopPlaybackBar: View {
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var player: PlayerModel
@@ -7,10 +157,11 @@ struct DesktopPlaybackBar: View {
     @Binding var showingSettings: Bool
     @Binding var showQueue: Bool
     @State private var playerBarHovered = false
+    @State private var showOutputPicker = false
     @FocusState private var focusedControl: Control?
 
     private enum Control: Hashable {
-        case progress, artwork, previous, play, next, volume, favorite, mode, queue
+        case progress, artwork, previous, play, next, volume, favorite, mode, output, queue
     }
 
     private var showTrackInfo: Bool {
@@ -130,6 +281,16 @@ struct DesktopPlaybackBar: View {
                             .foregroundStyle(player.mode == .sequential ? Theme.ink : Theme.accent)
                     }.help(player.mode.title + "，点击切换").disabled(player.current == nil)
                         .accessibilityLabel(player.mode.title).focused($focusedControl, equals: .mode)
+                    Button { showOutputPicker.toggle() } label: {
+                        Image(systemName: player.airPlayActive ? "airplayaudio" : player.activeOutput.kind.symbol)
+                            .frame(width: 28, height: 36)
+                            .foregroundStyle(player.airPlayActive || player.activeOutput.kind == .bluetooth || player.selectedOutputUID != nil ? Theme.accent : Theme.ink)
+                    }.help("AirPlay 与蓝牙音频输出 · \(player.activeOutput.name)")
+                        .accessibilityLabel("音频输出 · \(player.activeOutput.name)")
+                        .focused($focusedControl, equals: .output)
+                        .popover(isPresented: $showOutputPicker, arrowEdge: .top) {
+                            MacAudioOutputPopover()
+                        }
                     Button { withAnimation(.easeOut(duration: 0.2)) { showQueue.toggle() } } label: {
                         Image(systemName: "list.bullet").frame(width: 28, height: 36)
                             .foregroundStyle(showQueue ? Theme.accent : Theme.ink)

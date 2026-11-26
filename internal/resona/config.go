@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Addr, DataDir, InboxDir, LibraryDir string
 	Username                            string
+	DLNABaseURL                         string
 	CookieSecure, Scrape                bool
 	ScanInterval                        time.Duration
 	TrustedProxies                      []netip.Prefix
@@ -23,9 +24,15 @@ func ConfigFromEnv() (Config, error) {
 	c := Config{
 		Addr: env("LISTEN_ADDR", ":8080"), DataDir: env("DATA_PATH", "./data"),
 		InboxDir: env("INBOX_PATH", "./music/inbox"), LibraryDir: env("LIBRARY_PATH", "./music/library"),
-		Username: env("ADMIN_USER", "admin"),
+		Username: env("ADMIN_USER", "admin"), DLNABaseURL: strings.TrimSpace(os.Getenv("DLNA_BASE_URL")),
 	}
 	var err error
+	if c.DLNABaseURL != "" {
+		c.DLNABaseURL, err = normalizeDLNABaseURL(c.DLNABaseURL)
+		if err != nil {
+			return c, fmt.Errorf("DLNA_BASE_URL: %w", err)
+		}
+	}
 	if c.CookieSecure, err = strconv.ParseBool(env("COOKIE_SECURE", "false")); err != nil {
 		return c, errors.New("COOKIE_SECURE must be true or false")
 	}

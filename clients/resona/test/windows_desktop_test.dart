@@ -7,7 +7,7 @@ import 'package:resona_client/controller.dart';
 import 'package:resona_client/windows_desktop.dart';
 
 class DesktopController extends MusicController {
-  int saves = 0, toggles = 0, nexts = 0, favorites = 0;
+  int saves = 0, toggles = 0, stops = 0, nexts = 0, favorites = 0;
   Completer<void>? saving;
 
   @override
@@ -19,6 +19,11 @@ class DesktopController extends MusicController {
   @override
   Future<void> toggle() async {
     toggles++;
+  }
+
+  @override
+  Future<void> stopPlayback() async {
+    stops++;
   }
 
   @override
@@ -167,6 +172,74 @@ void main() {
       c.saving!.complete();
       await exiting;
       expect(sent.where((call) => call.method == 'quit'), hasLength(1));
+    },
+  );
+
+  test(
+    'handles SMTC play/pause/stop and native audio output updates',
+    () async {
+      messenger.setMockMethodCallHandler(WindowsDesktop.channel, (call) async {
+        sent.add(call);
+        if (call.method == 'initialize') {
+          return {'enabled': false, 'locked': false, 'fontSize': 28.0};
+        }
+        if (call.method == 'audioOutputs') {
+          return [
+            {
+              'id': '{bt-guid}',
+              'name': 'WH-1000XM5',
+              'bluetooth': true,
+              'isDefault': true,
+            },
+            {
+              'id': '{spk-guid}',
+              'name': 'Speakers',
+              'bluetooth': false,
+              'isDefault': false,
+            },
+          ];
+        }
+        return null;
+      });
+
+      await desktop.initialize();
+      expect(c.activeBluetoothOutput?.name, 'WH-1000XM5');
+
+      await c.onOpenBluetoothSettings?.call();
+      await c.onOpenOutputSwitcher?.call();
+      expect(sent.any((call) => call.method == 'openBluetoothSettings'), isTrue);
+      expect(sent.any((call) => call.method == 'openSoundSettings'), isTrue);
+
+      c.current = Track({'id': 'one', 'title': 'First song'});
+      c.playing = false;
+      await native('play');
+      await native('play');
+      c.playing = true;
+      await native('play');
+      expect(c.toggles, 2);
+
+      await native('pause');
+      c.playing = false;
+      await native('pause');
+      expect(c.toggles, 3);
+
+      await native('stop');
+      expect(c.stops, 1);
+
+      c.playing = true;
+      await native('audioOutputsChanged', {
+        'devices': [
+          {
+            'id': '{spk-guid}',
+            'name': 'Speakers',
+            'bluetooth': false,
+            'isDefault': true,
+          },
+        ],
+        'bluetoothDisconnected': true,
+      });
+      expect(c.playing, isFalse);
+      expect(c.activeBluetoothOutput, isNull);
     },
   );
 }

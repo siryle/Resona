@@ -18,6 +18,8 @@ class DesktopIntegration {
                                        LPARAM lparam);
 
  private:
+  struct AudioState;
+
   using Value = flutter::EncodableValue;
   using Map = flutter::EncodableMap;
   static LRESULT CALLBACK LyricsProc(HWND window, UINT message, WPARAM wparam,
@@ -28,6 +30,8 @@ class DesktopIntegration {
   void Quit();
   void Action(const std::string& action, const std::string& argument = "");
   void Update(const Map& state);
+  void NotifyAudioOutputs(bool initial = false);
+  void UpdateSmtc();
   Map Preferences() const;
   bool SavePreferences();
   void PreferencesChanged();
@@ -58,6 +62,7 @@ class DesktopIntegration {
   int x_ = 0, y_ = 0;
   std::wstring title_ = L"Resona", artist_, album_, lyric_;
   std::string mode_ = "sequential";
+  std::unique_ptr<AudioState> audio_;
 };
 
 #endif

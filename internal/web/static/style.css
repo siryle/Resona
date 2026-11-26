@@ -2611,6 +2611,128 @@ input[type="range"] {
   box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
+.output-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.output-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.output-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.output-section-head h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.output-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.output-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  transition: background-color 140ms ease;
+}
+.output-item.dlna-row {
+  padding: 2px 4px;
+}
+.output-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 6px;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+}
+.output-item:hover,
+.output-item:focus-within {
+  background: var(--hover);
+}
+.output-item[aria-current="true"] {
+  background: var(--selected);
+  color: var(--accent);
+}
+.output-item:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.output-copy {
+  flex: 1;
+  min-width: 0;
+}
+.output-copy strong,
+.output-copy small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.output-copy strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.output-copy small {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.output-tag {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.output-item[aria-current="true"] .output-tag {
+  color: var(--accent);
+  font-weight: 600;
+}
+.output-empty {
+  font-size: 12.5px;
+  margin: 4px 0;
+}
+.output-hint {
+  margin: 8px 0 4px;
+  font-size: 11.5px;
+}
+.output-advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.output-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.output-form input {
+  flex: 1;
+  min-width: 0;
+}
 .queue-header {
   display: flex;
   align-items: center;

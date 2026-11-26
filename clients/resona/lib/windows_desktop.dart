@@ -30,6 +30,21 @@ class WindowsDesktop extends ChangeNotifier {
       _preferences(preferences);
       if (_disposed) return;
       _ready = true;
+      controller.onOpenBluetoothSettings = () async {
+        try {
+          await channel.invokeMethod<void>('openBluetoothSettings');
+        } catch (_) {
+          /* Ignore on hosts that cannot open Windows Bluetooth settings. */
+        }
+      };
+      controller.onOpenOutputSwitcher = () async {
+        try {
+          await channel.invokeMethod<void>('openSoundSettings');
+        } catch (_) {
+          /* Ignore on hosts that cannot open Windows Sound settings. */
+        }
+      };
+      await refreshAudioOutputs();
       controller.addListener(_update);
       _update();
       if (preferences?['trayAvailable'] == false) {
@@ -123,6 +138,19 @@ class WindowsDesktop extends ChangeNotifier {
     );
   }
 
+  Future<void> refreshAudioOutputs() async {
+    try {
+      final raw = await channel.invokeListMethod<dynamic>('audioOutputs');
+      if (raw != null && !_disposed) {
+        controller.updateNativeAudioOutputs(
+          raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList(),
+        );
+      }
+    } catch (_) {
+      /* Older or mocked hosts may omit Windows CoreAudio output enumeration. */
+    }
+  }
+
   Future<void> _handle(MethodCall call) async {
     if (_disposed) return;
     final c = controller;
@@ -131,10 +159,28 @@ class WindowsDesktop extends ChangeNotifier {
         _preferences(call.arguments as Map);
       case 'toggle':
         if (c.current != null && !c.opening) await c.toggle();
+      case 'play':
+        if (c.current != null && !c.opening && !c.playing) await c.toggle();
+      case 'pause':
+        if (c.current != null && !c.opening && c.playing) await c.toggle();
+      case 'stop':
+        await c.stopPlayback();
       case 'previous':
         await c.next(delta: -1);
       case 'next':
         await c.next();
+      case 'audioOutputsChanged':
+        if (call.arguments is Map) {
+          final args = Map<Object?, Object?>.from(call.arguments as Map);
+          final rawDevices = (args['devices'] as List? ?? const [])
+              .whereType<Map>()
+              .map((item) => Map<String, dynamic>.from(item))
+              .toList();
+          c.updateNativeAudioOutputs(
+            rawDevices,
+            bluetoothDisconnected: args['bluetoothDisconnected'] == true,
+          );
+        }
       case 'favorite':
         final track = c.current;
         if (track != null &&

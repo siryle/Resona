@@ -123,6 +123,7 @@ async function renewSessionIfNeeded(force = false) {
 function showLogin() {
   resetSelection();
   setQueueOpen(false, false);
+  outputController?.onLogout();
   setExpanded(false, false);
   listening.controller?.abort();
   listening.request++;
@@ -1682,22 +1683,40 @@ $("rescrape-button").addEventListener("click", async () => {
     $("rescrape-button").disabled = false;
   }
 });
-function play(track, queue, autoplay = true) {
+function playTrackLocally(track, queue, autoplay = true, startPosition = 0) {
+  const request = state.playbackRequest;
+  audio.src = `/api/v1/tracks/${track.id}/stream`;
+  audio.volume = Number($("volume").value);
+  if (startPosition > 0) {
+    audio.addEventListener(
+      "loadedmetadata",
+      () => {
+        if (request === state.playbackRequest && Number.isFinite(audio.duration)) {
+          audio.currentTime = Math.min(startPosition, audio.duration);
+        }
+      },
+      { once: true },
+    );
+  }
+  if (autoplay)
+    audio
+      .play()
+      .catch(error => playbackRejected(error, request));
+}
+function play(track, queue, autoplay = true, startPosition = 0) {
   const request = ++state.playbackRequest;
   state.linkRetried = false;
   state.playbackRequested = autoplay;
-  state.playbackPosition = 0;
+  state.playbackPosition = startPosition;
   state.current = track;
   state.queue = [...queue];
   renderPlaybackControls();
   renderQueue();
-  audio.src = `/api/v1/tracks/${track.id}/stream`;
-  audio.volume = Number($("volume").value);
   $("player-title").textContent = track.title;
   $("player-artist").textContent = [track.artist, track.album].filter(Boolean).join(" · ");
   $("player-format").textContent = track.format;
   $("duration").textContent = time(track.duration);
-  $("elapsed").textContent = "0:00";
+  $("elapsed").textContent = time(startPosition);
   $("seek").value = "0";
   renderPlayerFavorite();
   renderPlayerProgress();
@@ -1713,16 +1732,20 @@ function play(track, queue, autoplay = true) {
   loadListeningLyrics();
   $("player-bar").hidden = false;
   document.body.classList.add("has-player");
-  if ("mediaSession" in navigator)
+  if ("mediaSession" in navigator) {
+    const coverSrc = track.artwork ? new URL(track.artwork, location.href).href : "";
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title,
       artist: track.artist,
       album: track.album,
+      artwork: coverSrc ? [{ src: coverSrc }] : [],
     });
-  if (autoplay)
-    audio
-      .play()
-      .catch(error => playbackRejected(error, request));
+  }
+  if (outputController?.isCasting()) {
+    outputController.castTrack(track, startPosition);
+    return;
+  }
+  playTrackLocally(track, queue, autoplay, startPosition);
 }
 function playbackRejected(error, request) {
   if (request !== state.playbackRequest || !state.current || error.name === "AbortError" || audio.error) return;
@@ -1788,7 +1811,7 @@ function renderListeningTrack() {
   $("listening-artist").textContent = state.current.artist;
   $("listening-album").textContent = state.current.album;
   artwork($("listening-art"), state.current);
-  $("listening-record").classList.toggle("spinning", !audio.paused);
+  $("listening-record").classList.toggle("spinning", !(outputController ? outputController.isPaused() : audio.paused));
 }
 async function loadListeningLyrics(force = false) {
   const track = state.current;
@@ -1859,7 +1882,8 @@ async function loadListeningLyrics(force = false) {
 function updateListeningLyrics() {
   renderPlayerLyrics();
   if (!listening.expanded || !listening.lines.length) return;
-  const active = ResonaLyrics.activeAt(listening.lines, audio.currentTime);
+  const currentTime = outputController ? outputController.currentPosition() : audio.currentTime;
+  const active = ResonaLyrics.activeAt(listening.lines, currentTime);
   const list = $("listening-lyrics-list");
   if (active !== listening.active) {
     listening.active = active;
@@ -1891,8 +1915,10 @@ function renderPlayerFavorite() {
   $("player-favorite").title = label;
 }
 function renderPlayerProgress() {
-  const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
-  const position = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+  const rawDuration = outputController ? outputController.currentDuration() : audio.duration;
+  const rawPosition = outputController ? outputController.currentPosition() : audio.currentTime;
+  const duration = Number.isFinite(rawDuration) ? rawDuration : 0;
+  const position = Number.isFinite(rawPosition) ? rawPosition : 0;
   const progress = duration > 0 ? Math.min(1000, position / duration * 1000) : 0;
   $("seek").disabled = duration <= 0;
   $("seek").value = String(progress);
@@ -1902,8 +1928,10 @@ function renderPlayerProgress() {
   $("duration").textContent = time(duration);
 }
 function renderPlayerLyrics() {
-  const lines = ResonaLyrics.playbackLines(listening.lines, audio.currentTime);
-  const showLyrics = lines.length > 0 && !audio.paused &&
+  const currentTime = outputController ? outputController.currentPosition() : audio.currentTime;
+  const paused = outputController ? outputController.isPaused() : audio.paused;
+  const lines = ResonaLyrics.playbackLines(listening.lines, currentTime);
+  const showLyrics = lines.length > 0 && !paused &&
     !$("player-bar").matches(":hover, :focus-within") &&
     !window.matchMedia("(hover: none)").matches;
   $("player-metadata").hidden = showLyrics;
@@ -1934,6 +1962,10 @@ for (const event of ["wheel", "touchstart", "pointerdown", "keydown"])
     { passive: true },
   );
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && $("output-panel") && !$("output-panel").hidden) {
+    outputController?.setPanelOpen(false);
+    return;
+  }
   if (event.key === "Escape" && !$("queue-panel").hidden) {
     setQueueOpen(false);
     return;
@@ -2041,6 +2073,7 @@ function renderQueue() {
 }
 function setQueueOpen(open, focus = true) {
   open = Boolean(open && state.queue.length && state.user);
+  if (open) outputController?.setPanelOpen(false, false);
   $("queue-panel").hidden = !open;
   $("queue-toggle").setAttribute("aria-expanded", String(open));
   if (open) {
@@ -2207,8 +2240,24 @@ $("select-all-tracks").addEventListener("change", () => {
     renderBulkControls();
   }
 });
+const outputController = globalThis.ResonaOutput?.createOutputController({
+  $,
+  el,
+  api,
+  audio,
+  state,
+  toast,
+  playTrackLocally,
+  skip,
+  renderPlaybackControls,
+  renderPlayerProgress,
+  updateListeningLyrics,
+  setQueueOpen,
+});
+
 $("play-pause").addEventListener("click", () => {
-  if (audio.paused) audio.play().catch((e) => toast(e.message));
+  if (outputController) outputController.togglePlayPause();
+  else if (audio.paused) audio.play().catch((e) => toast(e.message));
   else audio.pause();
 });
 $("previous").addEventListener("click", () => skip(-1));
@@ -2220,50 +2269,111 @@ $("player-favorite").addEventListener("click", () => {
       .catch((e) => toast(e.message));
 });
 $("volume").addEventListener("input", () => {
-  audio.volume = Number($("volume").value);
+  const value = Number($("volume").value);
+  if (outputController) outputController.setVolume(value);
+  else audio.volume = value;
 });
 $("seek").addEventListener("input", () => {
-  if (Number.isFinite(audio.duration))
-    audio.currentTime = (Number($("seek").value) / 1000) * audio.duration;
+  const dur = outputController ? outputController.currentDuration() : audio.duration;
+  if (Number.isFinite(dur) && dur > 0) {
+    const target = (Number($("seek").value) / 1000) * dur;
+    if (outputController) outputController.seekTo(target);
+    else audio.currentTime = target;
+  }
   renderPlayerProgress();
 });
 $("seek").addEventListener("keydown", (event) => {
   if (!["ArrowLeft", "ArrowRight", " "].includes(event.key)) return;
   event.preventDefault();
   if (event.key === " ") $("play-pause").click();
-  else if (Number.isFinite(audio.duration))
-    audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + (event.key === "ArrowRight" ? 5 : -5)));
+  else {
+    const dur = outputController ? outputController.currentDuration() : audio.duration;
+    const pos = outputController ? outputController.currentPosition() : audio.currentTime;
+    if (Number.isFinite(dur) && dur > 0) {
+      const target = Math.max(0, Math.min(dur, pos + (event.key === "ArrowRight" ? 5 : -5)));
+      if (outputController) outputController.seekTo(target);
+      else audio.currentTime = target;
+    }
+  }
 });
 audio.addEventListener("play", () => {
   state.playbackRequested = true;
-  $("play-symbol").setAttribute("d", "M8 5h2v14H8Zm6 0h2v14h-2Z");
-  $("play-pause").setAttribute("aria-label", "暂停");
-  $("listening-record").classList.add("spinning");
+  if (outputController) outputController.syncPlayVisuals();
+  else {
+    $("play-symbol").setAttribute("d", "M8 5h2v14H8Zm6 0h2v14h-2Z");
+    $("play-pause").setAttribute("aria-label", "暂停");
+    $("listening-record").classList.add("spinning");
+  }
   renderPlayerLyrics();
 });
 audio.addEventListener("pause", () => {
   if (!audio.error) state.playbackRequested = false;
-  $("play-symbol").setAttribute("d", "m9 5 11 7-11 7Z");
-  $("play-pause").setAttribute("aria-label", "播放");
-  $("listening-record").classList.remove("spinning");
+  if (outputController) outputController.syncPlayVisuals();
+  else {
+    $("play-symbol").setAttribute("d", "m9 5 11 7-11 7Z");
+    $("play-pause").setAttribute("aria-label", "播放");
+    $("listening-record").classList.remove("spinning");
+  }
   renderPlayerLyrics();
 });
-audio.addEventListener("durationchange", renderPlayerProgress);
+audio.addEventListener("durationchange", () => {
+  renderPlayerProgress();
+  outputController?.updateMediaSession();
+});
 audio.addEventListener("ended", () => skip(1, true));
 audio.addEventListener("error", playbackFailed);
 audio.addEventListener("timeupdate", () => {
   if (Number.isFinite(audio.currentTime) && !audio.error) state.playbackPosition = audio.currentTime;
   updateListeningLyrics();
   renderPlayerProgress();
+  outputController?.updateMediaSession();
 });
 if ("mediaSession" in navigator) {
-  for (const [action, handler] of [
-    ["play", () => audio.play().catch((e) => toast(e.message))],
-    ["pause", () => audio.pause()],
-    ["previoustrack", () => skip(-1)],
-    ["nexttrack", () => skip(1)],
-  ])
-    navigator.mediaSession.setActionHandler(action, handler);
+  const safeSetHandler = (action, handler) => {
+    try {
+      navigator.mediaSession.setActionHandler(action, handler);
+    } catch {}
+  };
+  safeSetHandler("play", () => {
+    if (outputController?.isCasting()) {
+      if (outputController.isPaused()) outputController.togglePlayPause();
+    } else {
+      audio.play().catch((e) => toast(e.message));
+    }
+  });
+  safeSetHandler("pause", () => {
+    if (outputController?.isCasting()) {
+      if (!outputController.isPaused()) outputController.togglePlayPause();
+    } else {
+      audio.pause();
+    }
+  });
+  safeSetHandler("stop", () => {
+    if (outputController?.isCasting()) outputController.stopCasting({ restoreLocal: false });
+    else audio.pause();
+  });
+  safeSetHandler("previoustrack", () => skip(-1));
+  safeSetHandler("nexttrack", () => skip(1));
+  safeSetHandler("seekto", (details) => {
+    if (details && Number.isFinite(details.seekTime)) {
+      if (outputController) outputController.seekTo(details.seekTime);
+      else audio.currentTime = details.seekTime;
+    }
+  });
+  safeSetHandler("seekbackward", (details) => {
+    const offset = details?.seekOffset || 10;
+    const pos = outputController ? outputController.currentPosition() : audio.currentTime;
+    if (outputController) outputController.seekTo(Math.max(0, pos - offset));
+    else audio.currentTime = Math.max(0, audio.currentTime - offset);
+  });
+  safeSetHandler("seekforward", (details) => {
+    const offset = details?.seekOffset || 10;
+    const dur = outputController ? outputController.currentDuration() : audio.duration;
+    const pos = outputController ? outputController.currentPosition() : audio.currentTime;
+    const target = Number.isFinite(dur) && dur > 0 ? Math.min(dur, pos + offset) : pos + offset;
+    if (outputController) outputController.seekTo(target);
+    else audio.currentTime = target;
+  });
 }
 const THEME_STORAGE_KEY = "resona_theme";
 const darkMedia =

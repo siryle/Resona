@@ -7,7 +7,9 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 
 import 'api.dart';
+import 'audio_output.dart';
 import 'controller.dart';
+import 'dlna.dart';
 import 'android_audio.dart';
 import 'track_selection.dart';
 import 'lyrics.dart';
@@ -2416,6 +2418,15 @@ class _DesktopPlayerState extends State<DesktopPlayer> {
         ),
         const SizedBox(width: 8),
         control(
+          '音频输出 · ${c.activeOutputLabel}',
+          _audioOutputIcon(c),
+          () => showAudioOutputSheet(context, c),
+          color: c.isCastingDlna || c.activeBluetoothOutput != null
+              ? scheme.primary
+              : null,
+        ),
+        const SizedBox(width: 8),
+        control(
           '播放列表',
           Icons.queue_music,
           widget.onQueue ?? () => showQueue(context, c),
@@ -2992,7 +3003,9 @@ class MiniPlayer extends StatelessWidget {
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
                           Text(
-                            track.artist,
+                            c.isCastingDlna || c.activeBluetoothOutput != null
+                                ? '${track.artist} · ${c.activeOutputLabel}'
+                                : track.artist,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodySmall
@@ -3022,6 +3035,15 @@ class MiniPlayer extends StatelessWidget {
                   tooltip: '下一首',
                   onPressed: () => c.next(),
                   icon: const Icon(Icons.skip_next),
+                ),
+                IconButton(
+                  tooltip: '音频输出',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => showAudioOutputSheet(context, c),
+                  color: c.isCastingDlna || c.activeBluetoothOutput != null
+                      ? scheme.primary
+                      : null,
+                  icon: Icon(_audioOutputIcon(c)),
                 ),
                 IconButton(
                   tooltip: '播放列表',
@@ -3062,10 +3084,23 @@ Future<void> showPlayer(
             children: [
               Row(
                 children: [
+                  Text(
+                    '正在播放',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      '正在播放',
-                      style: Theme.of(context).textTheme.titleLarge,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: ActionChip(
+                        avatar: Icon(_audioOutputIcon(c), size: 18),
+                        label: Text(
+                          c.activeOutputLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onPressed: () => showAudioOutputSheet(context, c),
+                      ),
                     ),
                   ),
                   IconButton(
@@ -3298,6 +3333,335 @@ class _LyricViewState extends State<LyricView> {
         onTap: lines[i].seconds == null
             ? null
             : () => widget.seek(lines[i].seconds!.clamp(0, double.infinity)),
+      ),
+    );
+  }
+}
+
+IconData _audioOutputIcon(MusicController c) {
+  if (c.isCastingDlna) return Icons.cast_connected;
+  if (c.activeBluetoothOutput != null) return Icons.bluetooth_audio;
+  return Icons.cast;
+}
+
+IconData _localOutputIcon(AudioOutputType type) => switch (type) {
+  AudioOutputType.bluetooth => Icons.bluetooth_audio,
+  AudioOutputType.headphones => Icons.headphones,
+  AudioOutputType.usb => Icons.usb,
+  AudioOutputType.speaker => Icons.speaker,
+  AudioOutputType.systemDefault => Icons.surround_sound,
+  AudioOutputType.other => Icons.volume_up,
+};
+
+Future<void> showAudioOutputSheet(
+  BuildContext context,
+  MusicController c,
+) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  useSafeArea: true,
+  showDragHandle: true,
+  constraints: const BoxConstraints(maxWidth: 560),
+  builder: (context) => _AudioOutputSheet(controller: c),
+);
+
+class _AudioOutputSheet extends StatefulWidget {
+  const _AudioOutputSheet({required this.controller});
+  final MusicController controller;
+
+  @override
+  State<_AudioOutputSheet> createState() => _AudioOutputSheetState();
+}
+
+class _AudioOutputSheetState extends State<_AudioOutputSheet> {
+  final TextEditingController _urlController = TextEditingController();
+  bool _adding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.controller.dlnaDevices.isEmpty &&
+        !widget.controller.dlnaScanning) {
+      unawaited(widget.controller.scanDlnaDevices());
+    }
+  }
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addManual() async {
+    if (_adding) return;
+    setState(() => _adding = true);
+    final ok = await widget.controller.addManualDlnaDevice(_urlController.text);
+    if (!mounted) return;
+    setState(() => _adding = false);
+    if (ok) _urlController.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.78,
+        ),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            4,
+            20,
+            20 + MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: AnimatedBuilder(
+            animation: c,
+            builder: (context, _) {
+              final DlnaDevice? activeDlna = c.activeDlnaDevice;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '音频输出',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '当前：${c.activeOutputLabel}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '关闭',
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            '本机与蓝牙设备',
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                          const SizedBox(height: 6),
+                          for (final LocalAudioOutput output in c.localOutputs)
+                            ListTile(
+                              dense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              leading: Icon(_localOutputIcon(output.type)),
+                              title: Text(
+                                output.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(
+                                output.isDefault &&
+                                        output.type !=
+                                            AudioOutputType.systemDefault
+                                    ? '${output.typeLabel} · 系统默认'
+                                    : output.typeLabel,
+                              ),
+                              trailing: activeDlna == null && output.isActive
+                                  ? Icon(Icons.check, color: scheme.primary)
+                                  : null,
+                              onTap: () {
+                                if (Platform.isWindows || activeDlna != null) {
+                                  unawaited(c.selectLocalOutput(output));
+                                } else {
+                                  final openSwitcher = c.onOpenOutputSwitcher;
+                                  if (openSwitcher != null) {
+                                    unawaited(openSwitcher());
+                                  }
+                                }
+                              },
+                            ),
+                          if (c.onOpenOutputSwitcher != null ||
+                              c.onOpenBluetoothSettings != null) ...[
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                if (c.onOpenOutputSwitcher != null)
+                                  OutlinedButton.icon(
+                                    onPressed: () => unawaited(
+                                      c.onOpenOutputSwitcher!(),
+                                    ),
+                                    icon: const Icon(Icons.tune, size: 18),
+                                    label: Text(
+                                      Platform.isWindows
+                                          ? '系统声音设置'
+                                          : '系统音频切换',
+                                    ),
+                                  ),
+                                if (c.onOpenBluetoothSettings != null)
+                                  OutlinedButton.icon(
+                                    onPressed: () => unawaited(
+                                      c.onOpenBluetoothSettings!(),
+                                    ),
+                                    icon: const Icon(Icons.bluetooth, size: 18),
+                                    label: const Text('蓝牙设置'),
+                                  ),
+                              ],
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'DLNA 投屏设备',
+                                  style: Theme.of(context).textTheme.labelLarge
+                                      ?.copyWith(color: scheme.onSurfaceVariant),
+                                ),
+                              ),
+                              if (activeDlna != null)
+                                TextButton(
+                                  onPressed: () =>
+                                      unawaited(c.selectDlnaDevice(null)),
+                                  child: const Text('停止投屏'),
+                                ),
+                              TextButton.icon(
+                                onPressed: c.dlnaScanning
+                                    ? null
+                                    : () => unawaited(c.scanDlnaDevices()),
+                                icon: c.dlnaScanning
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.refresh, size: 18),
+                                label: Text(c.dlnaScanning ? '扫描中' : '扫描'),
+                              ),
+                            ],
+                          ),
+                          if (c.dlnaError != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text(
+                                c.dlnaError!,
+                                style: TextStyle(color: scheme.error),
+                              ),
+                            ),
+                          if (c.dlnaDevices.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Text(
+                                c.dlnaScanning
+                                    ? '正在局域网内搜索 DLNA 渲染器…'
+                                    : '未发现局域网 DLNA 设备，可确认同一 Wi-Fi 后重新扫描，或手动输入描述 XML 地址。',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
+                              ),
+                            )
+                          else
+                            for (final DlnaDevice dev in c.dlnaDevices)
+                              ListTile(
+                                dense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                leading: Icon(
+                                  activeDlna?.udn == dev.udn
+                                      ? Icons.cast_connected
+                                      : Icons.tv,
+                                  color: activeDlna?.udn == dev.udn
+                                      ? scheme.primary
+                                      : null,
+                                ),
+                                title: Text(
+                                  dev.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: [dev.manufacturer, dev.model]
+                                        .where((s) => s.isNotEmpty)
+                                        .isEmpty
+                                    ? null
+                                    : Text(
+                                        [
+                                          dev.manufacturer,
+                                          dev.model,
+                                        ].where((s) => s.isNotEmpty).join(' · '),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                trailing: activeDlna?.udn == dev.udn
+                                    ? Icon(Icons.check, color: scheme.primary)
+                                    : null,
+                                onTap: () => unawaited(
+                                  c.selectDlnaDevice(
+                                    activeDlna?.udn == dev.udn ? null : dev,
+                                  ),
+                                ),
+                              ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _urlController,
+                                  decoration: const InputDecoration(
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                    labelText: '手动添加 DLNA 设备',
+                                    hintText:
+                                        'http://192.168.1.50:49152/description.xml',
+                                  ),
+                                  keyboardType: TextInputType.url,
+                                  onSubmitted: (_) => unawaited(_addManual()),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              FilledButton.tonal(
+                                onPressed: _adding
+                                    ? null
+                                    : () => unawaited(_addManual()),
+                                child: const Text('添加'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
       ),
     );
   }

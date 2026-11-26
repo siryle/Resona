@@ -217,3 +217,21 @@ PUT 提交完整配置对象（秘密字段允许留空），拒绝未知字段�
 直链仍通过 `/app/chrome/downurl` 的 RSA 加密协议获取，无 Web GET 的 200 MB 限制。需要额外 Cookie 的 CDN 地址被拒绝，Cookie 不随重定向传给客户端。上游报告登录失效时清除 Cookie、标记曲目不可用并提示重新扫码，不进行 Open API 令牌刷新。升级旧版接入时保留曲目、STRM 与收藏，但须重新扫码登录。
 
 音乐库和插件收件目录中由服务生成、整理、复制或移动的目录和文件显式设置 `0777`；数据卷中的凭据、索引与日志继续使用各自的私有权限。
+
+## DLNA 投屏（服务端）
+
+管理与控制接口均需 Resona 会话，写入操作受同源验证保护；仅支持局域网 / 私网 HTTP 设备描述与控制地址，校验并阻断回环地址、链路本地地址（云主机元数据段）及重定向，防止 SSRF。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/v1/dlna/devices` | 返回局域网发现的或手动添加的 DLNA `MediaRenderer` 设备、`base_url` 与 `detected_base_url`；传 `?refresh=1` 触发 SSDP 重新扫描 |
+| POST | `/api/v1/dlna/devices/manual` | 提交 `{"location":"http://..."}` 解析并持久化手动添加的设备描述 XML |
+| DELETE | `/api/v1/dlna/devices/manual` | 提交 `{"location":"..."}` 或 `{"udn":"..."}` 移除已保存的手动设备 |
+| GET | `/api/v1/dlna/settings` | 读取持久化的 `base_url`、环境变量 `env_base_url`（`DLNA_BASE_URL`）、自动探测地址与手动设备地址列表 |
+| PUT | `/api/v1/dlna/settings` | 保存 `{"base_url":"http://..."}`，用于覆盖 Docker 桥接网络或反向代理场景下的服务端回调基址 |
+| GET | `/api/v1/dlna/status` | 轮询当前投屏设备的 `AVTransport:1` / `RenderingControl:1` 播放状态、进度、时长、音量与静音状态 |
+| POST | `/api/v1/dlna/play` | 提交 `{"udn":"...","track_id":"...","position":0,"base_url":""}`，签发临时媒体票据并发送 `SetAVTransportURI` / `Seek` / `Play` |
+| POST | `/api/v1/dlna/control` | 提交 `{"action":"play\|pause\|stop\|seek\|volume\|mute", ...}` 控制当前活跃渲染器 |
+| POST | `/api/v1/dlna/ticket` | 提交 `{"track_id":"..."}`，为局域网原生客户端签发单曲限时 `ticket`、`media_path`、`cover_path`、`mime` 与 `expires_at` |
+| GET | `/api/v1/dlna/media/{ticket}/{filename}` | 匿名受限音频投屏入口，仅凭随机 32 字节票据访问单曲；本地支持 HTTP Range，网盘返回短时 CDN `302`；退出登录时全部吊销 |
+| GET | `/api/v1/dlna/cover/{ticket}` | 匿名受限封面入口，随对应媒体票据失效或退出登录时一并吊销 |

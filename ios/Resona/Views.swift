@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 struct LoginView: View {
@@ -430,7 +431,15 @@ struct MiniPlayer: View {
                         Artwork(path: track.artwork, radius: 7).frame(width: 42, height: 42)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(track.title).font(.subheadline.weight(.medium)).lineLimit(1).foregroundStyle(Theme.ink)
-                            Text(track.artist).font(.caption).foregroundStyle(Theme.muted).lineLimit(1)
+                            HStack(spacing: 5) {
+                                Text(track.artist).lineLimit(1)
+                                if player.activeOutput.kind == .airPlay || player.activeOutput.kind == .bluetooth {
+                                    Text("·").foregroundStyle(Theme.border)
+                                    Label(player.activeOutput.name, systemImage: player.activeOutput.kind.symbol)
+                                        .lineLimit(1)
+                                        .foregroundStyle(Theme.accent)
+                                }
+                            }.font(.caption).foregroundStyle(Theme.muted)
                         }
                         Spacer(minLength: 0)
                     }.contentShape(Rectangle())
@@ -516,7 +525,7 @@ struct NowPlayingView: View {
                         .background(Theme.surface, in: Capsule())
                         .overlay(Capsule().stroke(Theme.border))
                         Spacer()
-                        Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
+                        AirPlayRoutePicker().frame(width: 44, height: 44)
                     }
                     if let track = player.current {
                         Group {
@@ -583,11 +592,36 @@ struct NowPlayingView: View {
                             .foregroundStyle(Theme.sageInk)
                             .padding(.horizontal, 12).padding(.vertical, 5)
                             .background(Theme.sage, in: Capsule())
+                        if player.activeOutput.kind == .airPlay || player.activeOutput.kind == .bluetooth {
+                            Label("\(player.activeOutput.kind.label) · \(player.activeOutput.name)",
+                                  systemImage: player.activeOutput.kind.symbol)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(Theme.accent)
+                                .padding(.horizontal, 12).padding(.vertical, 5)
+                                .background(Theme.surface, in: Capsule())
+                                .overlay(Capsule().stroke(Theme.border))
+                        }
                     }
                 }.padding(.horizontal, 30).padding(.top, 18).padding(.bottom, 35).frame(maxWidth: 500).frame(maxWidth: .infinity)
             }.background(LinearGradient(colors: [Theme.listeningStart, Theme.paper, Theme.listeningEnd], startPoint: .topLeading, endPoint: .bottomTrailing))
         }.foregroundStyle(Theme.ink)
             .sheet(isPresented: $showQueue) { PlaybackQueueView() }
+    }
+}
+
+struct AirPlayRoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.prioritizesVideoDevices = false
+        picker.tintColor = UIColor(Theme.secondary)
+        picker.activeTintColor = UIColor(Theme.accent)
+        picker.accessibilityLabel = "AirPlay 与蓝牙音频输出"
+        return picker
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+        uiView.tintColor = UIColor(Theme.secondary)
+        uiView.activeTintColor = UIColor(Theme.accent)
     }
 }
 

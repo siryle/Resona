@@ -10,7 +10,9 @@ import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:path_provider/path_provider.dart';
 
 import 'api.dart';
+import 'audio_output.dart';
 import 'cache.dart';
+import 'dlna.dart';
 
 enum TrackBatchAction { download, favorite }
 
@@ -18,11 +20,14 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   static const _credentials = FlutterSecureStorage();
   final Directory? supportDirectory;
   final Duration sessionRenewalInterval;
+  final DlnaClient dlnaClient;
   MusicController({
     this.supportDirectory,
     this.sessionRenewalInterval = const Duration(hours: 12),
-  });
+    DlnaClient? dlnaClient,
+  }) : dlnaClient = dlnaClient ?? DlnaClient();
   Timer? _sessionRenewalTimer;
+  Timer? _dlnaPollTimer;
   DateTime? _lastSessionRenewal;
   bool _renewingSession = false;
   bool _manualOffline = false;
@@ -34,8 +39,33 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   ResonaAPI? api;
   PlaybackCache? cache;
   PlaybackRelay? relay;
+  DlnaMediaRelay? _dlnaRelay;
   Player? _player;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
+  List<DlnaDevice> dlnaDevices = [];
+  bool dlnaScanning = false;
+  DlnaDevice? activeDlnaDevice;
+  String? dlnaError;
+  bool _dlnaManualStop = false;
+  String _lastDlnaState = '';
+  String? _dlnaActiveTrackId;
+  List<AudioDevice> _mpvDevices = [];
+  AudioDevice? _activeMpvDevice;
+  List<Map<String, dynamic>> _nativeOutputs = [];
+  List<LocalAudioOutput> localOutputs = const [
+    LocalAudioOutput(
+      id: 'auto',
+      name: '跟随系统默认输出',
+      type: AudioOutputType.systemDefault,
+      isDefault: true,
+      isActive: true,
+    ),
+  ];
+  String selectedLocalOutputId = 'auto';
+  Future<void> Function()? onDlnaScanStart;
+  Future<void> Function()? onDlnaScanEnd;
+  Future<void> Function()? onOpenBluetoothSettings;
+  Future<void> Function()? onOpenOutputSwitcher;
   List<Track> tracks = [];
   List<Track> queue = [];
   List<Map<String, dynamic>> collections = [];
@@ -79,6 +109,33 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       ? '列表循环'
       : '顺序播放';
   Future<bool> Function()? activateAudio;
+  bool get isCastingDlna => activeDlnaDevice != null;
+  LocalAudioOutput? get activeBluetoothOutput {
+    final explicit = localOutputs
+        .where((o) => o.id == selectedLocalOutputId && o.type == AudioOutputType.bluetooth)
+        .firstOrNull;
+    if (explicit != null) return explicit;
+    if (selectedLocalOutputId != 'auto') return null;
+    final defaultBt = localOutputs
+        .where((o) => o.isDefault && o.type == AudioOutputType.bluetooth)
+        .firstOrNull;
+    if (defaultBt != null) return defaultBt;
+    if (Platform.isAndroid) {
+      return localOutputs.where((o) => o.type == AudioOutputType.bluetooth).firstOrNull;
+    }
+    return null;
+  }
+
+  String get activeOutputLabel {
+    if (activeDlnaDevice != null) return 'DLNA · ${activeDlnaDevice!.name}';
+    if (activeBluetoothOutput != null) return '蓝牙 · ${activeBluetoothOutput!.name}';
+    if (selectedLocalOutputId != 'auto') {
+      final selected = localOutputs.where((o) => o.id == selectedLocalOutputId).firstOrNull;
+      if (selected != null) return selected.name;
+    }
+    return '跟随系统';
+  }
+
   Session? get session => api?.session;
   bool get authenticated => session?.token.isNotEmpty == true;
   String get filterTitle => artist.isNotEmpty
@@ -623,6 +680,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     _player = instance;
     _subscriptions.addAll([
       instance.stream.playing.listen((value) {
+        if (isCastingDlna) return;
         playing = value;
         if (!value && !busy && !opening && !_needsPlaybackOpen) {
           unawaited(savePlaybackState());
@@ -630,7 +688,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         notifyListeners();
       }),
       instance.stream.position.listen((value) {
-        if (busy || opening || _needsPlaybackOpen) return;
+        if (isCastingDlna || busy || opening || _needsPlaybackOpen) return;
         position = value;
         if ((position - _savedPosition).abs() >= const Duration(seconds: 5)) {
           unawaited(savePlaybackState());
@@ -638,22 +696,329 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         notifyListeners();
       }),
       instance.stream.duration.listen((value) {
-        if (opening || _needsPlaybackOpen) return;
+        if (isCastingDlna || opening || _needsPlaybackOpen) return;
         duration = value;
         notifyListeners();
       }),
       instance.stream.completed.listen((value) {
+        if (isCastingDlna) return;
         if (value) {
           unawaited(next(completed: true));
         }
       }),
       instance.stream.error.listen((value) {
+        if (isCastingDlna) return;
         error = '音频播放失败，请检查登录状态和网络后重试。';
         opening = false;
         notifyListeners();
       }),
+      instance.stream.audioDevices.listen((devices) {
+        _mpvDevices = devices;
+        _rebuildLocalOutputs();
+      }),
+      instance.stream.audioDevice.listen((device) {
+        _activeMpvDevice = device;
+        if (device.name.isNotEmpty &&
+            device.name != 'auto' &&
+            selectedLocalOutputId != device.name &&
+            localOutputs.any((o) => o.id == device.name)) {
+          selectedLocalOutputId = device.name;
+        }
+        _rebuildLocalOutputs();
+      }),
     ]);
     return instance;
+  }
+
+  String _relaySecret() => base64UrlEncode(
+    List.generate(32, (_) => Random.secure().nextInt(256)),
+  );
+
+  void _rebuildLocalOutputs() {
+    if (Platform.isWindows || _mpvDevices.isNotEmpty) {
+      localOutputs = mergeWindowsOutputs(
+        _mpvDevices,
+        _nativeOutputs,
+        selectedId: selectedLocalOutputId,
+      );
+      if (selectedLocalOutputId == 'auto' &&
+          _activeMpvDevice != null &&
+          _activeMpvDevice!.name != 'auto') {
+        selectedLocalOutputId = _activeMpvDevice!.name;
+      }
+    } else {
+      final list = <LocalAudioOutput>[
+        LocalAudioOutput(
+          id: 'auto',
+          name: '跟随系统音频输出',
+          type: AudioOutputType.systemDefault,
+          isDefault: true,
+          isActive: selectedLocalOutputId == 'auto',
+        ),
+      ];
+      for (final raw in _nativeOutputs) {
+        final id = raw['id'] as String? ?? '';
+        final name = raw['name'] as String? ?? id;
+        final kind = switch (raw['type']) {
+          'bluetooth' => AudioOutputType.bluetooth,
+          'usb' => AudioOutputType.usb,
+          'headphones' => AudioOutputType.headphones,
+          'speaker' => AudioOutputType.speaker,
+          _ => classifyOutputName(name, isBluetooth: raw['bluetooth'] == true),
+        };
+        if (id.isEmpty) continue;
+        list.add(
+          LocalAudioOutput(
+            id: id,
+            name: name,
+            type: kind,
+            isDefault: raw['isDefault'] == true,
+            isActive: kind == AudioOutputType.bluetooth,
+          ),
+        );
+      }
+      localOutputs = list;
+    }
+    notifyListeners();
+  }
+
+  void updateNativeAudioOutputs(
+    List<Map<String, dynamic>> raw, {
+    bool bluetoothDisconnected = false,
+  }) {
+    _nativeOutputs = raw;
+    if (bluetoothDisconnected) {
+      if (!isCastingDlna && playing) {
+        playing = false;
+        if (!_needsPlaybackOpen && _player != null) {
+          unawaited(_player!.pause());
+        }
+        unawaited(savePlaybackState());
+      }
+      if (selectedLocalOutputId != 'auto') {
+        selectedLocalOutputId = 'auto';
+        if (_player != null) {
+          unawaited(_player!.setAudioDevice(AudioDevice.auto()));
+        }
+      }
+    }
+    _rebuildLocalOutputs();
+  }
+
+  Future<void> selectLocalOutput(LocalAudioOutput output) async {
+    selectedLocalOutputId = output.id;
+    if (isCastingDlna) {
+      await selectDlnaDevice(null);
+    }
+    if (output.mpvDevice != null) {
+      await player.setAudioDevice(output.mpvDevice!);
+    } else if (output.id == 'auto' && _player != null) {
+      await _player!.setAudioDevice(AudioDevice.auto());
+    }
+    _rebuildLocalOutputs();
+  }
+
+  Future<void> scanDlnaDevices() async {
+    if (dlnaScanning) return;
+    dlnaScanning = true;
+    dlnaError = null;
+    notifyListeners();
+    try {
+      await onDlnaScanStart?.call();
+      final discovered = await dlnaClient.discover();
+      final merged = <String, DlnaDevice>{
+        for (final existing in dlnaDevices.where((d) => d.manual)) existing.udn: existing,
+        for (final item in discovered) item.udn: item,
+      };
+      if (api != null && !offline && authenticated) {
+        try {
+          final remote = await api!.json('GET', 'dlna/devices');
+          for (final item in (remote['items'] as List? ?? const [])) {
+            if (item is Map) {
+              final dev = DlnaDevice.fromServerJson(
+                Map<String, dynamic>.from(item),
+              );
+              merged.putIfAbsent(dev.udn, () => dev);
+            }
+          }
+        } catch (_) {
+          /* Server-side DLNA list is optional. */
+        }
+      }
+      dlnaDevices = merged.values.toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+    } catch (_) {
+      dlnaError = '扫描 DLNA 设备失败，请检查网络连接。';
+    } finally {
+      await onDlnaScanEnd?.call();
+      dlnaScanning = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> addManualDlnaDevice(String url) async {
+    dlnaError = null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) {
+      dlnaError = '请输入 DLNA 设备描述 XML 地址。';
+      notifyListeners();
+      return false;
+    }
+    final device = await dlnaClient.fetchDeviceDescription(trimmed, manual: true);
+    if (device == null) {
+      dlnaError = '无法连接或解析该 DLNA 设备描述文件。';
+      notifyListeners();
+      return false;
+    }
+    dlnaDevices = [
+      ...dlnaDevices.where((d) => d.udn != device.udn),
+      device,
+    ]..sort((a, b) => a.name.compareTo(b.name));
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> selectDlnaDevice(DlnaDevice? device) async {
+    dlnaError = null;
+    if (device == null) {
+      final previous = activeDlnaDevice;
+      final resumeTrack = current;
+      final resumePosition = position;
+      final shouldResume = playing;
+      _dlnaManualStop = true;
+      _stopDlnaPolling();
+      activeDlnaDevice = null;
+      _lastDlnaState = '';
+      _dlnaActiveTrackId = null;
+      notifyListeners();
+      if (previous != null) {
+        await dlnaClient.stop(previous).catchError((Object _) {});
+      }
+      if (resumeTrack != null) {
+        if (shouldResume) {
+          await play(resumeTrack, replaceQueue: false, startPosition: resumePosition);
+        } else {
+          playing = false;
+          _needsPlaybackOpen = true;
+          notifyListeners();
+        }
+      }
+      return;
+    }
+    if (activeDlnaDevice?.udn == device.udn) return;
+    final previous = activeDlnaDevice;
+    final resumeTrack = current;
+    final resumePosition = position;
+    _dlnaManualStop = false;
+    _stopDlnaPolling();
+    if (_player != null) {
+      await _player!.pause();
+    }
+    if (previous != null) {
+      await dlnaClient.stop(previous).catchError((Object _) {});
+    }
+    activeDlnaDevice = device;
+    notifyListeners();
+    if (resumeTrack != null) {
+      await play(resumeTrack, replaceQueue: false, startPosition: resumePosition);
+    }
+  }
+
+  static bool _isPrivateLanServer(Uri uri) {
+    if (uri.scheme != 'http') return false;
+    final parts = uri.host.split('.');
+    if (parts.length != 4) return false;
+    final octets = parts.map(int.tryParse).toList();
+    if (octets.any((v) => v == null || v < 0 || v > 255)) return false;
+    final a = octets[0]!, b = octets[1]!;
+    return a == 10 ||
+        (a == 192 && b == 168) ||
+        (a == 172 && b >= 16 && b <= 31);
+  }
+
+  Future<({String mediaUrl, String coverUrl})> _prepareDlnaMedia(
+    Track track,
+    DlnaDevice device,
+    bool local,
+  ) async {
+    if (!local &&
+        !offline &&
+        api != null &&
+        _isPrivateLanServer(api!.session.server)) {
+      try {
+        final ticket = await api!.json(
+          'POST',
+          'dlna/ticket',
+          body: {'track_id': track.id},
+        );
+        final mediaPath = ticket['media_path'] as String? ?? '';
+        if (mediaPath.isNotEmpty) {
+          final base = api!.session.server;
+          final mediaUrl = base
+              .resolve(mediaPath.replaceFirst(RegExp(r'^/+'), ''))
+              .toString();
+          final coverPath = ticket['cover_path'] as String? ?? '';
+          final coverUrl = coverPath.isEmpty
+              ? ''
+              : base
+                    .resolve(coverPath.replaceFirst(RegExp(r'^/+'), ''))
+                    .toString();
+          return (mediaUrl: mediaUrl, coverUrl: coverUrl);
+        }
+      } catch (_) {
+        /* Fall back to the local client relay if server tickets are unavailable. */
+      }
+    }
+    _dlnaRelay ??= DlnaMediaRelay(api: api, secret: _relaySecret());
+    final targetHost = Uri.tryParse(device.avTransportControlUrl)?.host ?? '';
+    final mediaUrl = await _dlnaRelay!.registerTrack(
+      track,
+      localFile: local ? cache!.audio(track) : null,
+      coverFile: local ? cache!.cover(track) : null,
+      targetHost: targetHost,
+    );
+    final coverUrl =
+        await _dlnaRelay!.coverUrlFor(track, targetHost: targetHost) ?? '';
+    return (mediaUrl: mediaUrl, coverUrl: coverUrl);
+  }
+
+  void _startDlnaPolling() {
+    _stopDlnaPolling();
+    _dlnaPollTimer = Timer.periodic(
+      const Duration(milliseconds: 1200),
+      (_) => unawaited(_pollDlnaState()),
+    );
+  }
+
+  void _stopDlnaPolling() {
+    _dlnaPollTimer?.cancel();
+    _dlnaPollTimer = null;
+  }
+
+  Future<void> _pollDlnaState() async {
+    final device = activeDlnaDevice;
+    if (_disposed || device == null) return;
+    try {
+      final state = await dlnaClient.getTransportState(device);
+      if (_disposed || activeDlnaDevice?.udn != device.udn) return;
+      final prevState = _lastDlnaState;
+      final nextState = state.state;
+      _lastDlnaState = nextState;
+      if (state.duration > Duration.zero) duration = state.duration;
+      position = state.position;
+      playing = state.playing;
+      notifyListeners();
+      if (!_dlnaManualStop &&
+          prevState == 'PLAYING' &&
+          (nextState == 'STOPPED' || nextState == 'NO_MEDIA_PRESENT') &&
+          _dlnaActiveTrackId == current?.id &&
+          (duration <= Duration.zero ||
+              position >= duration - const Duration(seconds: 4))) {
+        unawaited(next(completed: true));
+      }
+    } catch (_) {
+      /* Preserve current playback state across transient renderer polling errors. */
+    }
   }
 
   Future<void> play(
@@ -678,17 +1043,69 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       if (offline && !local) {
         throw const APIException('此歌曲尚未缓存，请连接服务器后播放。');
       }
-      final uri = local ? cache!.audio(track).uri : await relay!.url(track);
-      if (request != _playRequest) return;
-      if (activateAudio != null && !await activateAudio!()) {
-        throw const APIException("无法取得音频焦点，请稍后重试。");
-      }
       final nextDuration = Duration(
         milliseconds: (track.duration * 1000).round(),
       );
       final nextPosition = startPosition >= nextDuration
           ? Duration.zero
           : startPosition;
+      final dlnaDevice = activeDlnaDevice;
+      if (dlnaDevice != null) {
+        final work = _playWork.then((_) async {
+          if (request != _playRequest || activeDlnaDevice?.udn != dlnaDevice.udn) {
+            return;
+          }
+          await _player?.pause();
+          final urls = await _prepareDlnaMedia(track, dlnaDevice, local);
+          if (request != _playRequest || activeDlnaDevice?.udn != dlnaDevice.udn) {
+            return;
+          }
+          await dlnaClient.setUriAndPlay(
+            dlnaDevice,
+            track,
+            urls.mediaUrl,
+            coverUrl: urls.coverUrl,
+            startPosition: nextPosition,
+          );
+        });
+        _playWork = work.catchError((Object _) {});
+        await work;
+        if (request != _playRequest) return;
+        if (replaceQueue) queue = List.of(fromTracks ?? tracks);
+        if (!queue.any((t) => t.id == track.id)) queue = [track];
+        current = track;
+        lyricText = '';
+        duration = nextDuration;
+        position = nextPosition;
+        playing = true;
+        _needsPlaybackOpen = false;
+        _dlnaManualStop = false;
+        _lastDlnaState = '';
+        _dlnaActiveTrackId = track.id;
+        _startDlnaPolling();
+        unawaited(savePlaybackState());
+        unawaited(_lyrics(track, request, local));
+        if (!local && cache != null && api != null) {
+          final activeCache = cache!, activeAPI = api!;
+          _cacheWork = _cacheWork.then((_) async {
+            if (cache != activeCache) return;
+            try {
+              await activeCache.save(activeAPI, track);
+            } catch (_) {
+              if (cache == activeCache) {
+                error = '本机缓存未完成，当前在线播放不受影响。';
+              }
+            }
+            notifyListeners();
+          });
+        }
+        return;
+      }
+      final uri = local ? cache!.audio(track).uri : await relay!.url(track);
+      if (request != _playRequest) return;
+      if (activateAudio != null && !await activateAudio!()) {
+        throw const APIException("无法取得音频焦点，请稍后重试。");
+      }
       // Serialize decoder opens so a delayed older request cannot replace a newer song.
       final work = _playWork.then((_) async {
         if (request != _playRequest) return;
@@ -697,6 +1114,13 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
           // Lyrics belong to our UI; mpv must not reopen cached sidecars as media.
           await native.setProperty('sub-auto', 'no');
           await native.setProperty('audio-file-auto', 'no');
+        }
+        if (selectedLocalOutputId != 'auto') {
+          final chosen = localOutputs
+              .where((o) => o.id == selectedLocalOutputId)
+              .firstOrNull
+              ?.mpvDevice;
+          if (chosen != null) await player.setAudioDevice(chosen);
         }
         await player.setVolume(volume * 100);
         if (request != _playRequest) return;
@@ -775,7 +1199,12 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> stopPlayback() async {
     ++_playRequest;
+    _dlnaManualStop = true;
+    _stopDlnaPolling();
     await _playWork;
+    if (activeDlnaDevice != null) {
+      await dlnaClient.stop(activeDlnaDevice!).catchError((Object _) {});
+    }
     await _player?.stop();
     current = null;
     opening = false;
@@ -811,6 +1240,29 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       await play(current!, replaceQueue: false, startPosition: position);
       return;
     }
+    if (activeDlnaDevice != null) {
+      try {
+        if (playing) {
+          _dlnaManualStop = true;
+          await dlnaClient.pause(activeDlnaDevice!);
+          playing = false;
+        } else {
+          _dlnaManualStop = false;
+          if (duration > Duration.zero && position >= duration) {
+            await dlnaClient.seek(activeDlnaDevice!, Duration.zero);
+            position = Duration.zero;
+          }
+          await dlnaClient.play(activeDlnaDevice!);
+          playing = true;
+        }
+        await savePlaybackState();
+      } catch (e) {
+        dlnaError = e is APIException ? e.message : 'DLNA 控制失败，请检查设备连接。';
+        error = dlnaError;
+      }
+      notifyListeners();
+      return;
+    }
     if (!playing && duration > Duration.zero && position >= duration) {
       await player.seek(Duration.zero);
     }
@@ -820,10 +1272,25 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> seek(double seconds) async {
+    final previous = position;
     position = Duration(
       milliseconds: (seconds * 1000).round().clamp(0, duration.inMilliseconds),
     );
-    if (!_needsPlaybackOpen) await player.seek(position);
+    if (!_needsPlaybackOpen) {
+      if (activeDlnaDevice != null) {
+        try {
+          await dlnaClient.seek(activeDlnaDevice!, position);
+        } catch (e) {
+          position = previous;
+          dlnaError = e is APIException ? e.message : 'DLNA 控制失败，请检查设备连接。';
+          error = dlnaError;
+          notifyListeners();
+          return;
+        }
+      } else {
+        await player.seek(position);
+      }
+    }
     await savePlaybackState();
     notifyListeners();
   }
@@ -1024,9 +1491,17 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         : Session(session!.server, session!.username, '');
     try {
       if (!revoke) await savePlaybackState();
+      _dlnaManualStop = true;
+      _stopDlnaPolling();
       await _playWork;
+      if (activeDlnaDevice != null) {
+        await dlnaClient.stop(activeDlnaDevice!).catchError((Object _) {});
+        activeDlnaDevice = null;
+      }
       await _player?.stop();
       await relay?.close();
+      await _dlnaRelay?.close();
+      _dlnaRelay = null;
       final activeCache = cache;
       cache = null;
       await activeCache?.stop();
@@ -1112,7 +1587,16 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> setVolume(double value) async {
     volume = value;
-    await _player?.setVolume(value * 100);
+    if (activeDlnaDevice != null) {
+      try {
+        await dlnaClient.setVolume(activeDlnaDevice!, value);
+      } catch (e) {
+        dlnaError = e is APIException ? e.message : 'DLNA 控制失败，请检查设备连接。';
+        error = dlnaError;
+      }
+    } else {
+      await _player?.setVolume(value * 100);
+    }
     await savePlaybackState();
     notifyListeners();
   }
@@ -1154,6 +1638,7 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
     _stopSessionKeepalive();
+    _stopDlnaPolling();
     _lastSessionRenewal = null;
     ++_playRequest;
     for (final sub in _subscriptions) {
@@ -1164,6 +1649,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
         await _player?.dispose();
       }),
     );
+    dlnaClient.close();
+    unawaited(_dlnaRelay?.close());
     unawaited(relay?.close());
     unawaited(cache?.stop());
     api?.close();

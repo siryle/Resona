@@ -43,6 +43,12 @@ struct AudioRouteTests: App {
         let session = AVAudioSession.sharedInstance()
         assert(session.category == .playback && session.routeSharingPolicy == .longFormAudio,
                "Music must participate in the system long-form audio route")
+        assert(PlayerModel.classifyPort(.airPlay) == .airPlay)
+        assert(PlayerModel.classifyPort(.bluetoothA2DP) == .bluetooth)
+        assert(PlayerModel.classifyPort(.bluetoothHFP) == .bluetooth)
+        assert(PlayerModel.classifyPort(.bluetoothLE) == .bluetooth)
+        assert(PlayerModel.classifyPort(.builtInSpeaker) == .speaker)
+        assert(!player.activeOutput.name.isEmpty)
 
         for reason in [AVAudioSession.RouteChangeReason.newDeviceAvailable, .routeConfigurationChange] {
             // AVPlayer can pause independently of the user's playback intent during a route transition.

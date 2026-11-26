@@ -10,6 +10,7 @@
 namespace {
 using Value = flutter::EncodableValue;
 using Map = flutter::EncodableMap;
+using List = flutter::EncodableList;
 
 void Check(bool condition, const char* description) {
   if (!condition) {
@@ -106,6 +107,7 @@ void RemoveTray(HWND owner) {
 
 int main() {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  const HRESULT com_hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   // Registry redirection is process-local; tests never touch real app settings.
   const std::wstring path = L"Software\\ResonaDesktopTests-" + std::to_wstring(GetCurrentProcessId());
   HKEY temporary = nullptr;
@@ -125,6 +127,22 @@ int main() {
     desktop.HandleMessage(register_tray, 0, 0);
     const auto initial = messenger.Call("initialize");
     Check(initial.success && FontSize(initial) == 28, "default font size");
+    const auto outputs = messenger.Call("audioOutputs");
+    Check(outputs.success && std::holds_alternative<List>(outputs.value),
+          "audioOutputs returns a list");
+    const auto count_before_media = messenger.actions.size();
+    Check(desktop.HandleMessage(WM_APPCOMMAND, 0,
+                                MAKELPARAM(0, APPCOMMAND_MEDIA_PLAY_PAUSE)) == TRUE &&
+              messenger.actions.size() == count_before_media + 1 &&
+              messenger.actions.back() == "toggle",
+          "APPCOMMAND media play/pause dispatches toggle");
+    Check(desktop.HandleMessage(WM_APPCOMMAND, 0,
+                                MAKELPARAM(0, APPCOMMAND_MEDIA_NEXTTRACK)) == TRUE &&
+              messenger.actions.back() == "next",
+          "APPCOMMAND media next dispatches next");
+    Check(!desktop.HandleMessage(WM_APPCOMMAND, 0,
+                                 MAKELPARAM(0, APPCOMMAND_VOLUME_UP)),
+          "unrelated APPCOMMAND keys pass through");
     if (has_explorer) {
       Check(std::get<bool>(std::get<Map>(initial.value).at(Value("trayAvailable"))) &&
                 TrayPresent(owner), "Explorer can locate the registered tray icon");
@@ -230,6 +248,7 @@ int main() {
   RegOverridePredefKey(HKEY_CURRENT_USER, nullptr);
   RegCloseKey(temporary);
   RegDeleteTree(HKEY_CURRENT_USER, path.c_str());
+  if (SUCCEEDED(com_hr)) CoUninitialize();
   std::cout << "Windows desktop integration checks passed.\n";
   return 0;
 }

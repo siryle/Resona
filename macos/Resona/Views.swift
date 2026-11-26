@@ -505,6 +505,7 @@ struct Artwork: View {
 
 struct ListeningView: View {
     @EnvironmentObject private var player: PlayerModel
+    @State private var showOutputPicker = false
     private var active: Int? { player.lyrics.last { $0.time <= player.position }?.id }
     var body: some View {
         GeometryReader { geometry in
@@ -518,11 +519,31 @@ struct ListeningView: View {
                         }.aspectRatio(1, contentMode: .fit).frame(maxWidth: 350)
                         Text(track.title).font(.title2.weight(.semibold))
                         Text("\(track.artist) · \(track.album)").font(.callout).foregroundStyle(Theme.secondary).lineLimit(2)
-                        Text("\(track.format.uppercased()) · \(track.sampleRate / 1000) kHz")
-                            .font(.caption.weight(.medium).monospacedDigit())
-                            .foregroundStyle(Theme.sageInk)
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(Theme.sage, in: Capsule())
+                        HStack(spacing: 8) {
+                            Text("\(track.format.uppercased()) · \(track.sampleRate / 1000) kHz")
+                                .font(.caption.weight(.medium).monospacedDigit())
+                                .foregroundStyle(Theme.sageInk)
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .background(Theme.sage, in: Capsule())
+                            Button {
+                                showOutputPicker.toggle()
+                            } label: {
+                                Label(
+                                    player.airPlayActive ? "AirPlay · \(player.activeOutput.name)" : "\(player.activeOutput.kind.label) · \(player.activeOutput.name)",
+                                    systemImage: player.airPlayActive ? "airplayaudio" : player.activeOutput.kind.symbol
+                                )
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                                .foregroundStyle(player.airPlayActive || player.activeOutput.kind == .bluetooth || player.selectedOutputUID != nil ? Theme.accent : Theme.secondary)
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .background(Theme.surface, in: Capsule())
+                                .overlay { Capsule().strokeBorder(Theme.border) }
+                            }.buttonStyle(.plain)
+                                .help("切换 AirPlay 或蓝牙音频输出")
+                                .popover(isPresented: $showOutputPicker, arrowEdge: .bottom) {
+                                    MacAudioOutputPopover()
+                                }
+                        }
                     }.frame(maxWidth: .infinity)
                 }
                 ScrollViewReader { proxy in

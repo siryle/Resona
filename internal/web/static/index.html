@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="/style.css" />
     <script src="/lyrics.js" defer></script>
     <script src="/playback.js" defer></script>
+    <script src="/dlna.js" defer></script>
     <script src="/app.js" defer></script>
     <script src="/plugins.js" defer></script>
     <script src="/logs.js" defer></script>
@@ -813,6 +814,19 @@
               >
             </button>
             <button
+              id="output-toggle"
+              class="icon-button playback-option"
+              aria-label="音频输出与 DLNA 投屏"
+              aria-expanded="false"
+              aria-pressed="false"
+              aria-controls="output-panel"
+              title="音频输出与 DLNA 投屏"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2 8.86a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6M2 15a5 5 0 0 1 5 5M2 11a9 9 0 0 1 9 9M2 19h.01" />
+              </svg>
+            </button>
+            <button
               id="queue-toggle"
               class="icon-button playback-option"
               aria-label="播放列表"
@@ -850,6 +864,86 @@
           </button>
         </header>
         <div id="queue-list" class="queue-list"></div>
+      </section>
+      <section
+        id="output-panel"
+        class="queue-panel output-panel"
+        aria-labelledby="output-title"
+        hidden
+      >
+        <header class="queue-header">
+          <div>
+            <h2 id="output-title">音频输出与 DLNA</h2>
+            <p id="output-status" class="muted">本机与蓝牙播放</p>
+          </div>
+          <div class="output-header-actions">
+            <button id="output-refresh" class="text-button" type="button">
+              刷新设备
+            </button>
+            <button
+              id="output-close"
+              class="icon-button"
+              type="button"
+              aria-label="关闭音频输出面板"
+            >
+              ×
+            </button>
+          </div>
+        </header>
+        <div class="output-body">
+          <div class="output-section">
+            <div class="output-section-head">
+              <h3>蓝牙与本机输出</h3>
+              <button
+                id="output-pick-sink"
+                class="text-button"
+                type="button"
+                hidden
+              >
+                选择系统输出
+              </button>
+            </div>
+            <div id="output-local-list" class="output-list"></div>
+          </div>
+          <div class="output-section">
+            <div class="output-section-head">
+              <h3>DLNA 局域网投屏</h3>
+              <button
+                id="output-stop-cast"
+                class="text-button"
+                type="button"
+                hidden
+              >
+                切回本机
+              </button>
+            </div>
+            <div id="output-dlna-list" class="output-list"></div>
+            <p class="dialog-hint output-hint">
+              Docker Bridge 模式下如未自动发现，可手动添加音箱/电视描述 XML 地址。
+            </p>
+            <details class="output-advanced">
+              <summary>手动添加 DLNA / 回调地址</summary>
+              <form id="dlna-manual-form" class="output-form">
+                <label class="sr-only" for="dlna-manual-url">设备描述地址</label>
+                <input
+                  id="dlna-manual-url"
+                  type="url"
+                  placeholder="http://192.168.1.50:1400/xml/device_description.xml"
+                />
+                <button class="outline-button" type="submit">添加</button>
+              </form>
+              <form id="dlna-base-form" class="output-form">
+                <label class="sr-only" for="dlna-base-url">服务端回调地址</label>
+                <input
+                  id="dlna-base-url"
+                  type="url"
+                  placeholder="回调地址（如 http://192.168.1.10:8080）"
+                />
+                <button class="outline-button" type="submit">保存</button>
+              </form>
+            </details>
+          </div>
+        </div>
       </section>
     </div>
     <dialog

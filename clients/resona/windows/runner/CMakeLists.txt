@@ -35,7 +35,8 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
-target_link_libraries(${BINARY_NAME} PRIVATE "gdiplus.lib" "shell32.lib" "advapi32.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE
+  "gdiplus.lib" "shell32.lib" "advapi32.lib" "ole32.lib" "uuid.lib" "runtimeobject.lib")
 target_compile_options(${BINARY_NAME} PRIVATE /utf-8)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
@@ -52,4 +53,4 @@ set_target_properties(resona_desktop_tests PROPERTIES
 target_compile_definitions(resona_desktop_tests PRIVATE "NOMINMAX")
 target_compile_options(resona_desktop_tests PRIVATE /utf-8)
 target_link_libraries(resona_desktop_tests PRIVATE flutter flutter_wrapper_app
-  "gdiplus.lib" "shell32.lib" "advapi32.lib")
+  "gdiplus.lib" "shell32.lib" "advapi32.lib" "ole32.lib" "uuid.lib" "runtimeobject.lib")

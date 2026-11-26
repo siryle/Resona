@@ -455,6 +455,41 @@ private struct MenuPlaybackView: View {
                 Slider(value: $desktop.fontSize, in: 18...48, step: 1).accessibilityLabel("桌面歌词字号")
                 Text("\(Int(desktop.fontSize))").font(.caption.monospacedDigit()).frame(width: 22)
             }
+            Divider()
+            HStack(spacing: 10) {
+                Label(
+                    player.airPlayActive ? "AirPlay · \(player.activeOutput.name)" : player.activeOutput.name,
+                    systemImage: player.airPlayActive ? "airplayaudio" : player.activeOutput.kind.symbol
+                )
+                .font(.caption)
+                .lineLimit(1)
+                Spacer()
+                Menu {
+                    Button {
+                        player.selectAudioOutput(nil)
+                    } label: {
+                        HStack {
+                            Text("跟随系统默认")
+                            if player.selectedOutputUID == nil { Image(systemName: "checkmark") }
+                        }
+                    }
+                    ForEach(player.availableOutputs) { device in
+                        Button {
+                            player.selectAudioOutput(device.id)
+                        } label: {
+                            HStack {
+                                Text("\(device.name) (\(device.kind.label))")
+                                if player.selectedOutputUID == device.id { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("打开蓝牙设置…") { player.openBluetoothSettings() }
+                } label: {
+                    Image(systemName: "speaker.wave.2")
+                }.menuStyle(.borderlessButton).fixedSize().help("切换蓝牙或本机输出")
+                MacAirPlayPicker(player: player).frame(width: 24, height: 24)
+            }
             if let error = desktop.library.error {
                 Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }

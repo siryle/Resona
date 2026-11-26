@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import MediaPlayer
 import SwiftUI
 #if os(iOS)
@@ -6,7 +7,72 @@ import UIKit
 typealias PlatformImage = UIImage
 #else
 import AppKit
+import CoreAudio
 typealias PlatformImage = NSImage
+#endif
+
+enum AudioOutputKind: String, Equatable, Codable {
+    case speaker, headphones, bluetooth, airPlay, other
+
+    var symbol: String {
+        switch self {
+        case .airPlay: return "airplayaudio"
+        case .bluetooth, .headphones: return "headphones"
+        case .speaker: return "speaker.wave.2"
+        case .other: return "hifispeaker"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .airPlay: return "AirPlay"
+        case .bluetooth: return "蓝牙"
+        case .headphones: return "耳机 / 外接音频"
+        case .speaker: return "本机扬声器"
+        case .other: return "音频输出"
+        }
+    }
+}
+
+struct AudioOutputDevice: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let kind: AudioOutputKind
+    let isDefault: Bool
+}
+
+#if os(macOS)
+private final class CoreAudioListeners {
+    private var entries: [(AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []
+
+    func register(selector: AudioObjectPropertySelector, queue: DispatchQueue, handler: @escaping () -> Void) {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &address, queue, block
+        )
+        if status == noErr {
+            entries.append((selector, block))
+        }
+    }
+
+    deinit {
+        for (selector, block) in entries {
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, block
+            )
+        }
+    }
+}
 #endif
 
 enum PlaybackMode: String, Codable, CaseIterable {
@@ -56,6 +122,11 @@ final class PlayerModel: ObservableObject {
     @Published var volume: Float = 0.8 {
         didSet { player.volume = volume; savePlaybackState() }
     }
+    @Published private(set) var activeOutput = AudioOutputDevice(id: "system", name: "本机输出", kind: .speaker, isDefault: true)
+    @Published private(set) var availableOutputs: [AudioOutputDevice] = []
+    @Published private(set) var selectedOutputUID: String?
+    @Published private(set) var airPlayActive = false
+    var avPlayer: AVPlayer { player }
 
     private let player: AVPlayer
     private let downloads: OfflineStore
@@ -77,6 +148,10 @@ final class PlayerModel: ObservableObject {
     private var routeObserver: NSObjectProtocol?
     private var interrupted = false
     private var playbackObserver: NSKeyValueObservation?
+    private var externalPlaybackObserver: NSKeyValueObservation?
+    #if os(macOS)
+    private let audioListeners = CoreAudioListeners()
+    #endif
     private var playbackRequested = false
     private var reachedEnd = false
     var shuffle: Bool {
@@ -91,11 +166,17 @@ final class PlayerModel: ObservableObject {
         self.cache = cache ?? .shared
         self.stateURL = downloads.root.appendingPathComponent("playback.json")
         player.volume = volume
+        player.allowsExternalPlayback = true
         playbackObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.playing = self.player.timeControlStatus != .paused
                 self.updateNowPlaying()
+            }
+        }
+        externalPlaybackObserver = player.observe(\.isExternalPlaybackActive, options: [.initial, .new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                self?.refreshAudioOutputs()
             }
         }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
@@ -137,6 +218,7 @@ final class PlayerModel: ObservableObject {
                   let reason = AVAudioSession.RouteChangeReason(rawValue: value) else { return }
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.refreshAudioOutputs()
                 switch reason {
                 case .oldDeviceUnavailable:
                     self.pause()
@@ -148,6 +230,15 @@ final class PlayerModel: ObservableObject {
                 }
             }
         }
+        refreshAudioOutputs()
+        #else
+        audioListeners.register(selector: kAudioHardwarePropertyDevices, queue: .main) { [weak self] in
+            Task { @MainActor [weak self] in self?.refreshAudioOutputs() }
+        }
+        audioListeners.register(selector: kAudioHardwarePropertyDefaultOutputDevice, queue: .main) { [weak self] in
+            Task { @MainActor [weak self] in self?.refreshAudioOutputs() }
+        }
+        refreshAudioOutputs()
         #endif
         let center = MPRemoteCommandCenter.shared()
         center.playCommand.addTarget { [weak self] _ in Task { @MainActor in self?.resume() }; return .success }
@@ -315,6 +406,7 @@ final class PlayerModel: ObservableObject {
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.playback, mode: .default, policy: .longFormAudio)
             try audioSession.setActive(true)
+            refreshAudioOutputs()
             #endif
             playbackRequested = true
             player.play()
@@ -429,4 +521,179 @@ final class PlayerModel: ObservableObject {
         MPNowPlayingInfoCenter.default().playbackState = playing ? .playing : .paused
         #endif
     }
+
+    #if os(iOS)
+    static func classifyPort(_ port: AVAudioSession.Port) -> AudioOutputKind {
+        switch port {
+        case .airPlay:
+            return .airPlay
+        case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+            return .bluetooth
+        case .headphones, .headsetMic, .usbAudio, .lineOut, .carAudio:
+            return .headphones
+        case .builtInSpeaker, .builtInReceiver:
+            return .speaker
+        default:
+            return .other
+        }
+    }
+
+    func refreshAudioOutputs() {
+        let routeOutputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        let mapped = routeOutputs.map {
+            AudioOutputDevice(
+                id: $0.uid,
+                name: $0.portName,
+                kind: Self.classifyPort($0.portType),
+                isDefault: true
+            )
+        }
+        availableOutputs = mapped
+        if let primary = mapped.first {
+            activeOutput = primary
+        } else {
+            activeOutput = AudioOutputDevice(id: "system", name: "本机扬声器", kind: .speaker, isDefault: true)
+        }
+        airPlayActive = player.isExternalPlaybackActive || activeOutput.kind == .airPlay
+    }
+    #else
+    static func classifyTransport(_ transport: UInt32) -> AudioOutputKind {
+        switch transport {
+        case kAudioDeviceTransportTypeAirPlay:
+            return .airPlay
+        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
+            return .bluetooth
+        case kAudioDeviceTransportTypeUSB, kAudioDeviceTransportTypeHDMI,
+             kAudioDeviceTransportTypeDisplayPort, kAudioDeviceTransportTypeThunderbolt:
+            return .headphones
+        case kAudioDeviceTransportTypeBuiltIn:
+            return .speaker
+        default:
+            return .other
+        }
+    }
+
+    func refreshAudioOutputs() {
+        handleAudioOutputChange(devices: Self.enumerateCoreAudioOutputs())
+    }
+
+    func handleAudioOutputChange(devices: [AudioOutputDevice]) {
+        if let uid = selectedOutputUID, !devices.contains(where: { $0.id == uid }) {
+            selectedOutputUID = nil
+            player.audioOutputDeviceUniqueID = nil
+            if playing || playbackRequested { pause() }
+        } else if selectedOutputUID == nil,
+                  (activeOutput.kind == .bluetooth || activeOutput.kind == .headphones),
+                  !devices.contains(where: { $0.id == activeOutput.id }) {
+            if playing || playbackRequested { pause() }
+        }
+        availableOutputs = devices
+        if let uid = selectedOutputUID, let match = devices.first(where: { $0.id == uid }) {
+            activeOutput = match
+        } else if let fallback = devices.first(where: { $0.isDefault }) ?? devices.first {
+            activeOutput = fallback
+        } else {
+            activeOutput = AudioOutputDevice(id: "system", name: "本机输出", kind: .speaker, isDefault: true)
+        }
+        airPlayActive = player.isExternalPlaybackActive || activeOutput.kind == .airPlay
+    }
+
+    func selectAudioOutput(_ uid: String?) {
+        selectedOutputUID = uid
+        player.audioOutputDeviceUniqueID = uid
+        handleAudioOutputChange(devices: availableOutputs)
+    }
+
+    func prepareForAirPlayRouting() {
+        guard selectedOutputUID != nil || player.audioOutputDeviceUniqueID != nil else { return }
+        selectedOutputUID = nil
+        player.audioOutputDeviceUniqueID = nil
+        handleAudioOutputChange(devices: availableOutputs)
+    }
+
+    func openBluetoothSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private static func enumerateCoreAudioOutputs() -> [AudioOutputDevice] {
+        var defaultDevice = AudioObjectID(kAudioObjectUnknown)
+        var defaultAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var defaultSize = UInt32(MemoryLayout<AudioObjectID>.size)
+        _ = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &defaultAddress, 0, nil, &defaultSize, &defaultDevice
+        )
+
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var devicesSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &devicesAddress, 0, nil, &devicesSize
+        ) == noErr, devicesSize > 0 else { return [] }
+        let count = Int(devicesSize) / MemoryLayout<AudioObjectID>.size
+        var ids = [AudioObjectID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &devicesAddress, 0, nil, &devicesSize, &ids
+        ) == noErr else { return [] }
+
+        return ids.compactMap { deviceID in
+            guard hasOutputStreams(deviceID),
+                  let uid = coreAudioStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID),
+                  let name = coreAudioStringProperty(deviceID, selector: kAudioDevicePropertyDeviceNameCFString) else {
+                return nil
+            }
+            var transport: UInt32 = 0
+            var transportSize = UInt32(MemoryLayout<UInt32>.size)
+            var transportAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyTransportType,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            _ = AudioObjectGetPropertyData(deviceID, &transportAddress, 0, nil, &transportSize, &transport)
+            return AudioOutputDevice(
+                id: uid,
+                name: name,
+                kind: classifyTransport(transport),
+                isDefault: deviceID == defaultDevice
+            )
+        }
+    }
+
+    private static func hasOutputStreams(_ deviceID: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr,
+              size >= UInt32(MemoryLayout<AudioBufferList>.size) else { return false }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, raw) == noErr else { return false }
+        let bufferList = raw.assumingMemoryBound(to: AudioBufferList.self)
+        return UnsafeMutableAudioBufferListPointer(bufferList).contains { $0.mNumberChannels > 0 }
+    }
+
+    private static func coreAudioStringProperty(_ objectID: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &value) == noErr,
+              let value else { return nil }
+        return value.takeRetainedValue() as String
+    }
+    #endif
 }

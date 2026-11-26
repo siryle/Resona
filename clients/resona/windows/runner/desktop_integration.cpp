@@ -5,15 +5,31 @@
 #include <flutter/standard_method_codec.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cwctype>
 #include <variant>
+#include <vector>
 
 #include "tray_logo.h"
+
+#pragma warning(push, 3)
+#include <propidl.h>
+#include <roapi.h>
+#include <winstring.h>
+#include <windows.media.h>
+#include <systemmediatransportcontrolsinterop.h>
+#include <initguid.h>
+#include <mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
+#pragma warning(pop)
 
 namespace {
 constexpr UINT kTray = WM_APP + 20;
 constexpr UINT kExit = WM_APP + 21;
 constexpr UINT kRegisterTray = WM_APP + 22;
+constexpr UINT kAudioOutputsChanged = WM_APP + 23;
+constexpr UINT kSmtcButton = WM_APP + 24;
 constexpr wchar_t kSettings[] = L"Software\\Resona\\Desktop";
 constexpr wchar_t kLyricsClass[] = L"ResonaDesktopLyrics";
 enum Command : UINT {
@@ -49,6 +65,160 @@ std::wstring Wide(const std::string& text) {
   return wide;
 }
 
+std::string Narrow(const std::wstring& wide) {
+  if (wide.empty()) return {};
+  const int size = WideCharToMultiByte(CP_UTF8, 0, wide.data(),
+                                       static_cast<int>(wide.size()), nullptr, 0,
+                                       nullptr, nullptr);
+  if (size <= 0) return {};
+  std::string text(static_cast<size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()),
+                      text.data(), size, nullptr, nullptr);
+  return text;
+}
+
+bool ContainsCaseInsensitive(const std::wstring& haystack,
+                             const std::wstring& needle) {
+  if (needle.empty()) return true;
+  auto it = std::search(
+      haystack.begin(), haystack.end(), needle.begin(), needle.end(),
+      [](wchar_t a, wchar_t b) { return std::towlower(a) == std::towlower(b); });
+  return it != haystack.end();
+}
+
+bool StartsWithCaseInsensitive(const std::wstring& value,
+                               const std::wstring& prefix) {
+  if (value.size() < prefix.size()) return false;
+  return std::equal(prefix.begin(), prefix.end(), value.begin(),
+                    [](wchar_t a, wchar_t b) {
+                      return std::towlower(a) == std::towlower(b);
+                    });
+}
+
+std::wstring ReadPropString(IPropertyStore* store, const PROPERTYKEY& key) {
+  if (!store) return {};
+  PROPVARIANT value;
+  PropVariantInit(&value);
+  std::wstring result;
+  if (SUCCEEDED(store->GetValue(key, &value)) &&
+      value.vt == VT_LPWSTR && value.pwszVal != nullptr) {
+    result = value.pwszVal;
+  }
+  PropVariantClear(&value);
+  return result;
+}
+
+struct AudioEndpointInfo {
+  std::wstring id;
+  std::string name;
+  std::string enumerator;
+  bool is_bluetooth = false;
+  bool is_default = false;
+};
+
+class DeviceNotificationClient final : public IMMNotificationClient {
+ public:
+  explicit DeviceNotificationClient(HWND owner) : owner_(owner) {}
+
+  void Detach() { owner_.store(nullptr); }
+
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    const ULONG count = --ref_;
+    if (count == 0) delete this;
+    return count;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(IUnknown) || riid == __uuidof(IMMNotificationClient)) {
+      *ppv = static_cast<IMMNotificationClient*>(this);
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+
+  HRESULT STDMETHODCALLTYPE OnDeviceStateChanged(LPCWSTR, DWORD) override {
+    PostChange();
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE OnDeviceAdded(LPCWSTR) override {
+    PostChange();
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE OnDeviceRemoved(LPCWSTR) override {
+    PostChange();
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE OnDefaultDeviceChanged(EDataFlow flow, ERole role,
+                                                   LPCWSTR) override {
+    if (flow == eRender && role == eConsole) PostChange();
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR,
+                                                   const PROPERTYKEY) override {
+    return S_OK;
+  }
+
+ private:
+  void PostChange() const {
+    if (const HWND target = owner_.load()) {
+      PostMessage(target, kAudioOutputsChanged, 0, 0);
+    }
+  }
+
+  std::atomic<ULONG> ref_{1};
+  std::atomic<HWND> owner_{nullptr};
+};
+
+using SmtcButtonHandlerBase = ABI::Windows::Foundation::ITypedEventHandler<
+    ABI::Windows::Media::SystemMediaTransportControls*,
+    ABI::Windows::Media::SystemMediaTransportControlsButtonPressedEventArgs*>;
+
+class SmtcButtonHandler final : public SmtcButtonHandlerBase {
+ public:
+  explicit SmtcButtonHandler(HWND owner) : owner_(owner) {}
+
+  void Detach() { owner_.store(nullptr); }
+
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    const ULONG count = --ref_;
+    if (count == 0) delete this;
+    return count;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(IUnknown) ||
+        riid == __uuidof(SmtcButtonHandlerBase)) {
+      *ppv = static_cast<SmtcButtonHandlerBase*>(this);
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+
+  HRESULT STDMETHODCALLTYPE Invoke(
+      ABI::Windows::Media::ISystemMediaTransportControls*,
+      ABI::Windows::Media::ISystemMediaTransportControlsButtonPressedEventArgs*
+          args) override {
+    if (!args) return S_OK;
+    ABI::Windows::Media::SystemMediaTransportControlsButton button{};
+    if (SUCCEEDED(args->get_Button(&button))) {
+      if (const HWND target = owner_.load()) {
+        PostMessage(target, kSmtcButton, static_cast<WPARAM>(button), 0);
+      }
+    }
+    return S_OK;
+  }
+
+ private:
+  std::atomic<ULONG> ref_{1};
+  std::atomic<HWND> owner_{nullptr};
+};
+
 DWORD ReadSetting(const wchar_t* name, DWORD fallback) {
   DWORD value = fallback, bytes = sizeof(value);
   if (RegGetValue(HKEY_CURRENT_USER, kSettings, name, RRF_RT_REG_DWORD,
@@ -82,6 +252,267 @@ void MenuItem(HMENU menu, UINT id, const std::wstring& title,
 }
 }  // namespace
 
+struct DesktopIntegration::AudioState {
+  explicit AudioState(HWND owner) : owner_(owner) {}
+
+  void Initialize() {
+    if (initialized_) return;
+    initialized_ = true;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                  CLSCTX_ALL, IID_PPV_ARGS(&enumerator_));
+    if (SUCCEEDED(hr) && enumerator_) {
+      notify_client_ = new DeviceNotificationClient(owner_);
+      if (FAILED(enumerator_->RegisterEndpointNotificationCallback(
+              notify_client_))) {
+        notify_client_->Detach();
+        notify_client_->Release();
+        notify_client_ = nullptr;
+      }
+    }
+
+    const HRESULT ro_hr = RoInitialize(RO_INIT_SINGLETHREADED);
+    ro_initialized_ = SUCCEEDED(ro_hr);
+    constexpr wchar_t kSmtcClass[] =
+        L"Windows.Media.SystemMediaTransportControls";
+    HSTRING_HEADER class_header{};
+    HSTRING class_name = nullptr;
+    if (SUCCEEDED(WindowsCreateStringReference(
+            kSmtcClass,
+            static_cast<UINT32>(sizeof(kSmtcClass) / sizeof(wchar_t) - 1),
+            &class_header, &class_name))) {
+      ISystemMediaTransportControlsInterop* interop = nullptr;
+      if (SUCCEEDED(
+              RoGetActivationFactory(class_name, IID_PPV_ARGS(&interop))) &&
+          interop) {
+        if (SUCCEEDED(interop->GetForWindow(owner_, IID_PPV_ARGS(&smtc_))) &&
+            smtc_) {
+          constexpr boolean kWinRtTrue = 1;
+          smtc_->put_IsEnabled(kWinRtTrue);
+          smtc_->put_IsPlayEnabled(kWinRtTrue);
+          smtc_->put_IsPauseEnabled(kWinRtTrue);
+          smtc_->put_IsStopEnabled(kWinRtTrue);
+          smtc_->put_IsNextEnabled(kWinRtTrue);
+          smtc_->put_IsPreviousEnabled(kWinRtTrue);
+          smtc_->put_PlaybackStatus(
+              ABI::Windows::Media::MediaPlaybackStatus_Closed);
+          smtc_handler_ = new SmtcButtonHandler(owner_);
+          if (FAILED(smtc_->add_ButtonPressed(smtc_handler_, &smtc_token_))) {
+            smtc_handler_->Detach();
+            smtc_handler_->Release();
+            smtc_handler_ = nullptr;
+          } else {
+            has_smtc_token_ = true;
+          }
+          smtc_->get_DisplayUpdater(&updater_);
+        }
+        interop->Release();
+      }
+    }
+  }
+
+  void Shutdown() {
+    if (notify_client_) {
+      notify_client_->Detach();
+      if (enumerator_) {
+        enumerator_->UnregisterEndpointNotificationCallback(notify_client_);
+      }
+      notify_client_->Release();
+      notify_client_ = nullptr;
+    }
+    if (enumerator_) {
+      enumerator_->Release();
+      enumerator_ = nullptr;
+    }
+    if (smtc_handler_) {
+      smtc_handler_->Detach();
+      if (smtc_ && has_smtc_token_) {
+        smtc_->remove_ButtonPressed(smtc_token_);
+      }
+      smtc_handler_->Release();
+      smtc_handler_ = nullptr;
+      has_smtc_token_ = false;
+    }
+    if (updater_) {
+      updater_->Release();
+      updater_ = nullptr;
+    }
+    if (smtc_) {
+      smtc_->Release();
+      smtc_ = nullptr;
+    }
+    if (ro_initialized_) {
+      RoUninitialize();
+      ro_initialized_ = false;
+    }
+  }
+
+  std::vector<AudioEndpointInfo> QueryOutputs(bool* bluetooth_disconnected,
+                                              bool update_tracking) {
+    if (bluetooth_disconnected) *bluetooth_disconnected = false;
+    std::vector<AudioEndpointInfo> result;
+    if (!enumerator_) return result;
+
+    std::wstring default_id;
+    IMMDevice* default_device = nullptr;
+    if (SUCCEEDED(enumerator_->GetDefaultAudioEndpoint(eRender, eConsole,
+                                                       &default_device)) &&
+        default_device) {
+      LPWSTR id_raw = nullptr;
+      if (SUCCEEDED(default_device->GetId(&id_raw)) && id_raw) {
+        default_id = id_raw;
+        CoTaskMemFree(id_raw);
+      }
+      default_device->Release();
+    }
+
+    IMMDeviceCollection* collection = nullptr;
+    if (FAILED(enumerator_->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE,
+                                               &collection)) ||
+        !collection) {
+      return result;
+    }
+    UINT count = 0;
+    if (SUCCEEDED(collection->GetCount(&count))) {
+      std::wstring next_active_bt_id;
+      bool prev_bt_still_present = false;
+      for (UINT i = 0; i < count; ++i) {
+        IMMDevice* device = nullptr;
+        if (FAILED(collection->Item(i, &device)) || !device) continue;
+        LPWSTR id_raw = nullptr;
+        std::wstring id;
+        if (SUCCEEDED(device->GetId(&id_raw)) && id_raw) {
+          id = id_raw;
+          CoTaskMemFree(id_raw);
+        }
+        std::wstring name_w;
+        std::wstring enumerator_w;
+        IPropertyStore* store = nullptr;
+        if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store)) && store) {
+          name_w = ReadPropString(store, PKEY_Device_FriendlyName);
+          enumerator_w = ReadPropString(store, PKEY_Device_EnumeratorName);
+          store->Release();
+        }
+        device->Release();
+        if (id.empty() || name_w.empty()) continue;
+        const bool is_bt =
+            StartsWithCaseInsensitive(enumerator_w, L"BTH") ||
+            ContainsCaseInsensitive(name_w, L"Bluetooth");
+        const bool is_default = !default_id.empty() && id == default_id;
+        if (!active_bt_id_.empty() && id == active_bt_id_) {
+          prev_bt_still_present = true;
+        }
+        if (is_default && is_bt) {
+          next_active_bt_id = id;
+        }
+        AudioEndpointInfo info;
+        info.id = id;
+        info.name = Narrow(name_w);
+        info.enumerator = Narrow(enumerator_w);
+        info.is_bluetooth = is_bt;
+        info.is_default = is_default;
+        result.push_back(std::move(info));
+      }
+      if (bluetooth_disconnected && !active_bt_id_.empty() &&
+          !prev_bt_still_present) {
+        *bluetooth_disconnected = true;
+      }
+      if (update_tracking) {
+        active_bt_id_ = next_active_bt_id;
+      }
+    }
+    collection->Release();
+    return result;
+  }
+
+  flutter::EncodableList EncodeOutputs(
+      const std::vector<AudioEndpointInfo>& items) const {
+    flutter::EncodableList list;
+    list.reserve(items.size());
+    for (const auto& item : items) {
+      flutter::EncodableMap entry;
+      entry[flutter::EncodableValue("id")] =
+          flutter::EncodableValue(Narrow(item.id));
+      entry[flutter::EncodableValue("name")] =
+          flutter::EncodableValue(item.name);
+      entry[flutter::EncodableValue("enumerator")] =
+          flutter::EncodableValue(item.enumerator);
+      entry[flutter::EncodableValue("bluetooth")] =
+          flutter::EncodableValue(item.is_bluetooth);
+      entry[flutter::EncodableValue("isDefault")] =
+          flutter::EncodableValue(item.is_default);
+      list.push_back(flutter::EncodableValue(std::move(entry)));
+    }
+    return list;
+  }
+
+  void UpdateSmtc(bool available, bool playing, bool opening,
+                  const std::wstring& title, const std::wstring& artist,
+                  const std::wstring& album) {
+    if (!smtc_) return;
+    ABI::Windows::Media::MediaPlaybackStatus status =
+        ABI::Windows::Media::MediaPlaybackStatus_Closed;
+    if (available) {
+      if (opening) {
+        status = ABI::Windows::Media::MediaPlaybackStatus_Changing;
+      } else if (playing) {
+        status = ABI::Windows::Media::MediaPlaybackStatus_Playing;
+      } else {
+        status = ABI::Windows::Media::MediaPlaybackStatus_Paused;
+      }
+    }
+    smtc_->put_PlaybackStatus(status);
+    if (!updater_) return;
+    if (!available) {
+      updater_->ClearAll();
+      updater_->Update();
+      return;
+    }
+    updater_->put_Type(ABI::Windows::Media::MediaPlaybackType_Music);
+    ABI::Windows::Media::IMusicDisplayProperties* music = nullptr;
+    if (SUCCEEDED(updater_->get_MusicProperties(&music)) && music) {
+      HSTRING_HEADER title_header{}, artist_header{};
+      HSTRING title_str = nullptr, artist_str = nullptr;
+      if (SUCCEEDED(WindowsCreateStringReference(
+              title.c_str(), static_cast<UINT32>(title.size()), &title_header,
+              &title_str))) {
+        music->put_Title(title_str);
+      }
+      if (SUCCEEDED(WindowsCreateStringReference(
+              artist.c_str(), static_cast<UINT32>(artist.size()),
+              &artist_header, &artist_str))) {
+        music->put_Artist(artist_str);
+      }
+      ABI::Windows::Media::IMusicDisplayProperties2* music2 = nullptr;
+      if (SUCCEEDED(music->QueryInterface(IID_PPV_ARGS(&music2))) && music2) {
+        HSTRING_HEADER album_header{};
+        HSTRING album_str = nullptr;
+        if (SUCCEEDED(WindowsCreateStringReference(
+                album.c_str(), static_cast<UINT32>(album.size()),
+                &album_header, &album_str))) {
+          music2->put_AlbumTitle(album_str);
+        }
+        music2->Release();
+      }
+      music->Release();
+    }
+    updater_->Update();
+  }
+
+  HWND owner_;
+  bool initialized_ = false;
+  bool ro_initialized_ = false;
+  IMMDeviceEnumerator* enumerator_ = nullptr;
+  DeviceNotificationClient* notify_client_ = nullptr;
+  ABI::Windows::Media::ISystemMediaTransportControls* smtc_ = nullptr;
+  ABI::Windows::Media::ISystemMediaTransportControlsDisplayUpdater* updater_ =
+      nullptr;
+  SmtcButtonHandler* smtc_handler_ = nullptr;
+  EventRegistrationToken smtc_token_{};
+  bool has_smtc_token_ = false;
+  std::wstring active_bt_id_;
+  std::string last_signature_;
+};
+
 DesktopIntegration::DesktopIntegration(HWND owner,
                                        flutter::BinaryMessenger* messenger)
     : owner_(owner) {
@@ -109,6 +540,8 @@ DesktopIntegration::DesktopIntegration(HWND owner,
                           0, 0, 760, 112, nullptr, nullptr, wc.hInstance, this);
   // Register after the owner has finished installing its message handler.
   PostMessage(owner_, kRegisterTray, 0, 0);
+  audio_ = std::make_unique<AudioState>(owner_);
+  audio_->Initialize();
   channel_ = std::make_unique<flutter::MethodChannel<Value>>(
       messenger, "app.resona/desktop", &flutter::StandardMethodCodec::GetInstance());
   channel_->SetMethodCallHandler(
@@ -146,6 +579,19 @@ DesktopIntegration::DesktopIntegration(HWND owner,
           UpdateLyrics();
           if (SavePreferences()) result->Success(Value(Preferences()));
           else result->Error("save_failed", "Could not save desktop preferences.");
+        } else if (call.method_name() == "audioOutputs") {
+          const auto items = audio_ ? audio_->QueryOutputs(nullptr, true)
+                                    : std::vector<AudioEndpointInfo>{};
+          result->Success(Value(audio_ ? audio_->EncodeOutputs(items)
+                                       : flutter::EncodableList{}));
+        } else if (call.method_name() == "openBluetoothSettings") {
+          ShellExecute(owner_, L"open", L"ms-settings:bluetooth", nullptr,
+                       nullptr, SW_SHOWNORMAL);
+          result->Success();
+        } else if (call.method_name() == "openSoundSettings") {
+          ShellExecute(owner_, L"open", L"ms-settings:sound", nullptr, nullptr,
+                       SW_SHOWNORMAL);
+          result->Success();
         } else if (call.method_name() == "quit") {
           result->Success();
           PostMessage(owner_, kExit, 0, 0);
@@ -156,6 +602,10 @@ DesktopIntegration::DesktopIntegration(HWND owner,
 }
 
 DesktopIntegration::~DesktopIntegration() {
+  if (audio_) {
+    audio_->Shutdown();
+    audio_.reset();
+  }
   if (channel_) channel_->SetMethodCallHandler(nullptr);
   KillTimer(owner_, kRegisterTray);
   if (tray_added_) Shell_NotifyIcon(NIM_DELETE, &tray_);
@@ -278,6 +728,57 @@ std::optional<LRESULT> DesktopIntegration::HandleMessage(UINT message,
       AddTrayIcon();
       PlaceLyrics();
       break;
+    case kAudioOutputsChanged:
+      NotifyAudioOutputs();
+      return 0;
+    case kSmtcButton: {
+      using ABI::Windows::Media::SystemMediaTransportControlsButton;
+      switch (static_cast<SystemMediaTransportControlsButton>(wparam)) {
+        case ABI::Windows::Media::SystemMediaTransportControlsButton_Play:
+          Action("play");
+          break;
+        case ABI::Windows::Media::SystemMediaTransportControlsButton_Pause:
+          Action("pause");
+          break;
+        case ABI::Windows::Media::SystemMediaTransportControlsButton_Stop:
+          Action("stop");
+          break;
+        case ABI::Windows::Media::SystemMediaTransportControlsButton_Next:
+          Action("next");
+          break;
+        case ABI::Windows::Media::SystemMediaTransportControlsButton_Previous:
+          Action("previous");
+          break;
+        default:
+          break;
+      }
+      return 0;
+    }
+    case WM_APPCOMMAND: {
+      switch (GET_APPCOMMAND_LPARAM(lparam)) {
+        case APPCOMMAND_MEDIA_PLAY_PAUSE:
+          Action("toggle");
+          return TRUE;
+        case APPCOMMAND_MEDIA_PLAY:
+          Action("play");
+          return TRUE;
+        case APPCOMMAND_MEDIA_PAUSE:
+          Action("pause");
+          return TRUE;
+        case APPCOMMAND_MEDIA_STOP:
+          Action("stop");
+          return TRUE;
+        case APPCOMMAND_MEDIA_NEXTTRACK:
+          Action("next");
+          return TRUE;
+        case APPCOMMAND_MEDIA_PREVIOUSTRACK:
+          Action("previous");
+          return TRUE;
+        default:
+          break;
+      }
+      break;
+    }
     case WM_QUERYENDSESSION:
       SavePreferences();
       Action("save");
@@ -366,6 +867,33 @@ void DesktopIntegration::Update(const Map& state) {
   wcsncpy_s(tray_.szTip, (L"Resona - " + title_).c_str(), _TRUNCATE);
   if (!tray_added_ || !Shell_NotifyIcon(NIM_MODIFY, &tray_)) AddTrayIcon();
   if (changed || hovered_) PaintLyrics();
+  UpdateSmtc();
+}
+
+void DesktopIntegration::NotifyAudioOutputs(bool initial) {
+  if (!audio_ || !initialized_ || quitting_) return;
+  bool bluetooth_disconnected = false;
+  const auto items = audio_->QueryOutputs(&bluetooth_disconnected, true);
+  std::string signature;
+  for (const auto& item : items) {
+    signature += Narrow(item.id);
+    signature += item.is_default ? "*|" : "|";
+  }
+  if (!initial && !bluetooth_disconnected &&
+      signature == audio_->last_signature_) {
+    return;
+  }
+  audio_->last_signature_ = signature;
+  Map payload;
+  payload[Value("devices")] = Value(audio_->EncodeOutputs(items));
+  payload[Value("bluetoothDisconnected")] = Value(bluetooth_disconnected);
+  channel_->InvokeMethod("audioOutputsChanged",
+                         std::make_unique<Value>(std::move(payload)));
+}
+
+void DesktopIntegration::UpdateSmtc() {
+  if (!audio_) return;
+  audio_->UpdateSmtc(available_, playing_, opening_, title_, artist_, album_);
 }
 
 DesktopIntegration::Map DesktopIntegration::Preferences() const {
