@@ -118,6 +118,11 @@ struct DesktopTests {
         assert(model.playbackRate == 1.0 && model.avPlayer.defaultRate == 1.0)
         model.stepPlaybackRate(by: 2)
         assert(model.playbackRate == 1.2 && PlayerModel.formatPlaybackRate(model.playbackRate) == "1.2x")
+        assert(PlayerModel.formatCompactPlaybackRate(0.5) == "0.5x" &&
+               PlayerModel.formatCompactPlaybackRate(1.0) == "1x" &&
+               PlayerModel.formatCompactPlaybackRate(1.2) == "1.2x" &&
+               PlayerModel.formatCompactPlaybackRate(1.5) == "1.5x" &&
+               PlayerModel.formatCompactPlaybackRate(2.0) == "2x")
         model.stepPlaybackRate(by: 100)
         assert(model.playbackRate == 2.0)
         model.stepPlaybackRate(by: -100)

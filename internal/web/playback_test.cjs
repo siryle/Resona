@@ -9,6 +9,7 @@ const {
   normalizeRate,
   stepRate,
   formatRate,
+  formatCompactRate,
   nextIndex,
   shuffled,
   appendUnique,
@@ -39,6 +40,11 @@ assert.equal(formatRate(0.5), "0.5x");
 assert.equal(formatRate(1), "1.0x");
 assert.equal(formatRate(1.2), "1.2x");
 assert.equal(formatRate(2), "2.0x");
+assert.equal(formatCompactRate(0.5), "0.5x");
+assert.equal(formatCompactRate(1), "1x");
+assert.equal(formatCompactRate(1.2), "1.2x");
+assert.equal(formatCompactRate(1.5), "1.5x");
+assert.equal(formatCompactRate(2), "2x");
 for (const mode of modes.filter((mode) => mode !== "shuffle")) {
   assert.equal(nextIndex(0, 0, 1, mode), -1);
   assert.equal(nextIndex(3, -1, 1, mode), -1);

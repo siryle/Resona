@@ -44,12 +44,22 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     return (clamped * 10).round() / 10.0;
   }
 
+  static String formatCompactPlaybackRate(double value) {
+    final normalized = normalizePlaybackRate(value);
+    final tenths = (normalized * 10).round();
+    return tenths % 10 == 0
+        ? '${tenths ~/ 10}x'
+        : '${normalized.toStringAsFixed(1)}x';
+  }
+
   String collectionTitle = "";
   String collectionArtist = '';
   bool shuffle = false;
   double volume = 1;
   double playbackRate = 1.0;
   String get playbackRateLabel => '${playbackRate.toStringAsFixed(1)}x';
+  String get compactPlaybackRateLabel =>
+      formatCompactPlaybackRate(playbackRate);
   ResonaAPI? api;
   PlaybackCache? cache;
   PlaybackRelay? relay;

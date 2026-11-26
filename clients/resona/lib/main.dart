@@ -3724,120 +3724,323 @@ class _AudioOutputSheetState extends State<_AudioOutputSheet> {
   }
 }
 
-Future<void> showPlaybackSpeedSheet(
-  BuildContext context,
-  MusicController c,
-) => showModalBottomSheet<void>(
-  context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
-  showDragHandle: true,
-  constraints: const BoxConstraints(maxWidth: 460),
-  builder: (context) => AnimatedBuilder(
-    animation: c,
-    builder: (context, _) {
-      final scheme = Theme.of(context).colorScheme;
-      final isDefault = (c.playbackRate - 1.0).abs() < 0.001;
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+class PlaybackSpeedRuler extends StatefulWidget {
+  final double value;
+  final ValueChanged<double> onChanged;
+  const PlaybackSpeedRuler({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  State<PlaybackSpeedRuler> createState() => _PlaybackSpeedRulerState();
+}
+
+class _PlaybackSpeedRulerState extends State<PlaybackSpeedRuler> {
+  static const double _inset = 10.0;
+  static const List<(int, double, String)> _marks = [
+    (0, 0.5, '0.5x'),
+    (5, 1.0, '1x'),
+    (10, 1.5, '1.5x'),
+    (15, 2.0, '2x'),
+  ];
+
+  int? _lastStep;
+
+  int get _activeIndex {
+    final normalized = MusicController.normalizePlaybackRate(widget.value);
+    return ((normalized * 10).round() - 5).clamp(0, 15);
+  }
+
+  void _stepBy(int delta) {
+    final nextStep = (_activeIndex + delta).clamp(0, 15);
+    if (nextStep == _activeIndex) return;
+    unawaited(HapticFeedback.selectionClick());
+    widget.onChanged(MusicController.normalizePlaybackRate((5 + nextStep) / 10));
+  }
+
+  void _selectAt(double localX, double width) {
+    final usable = (width - _inset * 2).clamp(1.0, double.infinity);
+    final ratio = ((localX - _inset) / usable).clamp(0.0, 1.0);
+    final step = (ratio * 15).round().clamp(0, 15);
+    if (step == _lastStep) return;
+    _lastStep = step;
+    unawaited(HapticFeedback.selectionClick());
+    widget.onChanged(MusicController.normalizePlaybackRate((5 + step) / 10));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final active = _activeIndex;
+    return Semantics(
+      label: '倍速播放',
+      value: MusicController.formatCompactPlaybackRate(widget.value),
+      slider: true,
+      onIncrease: active >= 15 ? null : () => _stepBy(1),
+      onDecrease: active <= 0 ? null : () => _stepBy(-1),
+      child: Focus(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+                _stepBy(-1),
+            const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+                _stepBy(1),
+          },
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '倍速播放',
-                          style: Theme.of(context).textTheme.titleLarge,
+              LayoutBuilder(
+                builder: (context, constraints) => GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (d) =>
+                      _selectAt(d.localPosition.dx, constraints.maxWidth),
+                  onTapUp: (_) => _lastStep = null,
+                  onTapCancel: () => _lastStep = null,
+                  onHorizontalDragStart: (d) =>
+                      _selectAt(d.localPosition.dx, constraints.maxWidth),
+                  onHorizontalDragUpdate: (d) =>
+                      _selectAt(d.localPosition.dx, constraints.maxWidth),
+                  onHorizontalDragEnd: (_) => _lastStep = null,
+                  onHorizontalDragCancel: () => _lastStep = null,
+                  child: SizedBox(
+                    height: 46,
+                    width: double.infinity,
+                    child: CustomPaint(
+                      painter: _SpeedRulerPainter(
+                        activeIndex: active,
+                        inset: _inset,
+                        activeColor: scheme.onSurface,
+                        majorColor: scheme.onSurfaceVariant.withValues(
+                          alpha: 0.65,
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '当前 ${c.playbackRateLabel}',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
+                        minorColor: scheme.onSurfaceVariant.withValues(
+                          alpha: 0.35,
                         ),
-                      ],
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: isDefault
-                        ? null
-                        : () => unawaited(c.setPlaybackRate(1.0)),
-                    child: const Text('重置 1.0x'),
-                  ),
-                  IconButton(
-                    tooltip: '关闭',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-              ),
-              if (c.isCastingDlna)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6, bottom: 4),
-                  child: Text(
-                    'DLNA 投屏时保持原速播放，切回本机播放后自动生效。',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  OutlinedButton(
-                    onPressed: c.playbackRate <= MusicController.minPlaybackRate
-                        ? null
-                        : () => unawaited(c.stepPlaybackRate(-1)),
-                    child: const Text('-0.1x'),
-                  ),
-                  Expanded(
-                    child: Slider(
-                      value: c.playbackRate,
-                      min: MusicController.minPlaybackRate,
-                      max: MusicController.maxPlaybackRate,
-                      divisions: 15,
-                      label: c.playbackRateLabel,
-                      onChanged: (value) => unawaited(c.setPlaybackRate(value)),
-                    ),
-                  ),
-                  OutlinedButton(
-                    onPressed: c.playbackRate >= MusicController.maxPlaybackRate
-                        ? null
-                        : () => unawaited(c.stepPlaybackRate(1)),
-                    child: const Text('+0.1x'),
-                  ),
-                ],
               ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final rate in MusicController.playbackRates)
-                    ChoiceChip(
-                      label: Text(
-                        '${rate.toStringAsFixed(1)}x',
-                        style: const TextStyle(
-                          fontFeatures: [FontFeature.tabularFigures()],
-                        ),
-                      ),
-                      selected: (c.playbackRate - rate).abs() < 0.001,
-                      onSelected: (_) => unawaited(c.setPlaybackRate(rate)),
-                    ),
-                ],
+              const SizedBox(height: 4),
+              SizedBox(
+                height: 24,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final width = constraints.maxWidth;
+                    final usable = (width - _inset * 2).clamp(
+                      1.0,
+                      double.infinity,
+                    );
+                    return Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        for (final mark in _marks)
+                          _buildMark(context, mark, width, usable, active),
+                      ],
+                    );
+                  },
+                ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildMark(
+    BuildContext context,
+    (int, double, String) mark,
+    double width,
+    double usable,
+    int active,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    final (index, rate, label) = mark;
+    final isActive = active == index;
+    final text = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        unawaited(HapticFeedback.selectionClick());
+        widget.onChanged(rate);
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: isActive ? FontWeight.w700 : FontWeight.w400,
+            fontFeatures: const [FontFeature.tabularFigures()],
+            color: isActive
+                ? scheme.onSurface
+                : scheme.onSurfaceVariant.withValues(alpha: 0.72),
+          ),
+        ),
+      ),
+    );
+    if (index == 0) {
+      return Positioned(left: 0, top: 0, bottom: 0, child: text);
+    }
+    if (index == 15) {
+      return Positioned(right: 0, top: 0, bottom: 0, child: text);
+    }
+    final x = _inset + usable * (index / 15.0);
+    return Positioned(
+      left: x - 26,
+      width: 52,
+      top: 0,
+      bottom: 0,
+      child: Center(child: text),
+    );
+  }
+}
+
+class _SpeedRulerPainter extends CustomPainter {
+  final int activeIndex;
+  final double inset;
+  final Color activeColor;
+  final Color majorColor;
+  final Color minorColor;
+
+  const _SpeedRulerPainter({
+    required this.activeIndex,
+    required this.inset,
+    required this.activeColor,
+    required this.majorColor,
+    required this.minorColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final usable = (size.width - inset * 2).clamp(1.0, double.infinity);
+    final midY = size.height / 2;
+    for (var i = 0; i < 16; i++) {
+      final isSelected = i == activeIndex;
+      final isMajor = i % 5 == 0;
+      final x = inset + usable * (i / 15.0);
+      final w = isSelected ? 4.0 : 2.0;
+      final h = isSelected ? 28.0 : (isMajor ? 18.0 : 10.0);
+      final rect = Rect.fromCenter(center: Offset(x, midY), width: w, height: h);
+      final rrect = RRect.fromRectAndRadius(rect, Radius.circular(w / 2));
+      if (isSelected) {
+        canvas.drawRRect(
+          rrect,
+          Paint()
+            ..color = activeColor.withValues(alpha: 0.25)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+        );
+      }
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = isSelected
+              ? activeColor
+              : (isMajor ? majorColor : minorColor),
       );
-    },
+    }
+  }
+
+  @override
+  bool shouldRepaint(_SpeedRulerPainter oldDelegate) =>
+      oldDelegate.activeIndex != activeIndex ||
+      oldDelegate.activeColor != activeColor ||
+      oldDelegate.majorColor != majorColor ||
+      oldDelegate.minorColor != minorColor;
+}
+
+Future<void> showPlaybackSpeedSheet(
+  BuildContext context,
+  MusicController c,
+) => showGeneralDialog<void>(
+  context: context,
+  barrierDismissible: true,
+  barrierLabel: '关闭倍速滑动条',
+  barrierColor: Colors.black.withValues(alpha: 0.24),
+  transitionDuration: const Duration(milliseconds: 180),
+  transitionBuilder: (context, animation, _, child) {
+    final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.08),
+          end: Offset.zero,
+        ).animate(curved),
+        child: child,
+      ),
+    );
+  },
+  pageBuilder: (context, _, _) => SafeArea(
+    child: Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: AnimatedBuilder(
+            animation: c,
+            builder: (context, _) {
+              final scheme = Theme.of(context).colorScheme;
+              return Material(
+                color: scheme.surfaceContainerLow,
+                elevation: 12,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  side: BorderSide(color: scheme.outlineVariant),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            '倍速播放',
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            c.compactPlaybackRateLabel,
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      PlaybackSpeedRuler(
+                        value: c.playbackRate,
+                        onChanged: (value) =>
+                            unawaited(c.setPlaybackRate(value)),
+                      ),
+                      if (c.isCastingDlna)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          child: Text(
+                            'DLNA 投屏时保持原速播放，切回本机播放后自动生效。',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    ),
   ),
 );

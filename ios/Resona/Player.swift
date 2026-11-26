@@ -122,6 +122,12 @@ final class PlayerModel: ObservableObject {
         String(format: "%.1fx", normalizePlaybackRate(value))
     }
 
+    static func formatCompactPlaybackRate(_ value: Float) -> String {
+        let normalized = normalizePlaybackRate(value)
+        let tenths = Int((normalized * 10).rounded())
+        return tenths % 10 == 0 ? "\(tenths / 10)x" : String(format: "%.1fx", normalized)
+    }
+
     @Published var current: Track?
     @Published var playing = false
     @Published var position: Double = 0

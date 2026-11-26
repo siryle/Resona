@@ -35,6 +35,10 @@ void main() {
     addTearDown(c.dispose);
     expect(c.playbackRate, 1.0);
     expect(c.playbackRateLabel, '1.0x');
+    expect(c.compactPlaybackRateLabel, '1x');
+    expect(MusicController.formatCompactPlaybackRate(0.5), '0.5x');
+    expect(MusicController.formatCompactPlaybackRate(1.2), '1.2x');
+    expect(MusicController.formatCompactPlaybackRate(2.0), '2x');
 
     await c.stepPlaybackRate(2);
     expect(c.playbackRate, 1.2);
@@ -139,6 +143,7 @@ void main() {
       if (size.width >= 1200) {
         await tester.tap(find.byTooltip('倍速播放 · 1.0x'));
         await tester.pumpAndSettle();
+        expect(find.byType(PlaybackSpeedRuler), findsOneWidget);
         expect(find.text('倍速播放'), findsOneWidget);
 
         await tester.tap(find.text('1.5x'));
@@ -146,9 +151,25 @@ void main() {
         expect(c.playbackRate, 1.5);
         expect(find.byTooltip('倍速播放 · 1.5x'), findsOneWidget);
 
-        await tester.tap(find.text('重置 1.0x'));
+        final rulerPaint = find.descendant(
+          of: find.byType(PlaybackSpeedRuler),
+          matching: find.byType(CustomPaint),
+        );
+        await tester.drag(rulerPaint, const Offset(400, 0));
+        await tester.pumpAndSettle();
+        expect(c.playbackRate, 2.0);
+
+        await tester.drag(rulerPaint, const Offset(-400, 0));
+        await tester.pumpAndSettle();
+        expect(c.playbackRate, 0.5);
+
+        await tester.tap(find.text('1x'));
         await tester.pumpAndSettle();
         expect(c.playbackRate, 1.0);
+
+        await tester.tapAt(const Offset(20, 20));
+        await tester.pumpAndSettle();
+        expect(find.byType(PlaybackSpeedRuler), findsNothing);
         expect(tester.takeException(), isNull);
       }
     }

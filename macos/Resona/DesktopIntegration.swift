@@ -490,36 +490,15 @@ private struct MenuPlaybackView: View {
                 }.menuStyle(.borderlessButton).fixedSize().help("切换蓝牙或本机输出")
                 MacAirPlayPicker(player: player).frame(width: 24, height: 24)
             }
-            HStack(spacing: 8) {
-                Text("倍速播放").font(.caption)
-                Spacer()
-                Button("-") { player.stepPlaybackRate(by: -1) }
-                    .buttonStyle(.bordered).controlSize(.mini)
-                    .disabled(player.playbackRate <= 0.5)
-                    .accessibilityLabel("减速 0.1 倍")
-                Menu {
-                    Button("恢复原速 (1.0x)") { player.setPlaybackRate(1.0) }
-                        .disabled(abs(player.playbackRate - 1.0) < 0.001)
-                    Divider()
-                    ForEach(PlayerModel.supportedPlaybackRates, id: \.self) { rate in
-                        Button {
-                            player.setPlaybackRate(rate)
-                        } label: {
-                            HStack {
-                                Text(PlayerModel.formatPlaybackRate(rate))
-                                if abs(player.playbackRate - rate) < 0.001 { Image(systemName: "checkmark") }
-                            }
-                        }
-                    }
-                } label: {
-                    Text(PlayerModel.formatPlaybackRate(player.playbackRate))
-                        .font(.caption.weight(.semibold).monospacedDigit())
-                        .frame(minWidth: 38)
-                }.menuStyle(.borderlessButton).fixedSize()
-                Button("+") { player.stepPlaybackRate(by: 1) }
-                    .buttonStyle(.bordered).controlSize(.mini)
-                    .disabled(player.playbackRate >= 2.0)
-                    .accessibilityLabel("加速 0.1 倍")
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("倍速播放").font(.caption).foregroundStyle(Theme.secondary)
+                    Text(PlayerModel.formatCompactPlaybackRate(player.playbackRate))
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(Theme.ink)
+                    Spacer()
+                }
+                MacPlaybackSpeedRuler(player: player, compact: true)
             }
             if let error = desktop.library.error {
                 Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)

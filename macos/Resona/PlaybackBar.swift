@@ -148,64 +148,119 @@ struct MacAudioOutputPopover: View {
     }
 }
 
+struct MacPlaybackSpeedRuler: View {
+    @ObservedObject var player: PlayerModel
+    var compact: Bool = false
+
+    private static let marks: [(index: Int, rate: Float, label: String)] = [
+        (0, 0.5, "0.5x"),
+        (5, 1.0, "1x"),
+        (10, 1.5, "1.5x"),
+        (15, 2.0, "2x"),
+    ]
+
+    private var selectedIndex: Int {
+        min(max(Int((player.playbackRate * 10).rounded()) - 5, 0), 15)
+    }
+
+    var body: some View {
+        let inset: CGFloat = compact ? 6 : 8
+        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
+            GeometryReader { geometry in
+                let usable = max(geometry.size.width - inset * 2, 1)
+                let active = selectedIndex
+                ZStack {
+                    ForEach(0..<16, id: \.self) { index in
+                        let isSelected = index == active
+                        let isMajor = index % 5 == 0
+                        let x = inset + usable * CGFloat(index) / 15
+                        Capsule()
+                            .fill(isSelected ? Theme.ink : (isMajor ? Theme.secondary.opacity(0.65) : Theme.muted.opacity(0.42)))
+                            .frame(
+                                width: isSelected ? (compact ? 3.5 : 4) : 2,
+                                height: isSelected ? (compact ? 24 : 28) : (isMajor ? (compact ? 14 : 18) : (compact ? 8 : 10))
+                            )
+                            .shadow(color: isSelected ? Theme.ink.opacity(0.25) : .clear, radius: 5)
+                            .position(x: x, y: geometry.size.height / 2)
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let ratio = min(max((value.location.x - inset) / usable, 0), 1)
+                            let step = min(max(Int((ratio * 15).rounded()), 0), 15)
+                            player.setPlaybackRate(Float(5 + step) / 10)
+                        }
+                )
+            }
+            .frame(height: compact ? 36 : 42)
+            .focusable()
+            .onKeyPress(.leftArrow) {
+                player.stepPlaybackRate(by: -1)
+                return .handled
+            }
+            .onKeyPress(.rightArrow) {
+                player.stepPlaybackRate(by: 1)
+                return .handled
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("倍速播放")
+            .accessibilityValue(PlayerModel.formatCompactPlaybackRate(player.playbackRate))
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: player.stepPlaybackRate(by: 1)
+                case .decrement: player.stepPlaybackRate(by: -1)
+                @unknown default: break
+                }
+            }
+
+            GeometryReader { geometry in
+                let usable = max(geometry.size.width - inset * 2, 1)
+                let active = selectedIndex
+                ZStack(alignment: .leading) {
+                    ForEach(Self.marks, id: \.index) { mark in
+                        let isActive = mark.index == active
+                        let button = Button {
+                            player.setPlaybackRate(mark.rate)
+                        } label: {
+                            Text(mark.label)
+                                .font(.system(size: compact ? 11 : 12, weight: isActive ? .semibold : .regular).monospacedDigit())
+                                .foregroundStyle(isActive ? Theme.ink : Theme.muted)
+                        }.buttonStyle(.plain)
+
+                        if mark.index == 0 {
+                            button.frame(maxWidth: .infinity, alignment: .leading)
+                        } else if mark.index == 15 {
+                            button.frame(maxWidth: .infinity, alignment: .trailing)
+                        } else {
+                            button.position(x: inset + usable * CGFloat(mark.index) / 15, y: geometry.size.height / 2)
+                        }
+                    }
+                }
+            }
+            .frame(height: 18)
+        }
+    }
+}
+
 struct MacPlaybackSpeedPopover: View {
     @EnvironmentObject private var player: PlayerModel
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("倍速播放").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                    Text("当前 \(PlayerModel.formatPlaybackRate(player.playbackRate))")
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                }
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("倍速播放").font(.subheadline).foregroundStyle(Theme.secondary)
+                Text(PlayerModel.formatCompactPlaybackRate(player.playbackRate))
+                    .font(.subheadline.weight(.bold).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
                 Spacer()
-                Button("重置 1.0x") { player.setPlaybackRate(1.0) }
-                    .buttonStyle(.borderless)
-                    .font(.caption)
-                    .foregroundStyle(abs(player.playbackRate - 1.0) > 0.001 ? Theme.accent : Theme.muted)
-                    .disabled(abs(player.playbackRate - 1.0) < 0.001)
             }
-
-            HStack(spacing: 8) {
-                Button("-0.1x") { player.stepPlaybackRate(by: -1) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(player.playbackRate <= 0.5)
-                Slider(
-                    value: Binding(
-                        get: { Double(player.playbackRate) },
-                        set: { player.setPlaybackRate(Float($0)) }
-                    ),
-                    in: 0.5...2.0,
-                    step: 0.1
-                ).accessibilityLabel("倍速滑块")
-                Button("+0.1x") { player.stepPlaybackRate(by: 1) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(player.playbackRate >= 2.0)
-            }
-
-            LazyVGrid(columns: columns, spacing: 6) {
-                ForEach(PlayerModel.supportedPlaybackRates, id: \.self) { rate in
-                    let selected = abs(player.playbackRate - rate) < 0.001
-                    Button {
-                        player.setPlaybackRate(rate)
-                    } label: {
-                        Text(PlayerModel.formatPlaybackRate(rate))
-                            .font(.system(size: 12, weight: selected ? .semibold : .regular).monospacedDigit())
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .foregroundStyle(selected ? Theme.accentOn : Theme.ink)
-                            .background(selected ? Theme.accentFill : Theme.paper, in: RoundedRectangle(cornerRadius: 6))
-                    }.buttonStyle(.plain)
-                }
-            }
+            MacPlaybackSpeedRuler(player: player)
         }
-        .padding(14)
-        .frame(width: 268)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(width: 300)
         .foregroundStyle(Theme.ink)
         .background(Theme.surface)
     }

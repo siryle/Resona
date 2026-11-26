@@ -498,12 +498,14 @@ struct NowPlayingView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showLyrics = false
     @State private var showQueue = false
+    @State private var showSpeedOverlay = false
     @State private var dragging = false
     @State private var seekValue = 0.0
     private var activeLine: Int? { player.lyrics.last(where: { $0.time <= player.position })?.id }
 
     var body: some View {
-        GeometryReader { geometry in
+        ZStack(alignment: .bottom) {
+            GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 28) {
                     HStack {
@@ -593,24 +595,9 @@ struct NowPlayingView: View {
                                 .foregroundStyle(Theme.sageInk)
                                 .padding(.horizontal, 12).padding(.vertical, 5)
                                 .background(Theme.sage, in: Capsule())
-                            Menu {
-                                Button("减速 (-0.1x)") { player.stepPlaybackRate(by: -1) }
-                                    .disabled(player.playbackRate <= 0.5)
-                                Button("加速 (+0.1x)") { player.stepPlaybackRate(by: 1) }
-                                    .disabled(player.playbackRate >= 2.0)
-                                Button("恢复原速 (1.0x)") { player.setPlaybackRate(1.0) }
-                                    .disabled(abs(player.playbackRate - 1.0) < 0.001)
-                                Divider()
-                                ForEach(PlayerModel.supportedPlaybackRates, id: \.self) { rate in
-                                    Button {
-                                        player.setPlaybackRate(rate)
-                                    } label: {
-                                        if abs(player.playbackRate - rate) < 0.001 {
-                                            Label(PlayerModel.formatPlaybackRate(rate), systemImage: "checkmark")
-                                        } else {
-                                            Text(PlayerModel.formatPlaybackRate(rate))
-                                        }
-                                    }
+                            Button {
+                                withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+                                    showSpeedOverlay.toggle()
                                 }
                             } label: {
                                 Label(PlayerModel.formatPlaybackRate(player.playbackRate), systemImage: "speedometer")
@@ -619,7 +606,8 @@ struct NowPlayingView: View {
                                     .padding(.horizontal, 12).padding(.vertical, 5)
                                     .background(Theme.surface, in: Capsule())
                                     .overlay(Capsule().stroke(Theme.border))
-                            }.accessibilityLabel("倍速播放 · \(PlayerModel.formatPlaybackRate(player.playbackRate))")
+                            }.buttonStyle(.plain)
+                                .accessibilityLabel("倍速播放 · \(PlayerModel.formatPlaybackRate(player.playbackRate))")
                         }
                         if player.activeOutput.kind == .airPlay || player.activeOutput.kind == .bluetooth {
                             Label("\(player.activeOutput.kind.label) · \(player.activeOutput.name)",
@@ -633,8 +621,144 @@ struct NowPlayingView: View {
                     }
                 }.padding(.horizontal, 30).padding(.top, 18).padding(.bottom, 35).frame(maxWidth: 500).frame(maxWidth: .infinity)
             }.background(LinearGradient(colors: [Theme.listeningStart, Theme.paper, Theme.listeningEnd], startPoint: .topLeading, endPoint: .bottomTrailing))
+            }
+            if showSpeedOverlay {
+                Color.black.opacity(0.22)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.18)) { showSpeedOverlay = false }
+                    }
+                    .accessibilityLabel("关闭倍速滑动条")
+                    .accessibilityAddTraits(.isButton)
+                PlaybackSpeedRulerCard(player: player)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 22)
+                    .frame(maxWidth: 460)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }.foregroundStyle(Theme.ink)
+            .onChange(of: player.current?.id) { _, id in
+                if id == nil { showSpeedOverlay = false }
+            }
             .sheet(isPresented: $showQueue) { PlaybackQueueView() }
+    }
+}
+
+private struct PlaybackSpeedRulerCard: View {
+    @ObservedObject var player: PlayerModel
+    @State private var lastStep: Int?
+
+    private static let marks: [(index: Int, rate: Float, label: String)] = [
+        (0, 0.5, "0.5x"),
+        (5, 1.0, "1x"),
+        (10, 1.5, "1.5x"),
+        (15, 2.0, "2x"),
+    ]
+
+    private var selectedIndex: Int {
+        min(max(Int((player.playbackRate * 10).rounded()) - 5, 0), 15)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("倍速播放")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondary)
+                Text(PlayerModel.formatCompactPlaybackRate(player.playbackRate))
+                    .font(.subheadline.weight(.bold).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                Spacer()
+            }
+            GeometryReader { geometry in
+                let inset: CGFloat = 10
+                let usable = max(geometry.size.width - inset * 2, 1)
+                let active = selectedIndex
+                ZStack {
+                    ForEach(0..<16, id: \.self) { index in
+                        let isSelected = index == active
+                        let isMajor = index % 5 == 0
+                        let x = inset + usable * CGFloat(index) / 15
+                        Capsule()
+                            .fill(isSelected ? Theme.ink : (isMajor ? Theme.secondary.opacity(0.65) : Theme.muted.opacity(0.42)))
+                            .frame(width: isSelected ? 4 : 2, height: isSelected ? 28 : (isMajor ? 18 : 10))
+                            .shadow(color: isSelected ? Theme.ink.opacity(0.28) : .clear, radius: 6)
+                            .position(x: x, y: geometry.size.height / 2)
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let ratio = min(max((value.location.x - inset) / usable, 0), 1)
+                            let step = min(max(Int((ratio * 15).rounded()), 0), 15)
+                            if step != lastStep {
+                                lastStep = step
+                                UISelectionFeedbackGenerator().selectionChanged()
+                                player.setPlaybackRate(Float(5 + step) / 10)
+                            }
+                        }
+                        .onEnded { _ in
+                            lastStep = nil
+                        }
+                )
+            }
+            .frame(height: 46)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("倍速播放")
+            .accessibilityValue(PlayerModel.formatCompactPlaybackRate(player.playbackRate))
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: player.stepPlaybackRate(by: 1)
+                case .decrement: player.stepPlaybackRate(by: -1)
+                @unknown default: break
+                }
+            }
+
+            GeometryReader { geometry in
+                let inset: CGFloat = 10
+                let usable = max(geometry.size.width - inset * 2, 1)
+                let active = selectedIndex
+                ZStack(alignment: .leading) {
+                    ForEach(Self.marks, id: \.index) { mark in
+                        let isActive = mark.index == active
+                        let button = Button {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            player.setPlaybackRate(mark.rate)
+                        } label: {
+                            Text(mark.label)
+                                .font(.caption.weight(isActive ? .semibold : .regular).monospacedDigit())
+                                .foregroundStyle(isActive ? Theme.ink : Theme.muted)
+                        }.buttonStyle(.plain)
+
+                        if mark.index == 0 {
+                            button.frame(maxWidth: .infinity, alignment: .leading)
+                        } else if mark.index == 15 {
+                            button.frame(maxWidth: .infinity, alignment: .trailing)
+                        } else {
+                            button.position(x: inset + usable * CGFloat(mark.index) / 15, y: geometry.size.height / 2)
+                        }
+                    }
+                }
+            }
+            .frame(height: 22)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Theme.surface.opacity(0.92))
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.75)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 22, y: 10)
     }
 }
 

@@ -19,6 +19,11 @@
   function formatRate(value) {
     return `${normalizeRate(value).toFixed(1)}x`;
   }
+  function formatCompactRate(value) {
+    const normalized = normalizeRate(value);
+    const tenths = Math.round(normalized * 10);
+    return tenths % 10 === 0 ? `${tenths / 10}x` : `${normalized.toFixed(1)}x`;
+  }
   function nextIndex(length, current, direction, mode, ended = false, random = Math.random) {
     if (length < 1 || current < 0 || current >= length) return -1;
     if (ended && mode === "one") return current;
@@ -58,6 +63,7 @@
     normalizeRate,
     stepRate,
     formatRate,
+    formatCompactRate,
     nextIndex,
     shuffled,
     appendUnique,

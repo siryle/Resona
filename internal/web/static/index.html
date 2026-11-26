@@ -817,6 +817,8 @@
               id="speed-toggle"
               class="icon-button playback-option speed-toggle"
               type="button"
+              commandfor="speed-panel"
+              command="toggle-popover"
               aria-label="倍速播放 · 1.0x"
               aria-expanded="false"
               aria-pressed="false"
@@ -959,67 +961,37 @@
       </section>
       <section
         id="speed-panel"
-        class="queue-panel speed-panel"
+        class="speed-panel"
+        popover="auto"
         aria-labelledby="speed-title"
-        hidden
       >
-        <header class="queue-header">
-          <div>
-            <h2 id="speed-title">倍速播放</h2>
-            <p id="speed-value" class="muted">当前 1.0x</p>
-          </div>
-          <div class="output-header-actions">
-            <button id="speed-reset" class="text-button" type="button">
-              重置 1.0x
-            </button>
-            <button
-              id="speed-close"
-              class="icon-button"
-              type="button"
-              aria-label="关闭倍速面板"
-            >
-              ×
-            </button>
-          </div>
-        </header>
-        <div class="speed-body">
-          <div class="speed-stepper">
-            <button
-              id="speed-down"
-              class="outline-button"
-              type="button"
-              aria-label="减速 0.1 倍"
-            >
-              -0.1x
-            </button>
-            <input
-              id="speed-slider"
-              type="range"
-              min="0.5"
-              max="2"
-              step="0.1"
-              value="1"
-              aria-label="倍速调节"
-            />
-            <button
-              id="speed-up"
-              class="outline-button"
-              type="button"
-              aria-label="加速 0.1 倍"
-            >
-              +0.1x
-            </button>
-          </div>
-          <div
-            id="speed-grid"
-            class="speed-grid"
-            role="group"
-            aria-label="选择播放倍速"
-          ></div>
-          <p id="speed-dlna-hint" class="dialog-hint output-hint" hidden>
-            DLNA 投屏时保持原速播放，切回本机播放后自动生效。
-          </p>
+        <div class="speed-header">
+          <span id="speed-title">倍速播放</span>
+          <strong id="speed-value">1x</strong>
         </div>
+        <div class="speed-ruler">
+          <div id="speed-ticks" class="speed-ticks" aria-hidden="true"></div>
+          <input
+            id="speed-slider"
+            class="speed-slider"
+            type="range"
+            min="0.5"
+            max="2"
+            step="0.1"
+            value="1"
+            aria-label="倍速播放"
+            aria-valuetext="1x"
+          />
+        </div>
+        <div class="speed-marks" role="group" aria-label="快速选择播放倍速">
+          <button class="speed-mark" type="button" data-rate="0.5" data-pos="0">0.5x</button>
+          <button class="speed-mark" type="button" data-rate="1" data-pos="5">1x</button>
+          <button class="speed-mark" type="button" data-rate="1.5" data-pos="10">1.5x</button>
+          <button class="speed-mark" type="button" data-rate="2" data-pos="15">2x</button>
+        </div>
+        <p id="speed-dlna-hint" class="dialog-hint output-hint" hidden>
+          DLNA 投屏时保持原速播放，切回本机播放后自动生效。
+        </p>
       </section>
     </div>
     <dialog
