@@ -75,7 +75,6 @@ jobs:
           for script in internal/web/static/*.js; do node --check "$script"; done
           node internal/web/lyrics_test.cjs
           node internal/web/playback_test.cjs
-          node internal/web/dlna_test.cjs
           python3 -m unittest discover -s scripts -p 'test_*.py'
 
   android:

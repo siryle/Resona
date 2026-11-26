@@ -225,9 +225,7 @@ node --check internal/web/static/lyrics.js
 node internal/web/lyrics_test.cjs
 node --check internal/web/static/playback.js
 node --check internal/web/static/plugins.js
-node --check internal/web/static/dlna.js
 node internal/web/playback_test.cjs
-node internal/web/dlna_test.cjs
 python3 -m unittest discover -s scripts -p 'test_*.py'
 
 # 本地启动，无需预设密码

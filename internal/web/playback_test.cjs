@@ -187,7 +187,6 @@ async function testWebAppBoot() {
   for (const name of [
     "lyrics.js",
     "playback.js",
-    "dlna.js",
     "app.js",
     "plugins.js",
     "logs.js",
@@ -197,6 +196,11 @@ async function testWebAppBoot() {
     const code = fs.readFileSync(path.join(staticDir, name), "utf8");
     vm.runInContext(code, ctx, { filename: name });
   }
+
+  const indexHtml = fs.readFileSync(path.join(staticDir, "index.html"), "utf8");
+  assert.equal(indexHtml.includes('id="output-toggle"'), false);
+  assert.equal(indexHtml.includes('id="output-panel"'), false);
+  assert.equal(indexHtml.includes("/dlna.js"), false);
 
   const readyHandlers = docListeners.get("DOMContentLoaded") || [];
   assert.equal(readyHandlers.length, 1);

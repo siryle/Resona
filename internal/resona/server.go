@@ -260,7 +260,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		if r.URL.Path != "/" && r.URL.Path != "/index.html" && r.URL.Path != "/app.js" &&
 			r.URL.Path != "/style.css" && r.URL.Path != "/icon.png" && r.URL.Path != "/lyrics.js" &&
-			r.URL.Path != "/playback.js" && r.URL.Path != "/dlna.js" && r.URL.Path != "/plugins.js" && r.URL.Path != "/logs.js" && r.URL.Path != "/files.js" && r.URL.Path != "/cloud115.js" {
+			r.URL.Path != "/playback.js" && r.URL.Path != "/plugins.js" && r.URL.Path != "/logs.js" && r.URL.Path != "/files.js" && r.URL.Path != "/cloud115.js" {
 			http.NotFound(w, r)
 			return
 		}
