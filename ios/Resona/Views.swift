@@ -483,12 +483,74 @@ struct PlaybackQueueView: View {
                             .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain).id(track.id).listRowBackground(Theme.paper)
                 }
-                .onAppear { proxy.scrollTo(player.current?.id, anchor: .center) }
+                .onAppear {
+                    if let id = player.current?.id {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                }
             }
             .scrollContentBackground(.hidden).background(Theme.paper)
             .navigationTitle("播放列表 · \(player.queue.count) 首").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+    }
+}
+
+private struct NowPlayingLyricsTrigger: Equatable {
+    let activeLine: Int?
+    let lyrics: [LyricLine]
+    let revision: Int
+}
+
+struct NowPlayingLyricsView: View {
+    let lyrics: [LyricLine]
+    let plainLyrics: String
+    let activeLine: Int?
+    let scrollRevision: Int
+    let dragging: Bool
+    @State private var hasAlignedInitial = false
+
+    private var scrollTrigger: NowPlayingLyricsTrigger {
+        NowPlayingLyricsTrigger(activeLine: activeLine, lyrics: lyrics, revision: scrollRevision)
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    if lyrics.isEmpty {
+                        Text(plainLyrics.isEmpty ? "纯粹聆听，也是共鸣。\n暂无歌词" : plainLyrics)
+                            .font(.title2).foregroundStyle(Theme.muted).lineSpacing(12).padding(.top, 40)
+                    }
+                    ForEach(lyrics) { line in
+                        Text(line.text)
+                            .font(.system(size: activeLine == line.id ? 22 : 19, weight: activeLine == line.id ? .semibold : .regular))
+                            .foregroundStyle(activeLine == line.id ? Theme.ink : Theme.muted.opacity(0.68))
+                            .multilineTextAlignment(.leading)
+                            .id(line.id)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 30)
+            }
+            .onDisappear { hasAlignedInitial = false }
+            .task(id: scrollTrigger) {
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                guard !lyrics.isEmpty else {
+                    hasAlignedInitial = false
+                    return
+                }
+                guard let targetID = activeLine ?? lyrics.first?.id else { return }
+                let anchor: UnitPoint = activeLine == nil ? .top : .center
+                if hasAlignedInitial {
+                    withAnimation(.easeInOut(duration: dragging ? 0.12 : 0.35)) {
+                        proxy.scrollTo(targetID, anchor: anchor)
+                    }
+                } else {
+                    proxy.scrollTo(targetID, anchor: anchor)
+                    hasAlignedInitial = true
+                }
+            }
+        }
     }
 }
 
@@ -501,7 +563,11 @@ struct NowPlayingView: View {
     @State private var showSpeedOverlay = false
     @State private var dragging = false
     @State private var seekValue = 0.0
-    private var activeLine: Int? { player.lyrics.last(where: { $0.time <= player.position })?.id }
+    @State private var lyricsScrollRevision = 0
+    private var displayedPosition: Double {
+        dragging ? seekValue : min(player.position, max(player.duration, 1))
+    }
+    private var activeLine: Int? { Lyrics.activeLineID(player.lyrics, at: displayedPosition) }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -531,29 +597,24 @@ struct NowPlayingView: View {
                     }
                     if let track = player.current {
                         Group {
-                          if showLyrics {
-                            ScrollViewReader { proxy in
-                                ScrollView {
-                                    VStack(alignment: .leading, spacing: 22) {
-                                        if player.lyrics.isEmpty {
-                                            Text(player.plainLyrics.isEmpty ? "纯粹聆听，也是共鸣。\n暂无歌词" : player.plainLyrics)
-                                                .font(.title2).foregroundStyle(Theme.muted).lineSpacing(12).padding(.top, 40)
-                                        }
-                                        ForEach(player.lyrics) { line in
-                                            Text(line.text).font(.system(size: activeLine == line.id ? 22 : 19, weight: activeLine == line.id ? .semibold : .regular)).foregroundStyle(activeLine == line.id ? Theme.ink : Theme.muted.opacity(0.68)).multilineTextAlignment(.leading).id(line.id)
-                                        }
-                                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 30)
-                                }
-                                .onChange(of: activeLine) { _, value in withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(value, anchor: .center) } }
+                            if showLyrics {
+                                NowPlayingLyricsView(
+                                    lyrics: player.lyrics,
+                                    plainLyrics: player.plainLyrics,
+                                    activeLine: activeLine,
+                                    scrollRevision: lyricsScrollRevision,
+                                    dragging: dragging
+                                )
+                                .id(track.id)
+                            } else {
+                                Artwork(path: track.artwork, radius: 18)
+                                    .shadow(color: .black.opacity(0.24), radius: 24, y: 14)
+                                    .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { showLyrics = true } }
                             }
-                          } else {
-                            Artwork(path: track.artwork, radius: 18).shadow(color: .black.opacity(0.24), radius: 24, y: 14)
-                          }
                         }
                         .frame(maxWidth: .infinity)
                         .frame(height: min(geometry.size.width - 60, geometry.size.height * 0.43, 360))
                         .contentShape(Rectangle())
-                        .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { showLyrics.toggle() } }
                         .accessibilityAction(named: Text(showLyrics ? "显示海报" : "显示歌词")) { showLyrics.toggle() }
                         .accessibilityIdentifier("now-playing-artwork-lyrics")
                         HStack {
@@ -570,11 +631,14 @@ struct NowPlayingView: View {
                             }.accessibilityLabel(favorite.favorite ? "取消收藏" : "收藏")
                         }
                         VStack(spacing: 8) {
-                            Slider(value: Binding(get: { dragging ? seekValue : min(player.position, max(player.duration, 1)) }, set: { seekValue = $0 }),
+                            Slider(value: Binding(get: { displayedPosition }, set: { seekValue = $0 }),
                                    in: 0...max(player.duration, 1), onEditingChanged: { editing in
                                 if editing { seekValue = player.position }
                                 dragging = editing
-                                if !editing { player.seek(seekValue) }
+                                if !editing {
+                                    player.seek(seekValue)
+                                    lyricsScrollRevision &+= 1
+                                }
                             }).tint(Theme.accent).accessibilityLabel("播放进度")
                             HStack { Text(clock(dragging ? seekValue : player.position)); Spacer(); Text(clock(player.duration)) }.font(.caption2.monospacedDigit()).foregroundStyle(Theme.muted)
                         }
@@ -640,6 +704,7 @@ struct NowPlayingView: View {
         }.foregroundStyle(Theme.ink)
             .onChange(of: player.current?.id) { _, id in
                 if id == nil { showSpeedOverlay = false }
+                lyricsScrollRevision &+= 1
             }
             .sheet(isPresented: $showQueue) { PlaybackQueueView() }
     }
@@ -780,10 +845,12 @@ struct AirPlayRoutePicker: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
-        context.coordinator.player = player
-        uiView.delegate = context.coordinator
-        uiView.tintColor = UIColor(Theme.secondary)
-        uiView.activeTintColor = UIColor(Theme.accent)
+        if context.coordinator.player !== player {
+            context.coordinator.player = player
+        }
+        if uiView.delegate !== context.coordinator {
+            uiView.delegate = context.coordinator
+        }
     }
 
     final class Coordinator: NSObject, AVRoutePickerViewDelegate {

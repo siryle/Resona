@@ -37,35 +37,48 @@ struct AudioRouteTests: App {
         try store.save(track, temporary: media, cover: nil, lyrics: nil)
         let engine = AVPlayer()
         let player = PlayerModel(downloads: store, cache: PlaybackCache(root: root.appendingPathComponent("cache")), player: engine)
+        check(!engine.allowsExternalPlayback,
+              "Music player must disable external video playback so AirPlay stays audio-only")
+        check(player.nowPlayingSession.players.contains(where: { $0 === engine }),
+              "Music player must bind AVPlayer to MPNowPlayingSession for iOS route picker controls")
+        let commands = player.nowPlayingSession.remoteCommandCenter
+        check(commands.playCommand.isEnabled && commands.pauseCommand.isEnabled &&
+              commands.togglePlayPauseCommand.isEnabled && commands.nextTrackCommand.isEnabled &&
+              commands.previousTrackCommand.isEnabled && commands.changePlaybackPositionCommand.isEnabled &&
+              commands.changePlaybackRateCommand.isEnabled,
+              "MPNowPlayingSession remote commands must be enabled for system route controls")
         let session = AVAudioSession.sharedInstance()
         check(session.category == .playback && session.routeSharingPolicy == .longFormAudio,
               "Music must configure the system long-form audio route before playback")
         player.volume = 0
         player.play(track, queue: [track], session: nil)
         for _ in 0..<30 {
-            if engine.rate > 0 { break }
+            if engine.rate > 0,
+               ((player.nowPlayingInfoCenter.nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue ?? 0) > 0 {
+                break
+            }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         check(engine.rate > 0, player.error ?? "Playback did not start")
         check(session.category == .playback && session.routeSharingPolicy == .longFormAudio,
               "Music must participate in the system long-form audio route")
-        let playingCenter = MPNowPlayingInfoCenter.default()
+        check(player.nowPlayingSession.automaticallyPublishesNowPlayingInfo,
+              "Playing audio must automatically publish Now Playing info via MPNowPlayingSession")
+        let playingCenter = player.nowPlayingInfoCenter
         let playingInfo = playingCenter.nowPlayingInfo
-        check(playingCenter.playbackState == .playing,
-              "Playing audio must report MPNowPlayingPlaybackState.playing")
         check(playingInfo?[MPMediaItemPropertyTitle] as? String == track.title,
               "Now Playing info must include track title while playing")
         check((playingInfo?[MPNowPlayingInfoPropertyMediaType] as? NSNumber)?.uintValue == MPNowPlayingInfoMediaType.audio.rawValue,
               "Now Playing info must identify audio media type while playing")
         check(((playingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue ?? 0) > 0,
               "Now Playing info must report a positive playback rate while playing")
-        check(((playingInfo?[MPNowPlayingInfoPropertyDefaultPlaybackRate] as? NSNumber)?.doubleValue ?? 0) > 0,
-              "Now Playing info must report a positive default playback rate while playing")
         player.prepareForAudioRouteSelection()
         check(session.category == .playback && session.routeSharingPolicy == .longFormAudio,
               "Route selection prep must preserve long-form audio policy while playing")
-        check(MPNowPlayingInfoCenter.default().playbackState == .playing,
-              "Route selection prep must preserve playing state")
+        check(player.nowPlayingSession.automaticallyPublishesNowPlayingInfo,
+              "Route selection prep must preserve automatic Now Playing publication while playing")
+        check(player.nowPlayingInfoCenter.nowPlayingInfo?[MPMediaItemPropertyTitle] as? String == track.title,
+              "Route selection prep must preserve track metadata while playing")
         check(PlayerModel.classifyPort(.airPlay) == .airPlay, "AirPlay port must classify as airPlay")
         check(PlayerModel.classifyPort(.bluetoothA2DP) == .bluetooth, "Bluetooth A2DP must classify as bluetooth")
         check(PlayerModel.classifyPort(.bluetoothHFP) == .bluetooth, "Bluetooth HFP must classify as bluetooth")
@@ -83,17 +96,17 @@ struct AudioRouteTests: App {
         }
 
         player.pause()
-        let pausedCenter = MPNowPlayingInfoCenter.default()
-        check(pausedCenter.playbackState == .paused, "Paused audio must report MPNowPlayingPlaybackState.paused")
-        check((pausedCenter.nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue == 0,
+        await settle()
+        let pausedCenter = player.nowPlayingInfoCenter
+        check(((pausedCenter.nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue ?? -1) == 0,
               "Paused audio must report playback rate 0")
         player.prepareForAudioRouteSelection()
         check(session.category == .playback && session.routeSharingPolicy == .longFormAudio,
               "Route selection prep must preserve long-form audio policy while paused")
-        check(MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyTitle] as? String == track.title,
+        check(player.nowPlayingInfoCenter.nowPlayingInfo?[MPMediaItemPropertyTitle] as? String == track.title,
               "Route selection prep must preserve track metadata while paused")
-        check(MPNowPlayingInfoCenter.default().playbackState == .paused,
-              "Route selection prep must preserve paused state")
+        check(((player.nowPlayingInfoCenter.nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue ?? -1) == 0,
+              "Route selection prep must preserve paused rate 0")
         await route(.newDeviceAvailable)
         await route(.routeConfigurationChange)
         check(engine.rate == 0 && !player.playing, "Connecting headphones restarted user-paused audio")
@@ -139,10 +152,11 @@ struct AudioRouteTests: App {
         await settle()
         check(engine.rate == 0, "An unknown route notification restarted audio")
         player.stop()
-        check(MPNowPlayingInfoCenter.default().nowPlayingInfo == nil,
+        await settle()
+        check(!player.nowPlayingSession.automaticallyPublishesNowPlayingInfo,
+              "Stopped playback must disable automatic Now Playing publication")
+        check(player.nowPlayingInfoCenter.nowPlayingInfo == nil,
               "Stopped playback must clear nowPlayingInfo")
-        check(MPNowPlayingInfoCenter.default().playbackState == .stopped,
-              "Stopped playback must report MPNowPlayingPlaybackState.stopped")
         await route(.newDeviceAvailable)
         check(engine.currentItem == nil && !player.playing, "A route notification restarted stopped audio")
         print("PASS: iOS music routing, device connection/configuration recovery, disconnect pause, user pause, interruptions and stopped playback")

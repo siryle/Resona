@@ -180,6 +180,9 @@ struct OfflineTests {
                "Restored playback must set audio media type")
         assert((restoredInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue == 0,
                "Restored playback must report playback rate 0 while paused")
+        let expectedLyrics = Lyrics.parse(try String(contentsOf: store.sidecar(track.id, name: "lyrics")!, encoding: .utf8))
+        assert(!expectedLyrics.isEmpty && restoredPlayer.lyrics == expectedLyrics,
+               "Restored playback must load saved lyrics immediately without starting audio")
         assert(restoredPlayer.current == track && restoredPlayer.queue.map(\.id) == [cloud.id, track.id],
                "Restart lost the current song or queue order, including uncached cloud tracks")
         assert(restoredPlayer.position == 3 && restoredPlayer.duration == track.duration &&

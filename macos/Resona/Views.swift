@@ -457,7 +457,11 @@ struct DesktopView: View {
                             }.buttonStyle(.plain).id(track.id)
                         }
                     }
-                }.onAppear { proxy.scrollTo(player.current?.id, anchor: .center) }
+                }.onAppear {
+                    if let id = player.current?.id {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                }
             }
         }.padding(18).background(Theme.surface)
             .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 1) }
@@ -507,7 +511,7 @@ struct ListeningView: View {
     @EnvironmentObject private var player: PlayerModel
     @State private var showSpeedPicker = false
     @State private var showAirPlayPicker = false
-    private var active: Int? { player.lyrics.last { $0.time <= player.position }?.id }
+    private var active: Int? { Lyrics.activeLineID(player.lyrics, at: player.position) }
     var body: some View {
         GeometryReader { geometry in
             HStack(spacing: 40) {
@@ -577,7 +581,14 @@ struct ListeningView: View {
                                 }.buttonStyle(.plain).id(line.id)
                             }
                         }.padding(.vertical, 100).frame(maxWidth: .infinity, alignment: .leading)
-                    }.onChange(of: active) { _, value in withAnimation { proxy.scrollTo(value, anchor: .center) } }
+                    }
+                    .task(id: player.lyrics) {
+                        await Task.yield()
+                        if let value = active { proxy.scrollTo(value, anchor: .center) }
+                    }
+                    .onChange(of: active) { _, value in
+                        if let value { withAnimation { proxy.scrollTo(value, anchor: .center) } }
+                    }
                 }.frame(maxWidth: .infinity)
             }.padding(40).frame(width: geometry.size.width, height: geometry.size.height)
         }.background(LinearGradient(colors: [Theme.listeningStart, Theme.paper, Theme.listeningEnd], startPoint: .topLeading, endPoint: .bottomTrailing))

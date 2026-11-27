@@ -214,6 +214,13 @@ final class PlayerModel: ObservableObject {
     private var statusObserver: NSKeyValueObservation?
     private var lyricTask: Task<Void, Never>?
     private var artworkTask: Task<Void, Never>?
+    #if os(iOS)
+    let nowPlayingSession: MPNowPlayingSession
+    var nowPlayingInfoCenter: MPNowPlayingInfoCenter { nowPlayingSession.nowPlayingInfoCenter }
+    #else
+    var nowPlayingInfoCenter: MPNowPlayingInfoCenter { MPNowPlayingInfoCenter.default() }
+    #endif
+
     private var linkRetried = false
     private var nowPlayingArtwork: MPMediaItemArtwork?
     private var interruptionObserver: NSObjectProtocol?
@@ -228,6 +235,8 @@ final class PlayerModel: ObservableObject {
     #endif
     private var playbackRequested = false
     private var reachedEnd = false
+    private var pendingSeekTarget: Double?
+    private var seekGeneration = 0
     var shuffle: Bool {
         get { mode == .shuffle }
         set { if newValue { mode = .shuffle } else if shuffle { mode = .sequential } }
@@ -239,9 +248,21 @@ final class PlayerModel: ObservableObject {
         self.downloads = downloads
         self.cache = cache ?? .shared
         self.stateURL = downloads.root.appendingPathComponent("playback.json")
+        #if os(iOS)
+        self.nowPlayingSession = MPNowPlayingSession(players: [player])
+        player.allowsExternalPlayback = false
+        nowPlayingSession.automaticallyPublishesNowPlayingInfo = true
+        nowPlayingSession.becomeActiveIfPossible()
+        Task { @MainActor in
+            if Bundle.main.bundleURL.pathExtension == "app" {
+                UIApplication.shared.beginReceivingRemoteControlEvents()
+            }
+        }
+        #else
+        player.allowsExternalPlayback = true
+        #endif
         player.volume = volume
         player.defaultRate = playbackRate
-        player.allowsExternalPlayback = true
         playbackObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -258,10 +279,12 @@ final class PlayerModel: ObservableObject {
                 self?.refreshAudioOutputs()
             }
         }
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
                 guard let self, self.player.currentItem != nil else { return }
-                self.position = time.seconds.isFinite ? time.seconds : 0
+                if self.pendingSeekTarget == nil {
+                    self.position = time.seconds.isFinite ? time.seconds : 0
+                }
                 if let value = self.player.currentItem?.duration.seconds, value.isFinite, value > 0 {
                     let changed = abs(value - self.duration) >= 0.5
                     self.duration = value
@@ -314,7 +337,9 @@ final class PlayerModel: ObservableObject {
             }
         }
         try? configureAudioSession()
+        activateNowPlayingSession()
         refreshAudioOutputs()
+        let center = nowPlayingSession.remoteCommandCenter
         #else
         audioListeners.register(selector: kAudioHardwarePropertyDevices, queue: .main) { [weak self] in
             Task { @MainActor [weak self] in self?.refreshAudioOutputs() }
@@ -323,8 +348,17 @@ final class PlayerModel: ObservableObject {
             Task { @MainActor [weak self] in self?.refreshAudioOutputs() }
         }
         refreshAudioOutputs()
-        #endif
         let center = MPRemoteCommandCenter.shared()
+        #endif
+        [
+            center.playCommand,
+            center.pauseCommand,
+            center.togglePlayPauseCommand,
+            center.nextTrackCommand,
+            center.previousTrackCommand,
+            center.changePlaybackPositionCommand,
+            center.changePlaybackRateCommand,
+        ].forEach { $0.isEnabled = true }
         center.playCommand.addTarget { [weak self] _ in Task { @MainActor in self?.resume() }; return .success }
         center.pauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.pause() }; return .success }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.toggle() }; return .success }
@@ -376,6 +410,7 @@ final class PlayerModel: ObservableObject {
         player.defaultRate = playbackRate
         if let current {
             loadNowPlayingArtwork(for: current, session: session)
+            loadLyrics(for: current, session: session)
             updateNowPlaying()
         }
     }
@@ -413,7 +448,7 @@ final class PlayerModel: ObservableObject {
             nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
             return
         }
-        guard localAudio(track) == nil, let session, track.artwork != nil else { return }
+        guard let session, track.artwork != nil else { return }
         artworkTask = Task { [weak self] in
             var request = URLRequest(url: session.server.appendingPathComponent("api/v1/tracks/\(track.id)/cover"))
             request.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
@@ -424,6 +459,28 @@ final class PlayerModel: ObservableObject {
                   self.session?.token == session.token else { return }
             self.nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
             self.updateNowPlaying()
+        }
+    }
+
+    private func loadLyrics(for track: Track, session: Session?) {
+        lyricTask?.cancel()
+        if let url = localStore(for: track)?.sidecar(track.id, name: "lyrics"),
+           let text = try? String(contentsOf: url, encoding: .utf8) {
+            lyrics = Lyrics.parse(text)
+            plainLyrics = lyrics.isEmpty ? text : ""
+            return
+        }
+        guard let session else { return }
+        lyricTask = Task { [weak self] in
+            var request = URLRequest(url: session.server.appendingPathComponent("api/v1/tracks/\(track.id)/lyrics"))
+            request.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  !Task.isCancelled, self?.current?.id == track.id,
+                  self?.session?.token == session.token,
+                  let text = String(data: data, encoding: .utf8) else { return }
+            self?.lyrics = Lyrics.parse(text)
+            self?.plainLyrics = self?.lyrics.isEmpty == true ? text : ""
         }
     }
 
@@ -438,6 +495,8 @@ final class PlayerModel: ObservableObject {
         playbackRequested = false
         reachedEnd = false
         cacheRequested = false
+        seekGeneration &+= 1
+        pendingSeekTarget = nil
         current = track
         loadNowPlayingArtwork(for: track, session: session)
         duration = track.duration
@@ -445,6 +504,7 @@ final class PlayerModel: ObservableObject {
         lyrics = []
         plainLyrics = ""
         error = nil
+        loadLyrics(for: track, session: session)
         let asset: AVURLAsset
         if let local {
             asset = AVURLAsset(url: local)
@@ -462,6 +522,10 @@ final class PlayerModel: ObservableObject {
         } else { return }
         let item = AVPlayerItem(asset: asset)
         item.audioTimePitchAlgorithm = .timeDomain
+        #if os(iOS)
+        nowPlayingSession.automaticallyPublishesNowPlayingInfo = true
+        item.nowPlayingInfo = nowPlayingMetadata(for: track, includePlaybackTiming: false)
+        #endif
         player.defaultRate = playbackRate
         statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
@@ -494,27 +558,18 @@ final class PlayerModel: ObservableObject {
         }
         #endif
         if position > 0 {
-            player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            let generation = seekGeneration
+            pendingSeekTarget = position
+            player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.seekGeneration == generation else { return }
+                    self.pendingSeekTarget = nil
+                    self.updateNowPlaying()
+                }
+            }
         }
         savePlaybackState()
         resume()
-        lyricTask?.cancel()
-        if let url = localStore(for: track)?.sidecar(track.id, name: "lyrics"),
-           let text = try? String(contentsOf: url, encoding: .utf8) {
-            lyrics = Lyrics.parse(text)
-            plainLyrics = lyrics.isEmpty ? text : ""
-        }
-        lyricTask = Task { [weak self] in
-            guard local == nil, let session else { return }
-            var request = URLRequest(url: session.server.appendingPathComponent("api/v1/tracks/\(track.id)/lyrics"))
-            request.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
-            guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  (response as? HTTPURLResponse)?.statusCode == 200,
-                  !Task.isCancelled, self?.current?.id == track.id,
-                  let text = String(data: data, encoding: .utf8) else { return }
-            self?.lyrics = Lyrics.parse(text)
-            self?.plainLyrics = self?.lyrics.isEmpty == true ? text : ""
-        }
     }
 
     func resume() {
@@ -556,8 +611,28 @@ final class PlayerModel: ObservableObject {
 
     func seek(_ seconds: Double) {
         reachedEnd = false
-        position = min(max(0, seconds), duration)
-        player.seek(to: CMTime(seconds: position, preferredTimescale: 600))
+        let clamped = min(max(0, seconds), duration)
+        position = clamped
+        seekGeneration &+= 1
+        let generation = seekGeneration
+        if player.currentItem != nil {
+            pendingSeekTarget = clamped
+            player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.seekGeneration == generation else { return }
+                    self.pendingSeekTarget = nil
+                    if self.player.currentItem != nil {
+                        let currentSeconds = self.player.currentTime().seconds
+                        if currentSeconds.isFinite {
+                            self.position = min(max(0, currentSeconds), max(self.duration, currentSeconds))
+                        }
+                    }
+                    self.updateNowPlaying()
+                }
+            }
+        } else {
+            pendingSeekTarget = nil
+        }
         #if os(macOS)
         if directAirPlayID != nil {
             directAirPlay?.flush()
@@ -623,6 +698,8 @@ final class PlayerModel: ObservableObject {
 
     func stop() {
         pause()
+        seekGeneration &+= 1
+        pendingSeekTarget = nil
         #if os(macOS)
         if directAirPlayID != nil {
             directAirPlay?.flush()
@@ -640,42 +717,76 @@ final class PlayerModel: ObservableObject {
         position = 0
         duration = 0
         savePlaybackState()
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        MPNowPlayingInfoCenter.default().playbackState = .stopped
+        #if os(iOS)
+        nowPlayingSession.automaticallyPublishesNowPlayingInfo = false
+        nowPlayingInfoCenter.nowPlayingInfo = nil
+        #else
+        nowPlayingInfoCenter.nowPlayingInfo = nil
+        nowPlayingInfoCenter.playbackState = .stopped
+        #endif
+    }
+
+    private func nowPlayingMetadata(for track: Track, includePlaybackTiming: Bool) -> [String: Any] {
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: track.title,
+            MPMediaItemPropertyArtist: track.artist,
+            MPMediaItemPropertyAlbumTitle: track.album,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+            MPNowPlayingInfoPropertyIsLiveStream: false,
+        ]
+        if includePlaybackTiming {
+            info[MPMediaItemPropertyPlaybackDuration] = duration
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position
+            info[MPNowPlayingInfoPropertyPlaybackRate] = playing ? Double(playbackRate) : 0.0
+            info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = Double(playbackRate)
+        }
+        if let index = queue.firstIndex(where: { $0.id == track.id }) {
+            info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = index
+            info[MPNowPlayingInfoPropertyPlaybackQueueCount] = queue.count
+        }
+        if let nowPlayingArtwork {
+            info[MPMediaItemPropertyArtwork] = nowPlayingArtwork
+        }
+        return info
     }
 
     private func updateNowPlaying() {
         guard let current else { return }
-        var info: [String: Any] = [
-            MPMediaItemPropertyTitle: current.title,
-            MPMediaItemPropertyArtist: current.artist,
-            MPMediaItemPropertyAlbumTitle: current.album,
-            MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
-            MPNowPlayingInfoPropertyPlaybackRate: playing ? Double(playbackRate) : 0.0,
-            MPNowPlayingInfoPropertyDefaultPlaybackRate: Double(playbackRate),
-            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
-            MPNowPlayingInfoPropertyIsLiveStream: false,
-        ]
-        if let index = queue.firstIndex(where: { $0.id == current.id }) {
-            info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = index
-            info[MPNowPlayingInfoPropertyPlaybackQueueCount] = queue.count
+        #if os(iOS)
+        activateNowPlayingSession()
+        if let item = player.currentItem {
+            nowPlayingSession.automaticallyPublishesNowPlayingInfo = true
+            item.nowPlayingInfo = nowPlayingMetadata(for: current, includePlaybackTiming: false)
+        } else {
+            nowPlayingSession.automaticallyPublishesNowPlayingInfo = false
+            nowPlayingInfoCenter.nowPlayingInfo = nowPlayingMetadata(for: current, includePlaybackTiming: true)
         }
-        if let nowPlayingArtwork { info[MPMediaItemPropertyArtwork] = nowPlayingArtwork }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = playing ? .playing : .paused
+        #else
+        nowPlayingInfoCenter.nowPlayingInfo = nowPlayingMetadata(for: current, includePlaybackTiming: true)
+        nowPlayingInfoCenter.playbackState = playing ? .playing : .paused
+        #endif
     }
 
     #if os(iOS)
     private func configureAudioSession() throws {
         let audioSession = AVAudioSession.sharedInstance()
+        if audioSession.category == .playback,
+           audioSession.mode == .default,
+           audioSession.routeSharingPolicy == .longFormAudio {
+            return
+        }
         try audioSession.setCategory(.playback, mode: .default, policy: .longFormAudio)
+    }
+
+    private func activateNowPlayingSession() {
+        nowPlayingSession.becomeActiveIfPossible()
     }
 
     func prepareForAudioRouteSelection() {
         try? configureAudioSession()
         if current != nil {
             try? AVAudioSession.sharedInstance().setActive(true)
+            activateNowPlayingSession()
             updateNowPlaying()
         }
         refreshAudioOutputs()
@@ -684,6 +795,7 @@ final class PlayerModel: ObservableObject {
     func handleAudioRouteSelectionEnded() {
         refreshAudioOutputs()
         if current != nil {
+            activateNowPlayingSession()
             updateNowPlaying()
         }
     }

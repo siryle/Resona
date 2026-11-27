@@ -7,9 +7,19 @@ struct LyricLine: Identifiable, Equatable {
 }
 
 enum Lyrics {
+    static func activeLineID(_ lines: [LyricLine], at position: Double) -> Int? {
+        guard let index = activeIndex(lines, at: position) else { return nil }
+        return lines[index].id
+    }
+
     static func playbackLines(_ lines: [LyricLine], at position: Double) -> [LyricLine] {
-        guard let index = lines.lastIndex(where: { $0.time <= position }) else { return [] }
+        guard let index = activeIndex(lines, at: position) else { return [] }
         return Array(lines[index...].prefix(2))
+    }
+
+    private static func activeIndex(_ lines: [LyricLine], at position: Double) -> Int? {
+        guard position.isFinite else { return nil }
+        return lines.lastIndex(where: { $0.time <= position })
     }
 
     static func parse(_ text: String) -> [LyricLine] {
