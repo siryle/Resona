@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import SwiftUI
+import Darwin
 
 struct OfflineStore: Sendable {
     static let shared = OfflineStore(root: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -80,8 +81,18 @@ struct OfflineStore: Sendable {
         try lyrics?.write(to: staging.appendingPathComponent("lyrics"), options: .atomic)
         try JSONEncoder().encode(track).write(to: staging.appendingPathComponent("track.json"), options: .atomic)
         if audio(track) != nil { return }
-        if FileManager.default.fileExists(atPath: dir.path) { try FileManager.default.removeItem(at: dir) }
-        try FileManager.default.moveItem(at: staging, to: dir)
+        try publish(staging, to: dir)
+    }
+
+    func publish(_ staging: URL, to destination: URL) throws {
+        if FileManager.default.fileExists(atPath: destination.path) {
+            // Exchange complete directories atomically; staging then contains the old download.
+            guard renamex_np(staging.path, destination.path, UInt32(RENAME_SWAP)) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        } else {
+            try FileManager.default.moveItem(at: staging, to: destination)
+        }
     }
 
     func remove(_ track: Track) throws {

@@ -28,6 +28,9 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   }) : dlnaClient = dlnaClient ?? DlnaClient();
   Timer? _sessionRenewalTimer;
   Timer? _dlnaPollTimer;
+  bool _dlnaPollInFlight = false;
+  int _dlnaControlsInFlight = 0;
+  int _dlnaPollGeneration = 0;
   DateTime? _lastSessionRenewal;
   bool _renewingSession = false;
   bool _manualOffline = false;
@@ -1018,18 +1021,34 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _stopDlnaPolling() {
+    ++_dlnaPollGeneration;
     _dlnaPollTimer?.cancel();
     _dlnaPollTimer = null;
   }
 
   Future<void> _pollDlnaState() async {
     final device = activeDlnaDevice;
-    if (_disposed || device == null) return;
+    if (_disposed ||
+        opening ||
+        device == null ||
+        _dlnaPollInFlight ||
+        _dlnaControlsInFlight > 0) {
+      return;
+    }
+    final generation = _dlnaPollGeneration;
+    final request = _playRequest;
+    _dlnaPollInFlight = true;
     try {
       final state = await dlnaClient.getTransportState(device);
-      if (_disposed || activeDlnaDevice?.udn != device.udn) return;
+      if (_disposed ||
+          generation != _dlnaPollGeneration ||
+          request != _playRequest ||
+          activeDlnaDevice?.udn != device.udn) {
+        return;
+      }
       final prevState = _lastDlnaState;
       final nextState = state.state;
+      final previousPosition = position;
       _lastDlnaState = nextState;
       if (state.duration > Duration.zero) duration = state.duration;
       position = state.position;
@@ -1040,11 +1059,14 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
           (nextState == 'STOPPED' || nextState == 'NO_MEDIA_PRESENT') &&
           _dlnaActiveTrackId == current?.id &&
           (duration <= Duration.zero ||
-              position >= duration - const Duration(seconds: 4))) {
+              position >= duration - const Duration(seconds: 4) ||
+              previousPosition >= duration - const Duration(seconds: 4))) {
         unawaited(next(completed: true));
       }
     } catch (_) {
       /* Preserve current playback state across transient renderer polling errors. */
+    } finally {
+      _dlnaPollInFlight = false;
     }
   }
 
@@ -1269,6 +1291,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     if (activeDlnaDevice != null) {
+      ++_dlnaPollGeneration;
+      _dlnaControlsInFlight++;
       try {
         if (playing) {
           _dlnaManualStop = true;
@@ -1287,6 +1311,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
       } catch (e) {
         dlnaError = e is APIException ? e.message : 'DLNA 控制失败，请检查设备连接。';
         error = dlnaError;
+      } finally {
+        _dlnaControlsInFlight--;
       }
       notifyListeners();
       return;
@@ -1306,6 +1332,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
     );
     if (!_needsPlaybackOpen) {
       if (activeDlnaDevice != null) {
+        ++_dlnaPollGeneration;
+        _dlnaControlsInFlight++;
         try {
           await dlnaClient.seek(activeDlnaDevice!, position);
         } catch (e) {
@@ -1314,6 +1342,8 @@ class MusicController extends ChangeNotifier with WidgetsBindingObserver {
           error = dlnaError;
           notifyListeners();
           return;
+        } finally {
+          _dlnaControlsInFlight--;
         }
       } else {
         await player.seek(position);

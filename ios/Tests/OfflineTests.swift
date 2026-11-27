@@ -4,11 +4,49 @@ import AVFoundation
 
 @main
 struct OfflineTests {
+    static func replacementTests(media: URL, root: URL) throws {
+        let store = OfflineStore(root: root.appendingPathComponent("replacement"))
+        let original = try Data(contentsOf: media)
+        var track = Track(id: String(repeating: "a", count: 64), title: "Old Song", artist: "Resona",
+                          albumArtist: "Resona", album: "Offline", year: "2026", number: 1, disc: 1,
+                          duration: 12, format: "mp3", bitrate: 128000, sampleRate: 44100,
+                          artwork: nil, favorite: false, library: "cloud", hashAlgorithm: "sha256",
+                          contentHash: SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined())
+        try store.save(track, temporary: media, cover: Data("old cover".utf8), lyrics: Data("old lyrics".utf8))
+        let destination = store.root.appendingPathComponent(track.id)
+        do {
+            try store.publish(store.root.appendingPathComponent("missing-stage"), to: destination)
+            assertionFailure("Missing staging directory must fail publication")
+        } catch {}
+        let preserved = try Data(contentsOf: store.audio(track)!)
+        assert(preserved == original,
+               "Failed publication must preserve the previous download")
+        let replacement = original + Data([0])
+        let input = root.appendingPathComponent("replacement.mp3")
+        try replacement.write(to: input)
+        track.contentHash = SHA256.hash(data: replacement).map { String(format: "%02x", $0) }.joined()
+        try store.save(track, temporary: input, cover: Data("new cover".utf8), lyrics: Data("new lyrics".utf8))
+        let reloaded = OfflineStore(root: store.root)
+        let restored = try reloaded.tracks()
+        let audio = try Data(contentsOf: reloaded.audio(track)!)
+        let cover = try Data(contentsOf: reloaded.sidecar(track.id, name: "cover")!)
+        let lyrics = try Data(contentsOf: reloaded.sidecar(track.id, name: "lyrics")!)
+        let entries = try FileManager.default.contentsOfDirectory(atPath: store.root.path)
+        assert(restored.count == 1 && audio == replacement)
+        assert(cover == Data("new cover".utf8) && lyrics == Data("new lyrics".utf8))
+        assert(entries == [track.id],
+               "Successful replacement must clean up the previous directory")
+        try FileManager.default.removeItem(at: store.root)
+        print("PASS: atomic download replacement, complete sidecars and failed publication preserves previous audio")
+    }
+
     @MainActor static func main() async throws {
         let media = URL(fileURLWithPath: CommandLine.arguments[1])
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("resona-offline-test-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = OfflineStore(root: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try replacementTests(media: media, root: root)
         let cache = PlaybackCache(root: root.appendingPathComponent("playback-cache"))
         let library = LibraryModel(downloads: store, persistsSession: false, cache: cache)
         assert(library.session == nil && library.tracks.isEmpty)

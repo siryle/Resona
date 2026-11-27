@@ -157,7 +157,7 @@ func (p *LyricsProvider) Fetch(ctx context.Context, t Track) (*SavedLyrics, erro
 	return &SavedLyrics{Text: text, Source: "LRCLIB", Synced: synced, FetchedAt: time.Now().UTC()}, nil
 }
 
-func (s *Scanner) localLyrics(t Track) (*SavedLyrics, error) {
+func (s *Scanner) openLocalLyrics(t Track) (*os.File, error) {
 	path := strings.TrimSuffix(t.Path, filepath.Ext(t.Path)) + ".lrc"
 	real, err := filepath.EvalSymlinks(path)
 	root := s.config.LibraryDir
@@ -167,15 +167,34 @@ func (s *Scanner) localLyrics(t Track) (*SavedLyrics, error) {
 	if err != nil || !within(root, real) {
 		return nil, os.ErrNotExist
 	}
-	f, err := os.Open(real)
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	name, err := filepath.Rel(root, real)
+	if err != nil {
+		return nil, err
+	}
+	// Constrain the actual open even if a checked path is replaced concurrently.
+	f, err := dir.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxLyricsSize {
+		f.Close()
+		return nil, errors.New("本地歌词文件无效或超过 1 MiB")
+	}
+	return f, nil
+}
+
+func (s *Scanner) localLyrics(t Track) (*SavedLyrics, error) {
+	f, err := s.openLocalLyrics(t)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxLyricsSize {
-		return nil, errors.New("本地歌词文件无效或超过 1 MiB")
-	}
 	data, err := io.ReadAll(io.LimitReader(f, maxLyricsSize+1))
 	if err != nil || len(data) > maxLyricsSize {
 		return nil, errors.New("读取本地歌词失败")
@@ -187,24 +206,11 @@ func (s *Scanner) localLyrics(t Track) (*SavedLyrics, error) {
 }
 
 func (s *Scanner) hasLocalLyrics(t Track) bool {
-	path := strings.TrimSuffix(t.Path, filepath.Ext(t.Path)) + ".lrc"
-	real, err := filepath.EvalSymlinks(path)
-	root := s.config.LibraryDir
-	if t.Library == "cloud" {
-		root = filepath.Join(s.config.DataDir, "cloud115", "strm")
-	}
-	if err != nil || !within(root, real) {
-		return false
-	}
-	f, err := os.Open(real)
+	f, err := s.openLocalLyrics(t)
 	if err != nil {
 		return false
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > maxLyricsSize {
-		return false
-	}
 	buf := make([]byte, 4096)
 	for {
 		n, readErr := f.Read(buf)

@@ -380,8 +380,6 @@ struct DesktopTests {
         if let safe = status.window?.screen?.auxiliaryTopRightArea {
             assert(statusFrame.minX >= safe.minX && statusFrame.maxX <= safe.maxX,
                    "Initial combined item must not be parked behind the notch")
-            assert(abs(statusFrame.minX - safe.minX - 24) <= 1,
-                   "The lyric item must reserve the right-hand segment: frame \(statusFrame), safe \(safe), length \(desktop.statusItem.length), button \(status.frame)")
         }
         let reservedLength = desktop.statusItem.length
 

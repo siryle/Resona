@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,12 +9,136 @@ import 'package:resona_client/audio_output.dart';
 import 'package:resona_client/controller.dart';
 import 'package:resona_client/dlna.dart';
 
+class TicketAPI extends ResonaAPI {
+  TicketAPI()
+    : super(Session(Uri.parse('http://192.168.1.10/'), 'user', 'token'));
+
+  @override
+  Future<Map<String, dynamic>> json(
+    String method,
+    String path, {
+    Map<String, String>? query,
+    Map<String, dynamic>? body,
+  }) async => {'media_path': '/media/song.mp3'};
+
+  @override
+  Future<String> lyrics(Track track) async => '';
+}
+
+class PollingDlnaClient extends DlnaClient {
+  DlnaTransportState state = const DlnaTransportState(
+    state: 'PLAYING',
+    position: Duration(seconds: 178),
+    duration: Duration(seconds: 180),
+  );
+  Completer<DlnaTransportState>? pending;
+  int pollCalls = 0;
+  final List<String> played = [];
+
+  @override
+  Future<DlnaTransportState> getTransportState(DlnaDevice device) {
+    pollCalls++;
+    return pending?.future ?? Future.value(state);
+  }
+
+  @override
+  Future<void> setUriAndPlay(
+    DlnaDevice device,
+    Track track,
+    String mediaUrl, {
+    String coverUrl = '',
+    Duration startPosition = Duration.zero,
+  }) async {
+    played.add(track.id);
+  }
+
+  @override
+  Future<void> seek(DlnaDevice device, Duration position) async {}
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
     HttpOverrides.global = null;
   });
+
+  const pollingDevice = DlnaDevice(
+    udn: 'polling-speaker',
+    name: 'Polling Speaker',
+    location: 'http://192.168.1.20/device.xml',
+    avTransportControlUrl: 'http://192.168.1.20/control',
+  );
+  final pollingTracks = [
+    for (final id in ['first', 'second'])
+      Track({'id': id, 'title': id, 'format': 'mp3', 'duration': 180.0}),
+  ];
+
+  for (final stopped in ['STOPPED', 'NO_MEDIA_PRESENT']) {
+    for (final repeatOne in [false, true]) {
+      testWidgets('DLNA $stopped at zero advances with repeatOne=$repeatOne', (
+        tester,
+      ) async {
+        final client = PollingDlnaClient();
+        final controller = MusicController(dlnaClient: client)
+          ..api = TicketAPI()
+          ..offline = false
+          ..activeDlnaDevice = pollingDevice
+          ..tracks = pollingTracks
+          ..repeatOne = repeatOne;
+        await controller.play(pollingTracks.first);
+        await tester.pump(const Duration(milliseconds: 1200));
+        expect(controller.position, const Duration(seconds: 178));
+        client.state = DlnaTransportState(state: stopped);
+        await tester.pump(const Duration(milliseconds: 1200));
+        expect(client.played, ['first', repeatOne ? 'first' : 'second']);
+        expect(controller.current?.id, repeatOne ? 'first' : 'second');
+        controller.dispose();
+        await tester.pump();
+      });
+    }
+  }
+
+  testWidgets(
+    'DLNA slow polls do not overlap or overwrite a new track or seek',
+    (tester) async {
+      final client = PollingDlnaClient()
+        ..pending = Completer<DlnaTransportState>();
+      final controller = MusicController(dlnaClient: client)
+        ..api = TicketAPI()
+        ..offline = false
+        ..activeDlnaDevice = pollingDevice
+        ..tracks = pollingTracks;
+      await controller.play(pollingTracks.first);
+      await tester.pump(const Duration(milliseconds: 1200));
+      await tester.pump(const Duration(milliseconds: 3600));
+      expect(client.pollCalls, 1);
+      await controller.play(pollingTracks.last);
+      client.pending!.complete(client.state);
+      await tester.pump();
+      expect(controller.current?.id, 'second');
+      expect(controller.position, Duration.zero);
+      expect(controller.playing, isTrue);
+
+      client.pending = Completer<DlnaTransportState>();
+      await tester.pump(const Duration(milliseconds: 1200));
+      expect(client.pollCalls, 2);
+      await controller.seek(45);
+      client.pending!.complete(client.state);
+      await tester.pump();
+      expect(controller.position, const Duration(seconds: 45));
+
+      client.pending = null;
+      client.state = const DlnaTransportState(
+        state: 'PLAYING',
+        position: Duration(seconds: 46),
+      );
+      await tester.pump(const Duration(milliseconds: 1200));
+      expect(controller.position, const Duration(seconds: 46));
+      controller.dispose();
+      await tester.pump();
+    },
+  );
 
   test('SSDP, XML, DIDL-Lite, SOAP and H:MM:SS helpers handle edge cases', () {
     const ssdp =
