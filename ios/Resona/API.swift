@@ -409,7 +409,7 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    func download(_ track: Track) async {
+    func download(_ track: Track, reportPartialSidecars: Bool = true) async {
         guard let current = session, !downloading.contains(track.id), downloads.audio(track) == nil else { return }
         downloading.insert(track.id)
         defer { downloading.remove(track.id) }
@@ -420,9 +420,13 @@ final class LibraryModel: ObservableObject {
             }
             downloaded = try downloads.tracks()
             if offline { useDownloads() }
-            if !complete {
+            if !complete && reportPartialSidecars {
                 error = "歌曲已下载。部分海报或歌词未能获取，离线播放仍然可用。"
             }
+        } catch is CancellationError {
+            return
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return
         } catch { self.error = error.localizedDescription }
     }
 
@@ -458,6 +462,10 @@ final class LibraryModel: ObservableObject {
                 self.error = "收藏已保存，但本机缓存信息更新失败。\(error.localizedDescription)"
             }
             return updated
+        } catch is CancellationError {
+            return nil
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return nil
         } catch { self.error = error.localizedDescription }
         return nil
     }

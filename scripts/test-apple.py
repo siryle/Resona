@@ -21,6 +21,10 @@ def main():
         track = dict(id=track_id, title="Offline Song", artist="Resona", album_artist="Resona", album="Offline",
                      year="2026", number=1, disc=1, duration=12, format="mp3", bitrate=128000,
                      sample_rate=44100, artwork=f"/api/v1/tracks/{track_id}/cover", favorite=False)
+        second_data = data + b"\0"
+        second_id = hashlib.sha256(second_data).hexdigest()
+        second_track = dict(track, id=second_id, title="Second Song", number=2,
+                            artwork=f"/api/v1/tracks/{second_id}/cover", favorite=False)
         cloud_id = hashlib.sha256(b"115:42:7").hexdigest()
         cloud_track = dict(track, id=cloud_id, title="Cloud Song", library="cloud",
                            hash_algorithm="sha1", content_hash=hashlib.sha1(data).hexdigest(),
@@ -28,6 +32,7 @@ def main():
         offline = False
         expired = False
         legacy_refresh = False
+        slow_download = False
         refresh_count = 0
         session_count = 0
 
@@ -38,12 +43,13 @@ def main():
             def do_PUT(self):
                 if self.path.endswith('/favorite') and self.headers.get('Authorization') == 'Bearer test-session':
                     body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-                    self.respond(dict(track, favorite=body['favorite']))
+                    target = second_track if second_id in self.path else track
+                    self.respond(dict(target, favorite=body['favorite']))
                 else:
                     self.respond({}, status=401)
 
             def do_POST(self):
-                nonlocal offline, expired, legacy_refresh, refresh_count
+                nonlocal offline, expired, legacy_refresh, slow_download, refresh_count
                 if self.path == "/music/__offline":
                     offline = True
                     self.respond({})
@@ -56,6 +62,9 @@ def main():
                 elif self.path == "/music/__legacy_refresh":
                     legacy_refresh = not legacy_refresh
                     self.respond({"legacy": legacy_refresh})
+                elif self.path == "/music/__slow_download":
+                    slow_download = not slow_download
+                    self.respond({"slow_download": slow_download})
                 elif self.path == "/music/api/v1/auth/login":
                     body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                     expired = False
@@ -100,16 +109,24 @@ def main():
                 elif path.endswith("/artists/avatar"):
                     self.respond((ROOT / "ios/Resona/Assets.xcassets/BrandIcon.imageset/BrandIcon.png").read_bytes(), "image/png")
                 elif path.endswith("/stream"):
+                    if slow_download:
+                        import time
+                        time.sleep(0.45)
                     if cloud_id in path:
                         self.send_response(302)
                         self.send_header("Location", "/music/api/v1/test-cloud-audio")
                         self.end_headers()
+                    elif second_id in path:
+                        self.respond(second_data, "audio/mpeg")
                     else:
                         self.respond(data, "audio/mpeg")
                 elif path.endswith("/cover"):
                     self.respond((ROOT / "ios/Resona/Assets.xcassets/BrandIcon.imageset/BrandIcon.png").read_bytes(), "image/png")
                 elif path.endswith("/lyrics"):
-                    self.respond(b"[00:00.00]Offline first line\n[00:02.00]Offline second line", "text/plain")
+                    if second_id in path:
+                        self.respond({}, status=404)
+                    else:
+                        self.respond(b"[00:00.00]Offline first line\n[00:02.00]Offline second line", "text/plain")
                 else:
                     self.respond({}, status=404)
 
@@ -125,7 +142,7 @@ def main():
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            sources = [ROOT / "ios/Resona" / name for name in ("API.swift", "Lyrics.swift", "Offline.swift", "Player.swift")]
+            sources = [ROOT / "ios/Resona" / name for name in ("API.swift", "Lyrics.swift", "Offline.swift", "Player.swift", "TrackSelection.swift")]
             executable = folder / "offline-tests"
             subprocess.run(["swiftc", "-swift-version", "5", *map(str, sources), str(ROOT / "ios/Tests/OfflineTests.swift"), "-o", str(executable)], check=True)
             subprocess.run([str(executable), str(audio), f"http://127.0.0.1:{server.server_port}/music"], check=True, timeout=60)

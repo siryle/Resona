@@ -16,7 +16,7 @@ def main():
     build.mkdir(parents=True, exist_ok=True)
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                     "-t", "12", "-c:a", "libmp3lame", str(build / "song.mp3")], check=True)
-    sources = [ROOT / "ios/Resona" / name for name in ("API.swift", "Player.swift", "Lyrics.swift", "Offline.swift")]
+    sources = [ROOT / "ios/Resona" / name for name in ("API.swift", "Player.swift", "Lyrics.swift", "Offline.swift", "TrackSelection.swift")]
     sources += sorted(path for path in (ROOT / "macos/Resona").glob("*.swift") if path.name != "ResonaApp.swift")
     executable = build / "desktop-tests"
     subprocess.run(["swiftc", "-swift-version", "5", *map(str, sources), str(ROOT / "macos/Tests/DesktopTests.swift"),

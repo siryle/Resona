@@ -23,7 +23,7 @@ def main():
     resources = app / "Contents/Resources"
     executable.mkdir(parents=True)
     resources.mkdir()
-    sources = [ROOT / "ios/Resona" / name for name in ("API.swift", "Player.swift", "Lyrics.swift", "Offline.swift")]
+    sources = [ROOT / "ios/Resona" / name for name in ("API.swift", "Player.swift", "Lyrics.swift", "Offline.swift", "TrackSelection.swift")]
     sources += sorted((ROOT / "macos/Resona").glob("*.swift"))
     sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
     for arch in ("arm64", "x86_64"):

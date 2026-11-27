@@ -117,6 +117,7 @@ struct OfflineStore: Sendable {
         request.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
         let (temporary, response) = try await URLSession.shared.download(for: request)
         defer { try? FileManager.default.removeItem(at: temporary) }
+        try Task.checkCancellation()
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.message("下载失败，请检查服务器登录") }
         let cover = await sidecarData("cover", track: track, session: session)
         let lyrics = await sidecarData("lyrics", track: track, session: session)

@@ -36,7 +36,7 @@ def ios_source_digest():
 
 def macos_source_digest():
     files = [ROOT / name for name in ("VERSION.json", "LICENSE", "THIRD_PARTY.md", "scripts/build-macos.py", "scripts/version.py")]
-    files += [ROOT / "ios/Resona" / name for name in ("API.swift", "Player.swift", "Lyrics.swift", "Offline.swift")]
+    files += [ROOT / "ios/Resona" / name for name in ("API.swift", "Player.swift", "Lyrics.swift", "Offline.swift", "TrackSelection.swift")]
     files += [p for p in (ROOT / "macos/Resona").rglob("*") if p.is_file() and p.name != ".DS_Store"]
     files += [ROOT / "ios/Resona/Assets.xcassets/BrandIcon.imageset/BrandIcon.png"]
     digest = hashlib.sha256()

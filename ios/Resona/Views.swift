@@ -104,6 +104,8 @@ private enum MusicTab: String, CaseIterable {
 struct MainView: View {
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var player: PlayerModel
+    @StateObject private var multiSelect = TrackMultiSelectController()
+    @StateObject private var batch = TrackBatchActions()
     @State private var selectedTab = MusicTab.listen
 
     var body: some View {
@@ -116,7 +118,34 @@ struct MainView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if player.current != nil {
+                if let toast = multiSelect.toastMessage {
+                    HStack(spacing: 8) {
+                        Text(toast)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.sageInk)
+                            .lineLimit(2)
+                        Spacer(minLength: 4)
+                        Button("知道了") { multiSelect.dismissToast() }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.sageInk)
+                            .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(Theme.sage, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+                }
+                if batch.busy {
+                    BatchProgressBar()
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                } else if multiSelect.isSelecting {
+                    MultiSelectActionBar()
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                } else if player.current != nil {
                     MiniPlayer().padding(.horizontal, 14).padding(.vertical, 8)
                 }
                 Rectangle().fill(Theme.border).frame(height: 0.75)
@@ -139,6 +168,23 @@ struct MainView: View {
                 .accessibilityIdentifier("main-tab-bar")
             }
             .background(Theme.playerBar)
+            .environmentObject(multiSelect)
+            .environmentObject(batch)
+        }
+        .environmentObject(multiSelect)
+        .environmentObject(batch)
+        .onChange(of: selectedTab) { _, _ in
+            multiSelect.exit()
+        }
+        .onChange(of: library.libraryScope) { _, _ in
+            batch.cancel()
+            multiSelect.exit()
+        }
+        .onChange(of: library.session?.token) { _, _ in
+            if batch.activeAction != .removeDownload {
+                batch.cancel()
+            }
+            multiSelect.exit()
         }
         .fullScreenCover(isPresented: $player.expanded) { NowPlayingView() }
         .alert("Resona", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
@@ -257,6 +303,7 @@ struct AlbumTile: View {
 
 struct CollectionView: View {
     @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var multiSelect: TrackMultiSelectController
     @State private var selection = 0
     var body: some View {
         ScrollView {
@@ -287,9 +334,16 @@ struct CollectionView: View {
                 } else {
                     let tracks = selection == 3 ? library.tracks.filter(\.favorite) : library.tracks
                     if tracks.isEmpty { EmptyLibrary(title: "等待下一次心动", message: "导入音乐，或为喜欢的歌曲点亮一颗心。") }
-                    TrackRows(tracks: tracks)
+                    TrackCollectionSection(
+                        tracks: tracks,
+                        scope: selection == 3 ? "collection-favorites" : "collection-tracks",
+                        mode: .library
+                    )
                 }
             }.padding(20)
+        }
+        .onChange(of: selection) { _, _ in
+            multiSelect.exit()
         }
         .foregroundStyle(Theme.ink)
         .background(Theme.paper).navigationTitle("音乐库")
@@ -300,86 +354,612 @@ struct CollectionView: View {
 struct AlbumView: View {
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var player: PlayerModel
+    @EnvironmentObject private var multiSelect: TrackMultiSelectController
+    @EnvironmentObject private var batch: TrackBatchActions
     let album: Album
     private var tracks: [Track] {
         library.tracks.filter { $0.album == album.title && $0.albumArtist == album.artist }
             .sorted { $0.disc == $1.disc ? $0.number < $1.number : $0.disc < $1.disc }
     }
+    private var scope: String { "album-\(album.id)" }
+    private var downloadedIDs: Set<String> { Set(library.downloaded.map(\.id)) }
+    private var undownloadedIDs: [String] {
+        multiSelect.selection.undownloaded(in: tracks, downloadedIDs: downloadedIDs).map(\.id)
+    }
+    private var isSelecting: Bool { multiSelect.isSelecting(scope: scope) }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
                 Artwork(path: album.artwork).frame(maxWidth: 250).shadow(color: .black.opacity(0.18), radius: 20, y: 12).padding(.vertical, 12)
                 Text(album.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
                 Text("\(album.artist) · \(album.year) · \(album.tracks) 首").font(.caption).foregroundStyle(Theme.secondary)
-                Button {
-                    if let first = tracks.first { player.play(first, queue: tracks, session: library.session) }
-                } label: {
-                    Label("播放专辑", systemImage: "play.fill").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(14).background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(Theme.accentOn)
+                HStack(spacing: 10) {
+                    Button {
+                        if let first = tracks.first { player.play(first, queue: tracks, session: library.session) }
+                    } label: {
+                        Label("播放专辑", systemImage: "play.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .padding(.horizontal, 12)
+                            .background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 12))
+                            .foregroundStyle(Theme.accentOn)
+                    }
+                    .disabled(tracks.isEmpty)
+
+                    Button {
+                        if isSelecting {
+                            if batch.busy { batch.cancel() }
+                            multiSelect.exit(scope: scope)
+                        } else {
+                            multiSelect.enter(scope: scope, mode: .library, tracks: tracks, preselect: undownloadedIDs)
+                        }
+                    } label: {
+                        Label(isSelecting ? "退出多选" : "多选下载", systemImage: isSelecting ? "xmark" : "checklist")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .padding(.horizontal, 12)
+                            .background(isSelecting ? Theme.selected : Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(isSelecting ? Theme.accent : Theme.border))
+                            .foregroundStyle(isSelecting ? Theme.accent : Theme.ink)
+                    }
+                    .disabled(tracks.isEmpty || (batch.busy && !isSelecting))
+                    .accessibilityIdentifier("album-multi-select")
                 }
-                TrackRows(tracks: tracks)
+                TrackCollectionSection(tracks: tracks, scope: scope, mode: .library, showBrowseHeader: false)
             }.padding(22)
         }.foregroundStyle(Theme.ink).background(Theme.paper).navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct TrackCollectionSection: View {
+    @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var player: PlayerModel
+    @EnvironmentObject private var multiSelect: TrackMultiSelectController
+    @EnvironmentObject private var batch: TrackBatchActions
+    let tracks: [Track]
+    let scope: String
+    var mode: TrackMultiSelectController.Mode = .library
+    var showBrowseHeader: Bool = true
+
+    private var downloadedIDs: Set<String> { Set(library.downloaded.map(\.id)) }
+    private var undownloaded: [Track] { multiSelect.selection.undownloaded(in: tracks, downloadedIDs: downloadedIDs) }
+    private var isSelecting: Bool { multiSelect.isSelecting(scope: scope) }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if isSelecting {
+                selectionHeader
+            } else if showBrowseHeader && !tracks.isEmpty {
+                browseHeader
+            }
+            TrackRows(tracks: tracks, scope: scope, mode: mode)
+        }
+        .onAppear { multiSelect.syncTracks(tracks, for: scope) }
+        .onChange(of: tracks) { _, updated in
+            multiSelect.syncTracks(updated, for: scope)
+        }
+        .onDisappear { multiSelect.exit(scope: scope) }
+    }
+
+    private var browseHeader: some View {
+        HStack(spacing: 10) {
+            Button {
+                if let first = tracks.first {
+                    player.play(first, queue: tracks, session: library.session)
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.accentOn)
+                        .frame(width: 28, height: 28)
+                        .background(Theme.accentFill, in: Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("全部播放")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                        Text(mode == .downloads
+                             ? "已下载 \(tracks.count) 首 · 无需登录即可播放"
+                             : "共 \(tracks.count) 首 · 未下载 \(undownloaded.count) 首")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(Theme.muted)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 8)
+
+            Button {
+                multiSelect.enter(scope: scope, mode: mode, tracks: tracks)
+            } label: {
+                Label("多选", systemImage: "checklist")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Theme.surface, in: Capsule())
+                    .overlay(Capsule().stroke(Theme.border))
+            }
+            .buttonStyle(.plain)
+            .disabled(batch.busy)
+            .accessibilityIdentifier("track-multi-select-\(scope)")
+        }
+        .frame(minHeight: 44)
+    }
+
+    private var selectionHeader: some View {
+        let allSelected = multiSelect.selection.allSelected(in: tracks)
+        let partialSelected = !allSelected && multiSelect.selection.hasSelection(in: tracks)
+        let onlyPendingSelected = multiSelect.selection.allUndownloadedSelected(in: tracks, downloadedIDs: downloadedIDs)
+
+        return HStack(spacing: 8) {
+            Button {
+                multiSelect.selection.toggleAll(in: tracks)
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: allSelected ? "checkmark.circle.fill" : (partialSelected ? "minus.circle.fill" : "circle"))
+                        .font(.system(size: 19))
+                        .foregroundStyle((allSelected || partialSelected) ? Theme.accentFill : Theme.muted)
+                    Text("全选")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(tracks.isEmpty || batch.busy)
+            .accessibilityLabel("全选当前列表")
+            .accessibilityValue(allSelected ? "已全选" : (partialSelected ? "部分选择" : "未全选"))
+
+            if mode == .library && !undownloaded.isEmpty {
+                Button {
+                    multiSelect.selection.toggleUndownloaded(in: tracks, downloadedIDs: downloadedIDs)
+                } label: {
+                    Text("选未下载(\(undownloaded.count))")
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .lineLimit(1)
+                        .foregroundStyle(onlyPendingSelected ? Theme.accent : Theme.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(onlyPendingSelected ? Theme.selected : Theme.surface, in: Capsule())
+                        .overlay(Capsule().stroke(onlyPendingSelected ? Theme.accent : Theme.border))
+                }
+                .buttonStyle(.plain)
+                .disabled(batch.busy)
+                .accessibilityIdentifier("select-undownloaded-\(scope)")
+            }
+
+            Spacer(minLength: 4)
+
+            Button("完成") {
+                if batch.busy { batch.cancel() }
+                multiSelect.exit(scope: scope)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Theme.accent)
+            .frame(minHeight: 36)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("track-multi-done-\(scope)")
+        }
+        .frame(minHeight: 44)
     }
 }
 
 struct TrackRows: View {
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var player: PlayerModel
+    @EnvironmentObject private var multiSelect: TrackMultiSelectController
+    @EnvironmentObject private var batch: TrackBatchActions
     let tracks: [Track]
+    var scope: String? = nil
+    var mode: TrackMultiSelectController.Mode = .library
+
+    private var downloadedIDs: Set<String> { Set(library.downloaded.map(\.id)) }
+    private var isSelecting: Bool { scope.map { multiSelect.isSelecting(scope: $0) } ?? false }
+
     var body: some View {
         LazyVStack(spacing: 0) {
             ForEach(tracks) { track in
+                if isSelecting {
+                    selectingRow(track)
+                } else {
+                    browseRow(track)
+                    Divider().overlay(Theme.borderSubtle)
+                }
+            }
+        }
+    }
+
+    private func selectingRow(_ track: Track) -> some View {
+        let isSelected = multiSelect.selection.selectedIDs.contains(track.id)
+        let isDownloading = batch.currentTrackID == track.id || library.downloading.contains(track.id)
+        let isQueued = batch.busy && batch.queuedTrackIDs.contains(track.id)
+        let isDownloaded = downloadedIDs.contains(track.id)
+
+        return VStack(spacing: 0) {
+            Button {
+                if !batch.busy {
+                    multiSelect.selection.toggle(track.id)
+                }
+            } label: {
                 HStack(spacing: 12) {
-                    Button {
-                        player.play(track, queue: tracks, session: library.session)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Artwork(path: track.artwork, radius: 8).frame(width: 46, height: 46)
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(track.title).font(.subheadline).lineLimit(1).foregroundStyle(player.current?.id == track.id ? Theme.accent : Theme.ink)
-                                Text(track.artist).font(.caption).lineLimit(1).foregroundStyle(Theme.muted)
-                            }
-                            Spacer(minLength: 4)
-                            Text(clock(track.duration)).font(.caption2.monospacedDigit()).foregroundStyle(Theme.muted)
-                        }.contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                    Button { Task { await library.favorite(track) } } label: {
-                        Image(systemName: track.favorite ? "heart.fill" : "heart").font(.subheadline).foregroundStyle(track.favorite ? Theme.accent : Theme.muted).frame(width: 35, height: 44)
-                    }.accessibilityLabel(track.favorite ? "取消收藏" : "收藏")
-                    Menu {
-                        if library.downloaded.contains(where: { $0.id == track.id }) {
-                            Label("已下载，可离线播放", systemImage: "checkmark.circle")
-                            Button("删除下载", role: .destructive) {
-                                if player.current?.id == track.id { player.stop() }
-                                library.removeDownload(track)
-                            }
-                        } else {
-                            Button("下载歌曲") { Task { await library.download(track) } }
-                                .disabled(library.session == nil || library.offline || library.downloading.contains(track.id))
-                        }
-                        Button("加入播放列表") { player.append([track], session: library.session) }
-                    } label: {
-                        Image(systemName: library.downloading.contains(track.id) ? "arrow.down.circle.dotted" :
-                            library.downloaded.contains(where: { $0.id == track.id }) ? "checkmark.circle.fill" : "ellipsis")
-                            .frame(width: 30, height: 44).foregroundStyle(Theme.muted)
-                    }.accessibilityLabel("下载与播放操作 · \(track.title)")
-                }.padding(.vertical, 10)
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 20))
+                        .foregroundStyle(isSelected ? Theme.accentFill : Theme.muted)
+                        .frame(width: 24, height: 44)
+                    Artwork(path: track.artwork, radius: 8).frame(width: 46, height: 46)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(track.title)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .foregroundStyle(player.current?.id == track.id ? Theme.accent : Theme.ink)
+                        Text(track.artist)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .foregroundStyle(Theme.muted)
+                    }
+                    Spacer(minLength: 4)
+                    selectionTrailing(
+                        for: track,
+                        isDownloading: isDownloading,
+                        isQueued: isQueued,
+                        isDownloaded: isDownloaded
+                    )
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 11)
+                        .fill(isSelected ? Theme.selected : Color.clear)
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(batch.busy)
+            .accessibilityLabel("\(isSelected ? "取消选择" : "选择") \(track.title)")
+            .accessibilityValue(isSelected ? "已选择" : "未选择")
+
+            if !isSelected {
                 Divider().overlay(Theme.borderSubtle)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func selectionTrailing(
+        for track: Track,
+        isDownloading: Bool,
+        isQueued: Bool,
+        isDownloaded: Bool
+    ) -> some View {
+        if isDownloading {
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini).tint(Theme.accent)
+                Text("下载中").font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Theme.accent.opacity(0.14), in: Capsule())
+        } else if isQueued {
+            Text("等待中")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(Theme.muted)
+        } else if isDownloaded {
+            Label("已下载", systemImage: "checkmark")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Theme.sageInk)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Theme.sage, in: Capsule())
+        } else {
+            Text(clock(track.duration))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(Theme.muted)
+        }
+    }
+
+    private func browseRow(_ track: Track) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                player.play(track, queue: tracks, session: library.session)
+            } label: {
+                HStack(spacing: 12) {
+                    Artwork(path: track.artwork, radius: 8).frame(width: 46, height: 46)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(track.title).font(.subheadline).lineLimit(1).foregroundStyle(player.current?.id == track.id ? Theme.accent : Theme.ink)
+                        Text(track.artist).font(.caption).lineLimit(1).foregroundStyle(Theme.muted)
+                    }
+                    Spacer(minLength: 4)
+                    Text(clock(track.duration)).font(.caption2.monospacedDigit()).foregroundStyle(Theme.muted)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            Button { Task { await library.favorite(track) } } label: {
+                Image(systemName: track.favorite ? "heart.fill" : "heart").font(.subheadline).foregroundStyle(track.favorite ? Theme.accent : Theme.muted).frame(width: 35, height: 44)
+            }.accessibilityLabel(track.favorite ? "取消收藏" : "收藏")
+            Menu {
+                if let scope {
+                    Button {
+                        multiSelect.enter(scope: scope, mode: mode, tracks: tracks, preselect: [track.id])
+                    } label: {
+                        Label("多选歌曲", systemImage: "checklist")
+                    }
+                    .disabled(batch.busy)
+                }
+                if library.downloaded.contains(where: { $0.id == track.id }) {
+                    Label("已下载，可离线播放", systemImage: "checkmark.circle")
+                    Button("删除下载", role: .destructive) {
+                        if player.current?.id == track.id { player.stop() }
+                        library.removeDownload(track)
+                    }
+                } else {
+                    Button("下载歌曲") { Task { await library.download(track) } }
+                        .disabled(library.session == nil || library.offline || library.downloading.contains(track.id))
+                }
+                Button("加入播放列表") { player.append([track], session: library.session) }
+            } label: {
+                Image(systemName: library.downloading.contains(track.id) ? "arrow.down.circle.dotted" :
+                    library.downloaded.contains(where: { $0.id == track.id }) ? "checkmark.circle.fill" : "ellipsis")
+                    .frame(width: 30, height: 44).foregroundStyle(Theme.muted)
+            }.accessibilityLabel("下载与播放操作 · \(track.title)")
+        }.padding(.vertical, 10)
+    }
+}
+
+struct MultiSelectActionBar: View {
+    @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var player: PlayerModel
+    @EnvironmentObject private var multiSelect: TrackMultiSelectController
+    @EnvironmentObject private var batch: TrackBatchActions
+    @State private var confirmDelete = false
+
+    private var downloadedIDs: Set<String> { Set(library.downloaded.map(\.id)) }
+    private var selected: [Track] { multiSelect.selection.selected(in: multiSelect.currentTracks) }
+    private var pendingDownloads: [Track] {
+        multiSelect.selection.pendingDownloads(in: multiSelect.currentTracks, downloadedIDs: downloadedIDs)
+    }
+    private var pendingFavorites: [Track] {
+        multiSelect.selection.pendingFavorites(in: multiSelect.currentTracks)
+    }
+
+    private var summaryHint: String {
+        if multiSelect.mode == .downloads {
+            return "离线文件管理"
+        }
+        if library.session == nil {
+            return "登录后可下载或喜欢"
+        }
+        if library.offline {
+            return "离线模式 · 仅可加入列表"
+        }
+        let skipped = selected.count - pendingDownloads.count
+        if skipped > 0 {
+            return "自动跳过 \(skipped) 首已下载"
+        }
+        if !pendingDownloads.isEmpty {
+            return "全部待下载"
+        }
+        return "请选择歌曲"
+    }
+
+    private var primaryLabel: String {
+        if multiSelect.mode == .downloads {
+            return selected.isEmpty ? "删除下载" : "删除下载 (\(selected.count))"
+        }
+        if !pendingDownloads.isEmpty {
+            return "下载 (\(pendingDownloads.count))"
+        }
+        return selected.isEmpty ? "下载" : "所选均已下载"
+    }
+
+    private var primaryDisabled: Bool {
+        if multiSelect.mode == .downloads {
+            return batch.busy || selected.isEmpty
+        }
+        return batch.busy || library.session == nil || library.offline || pendingDownloads.isEmpty
+    }
+
+    private var favoriteDisabled: Bool {
+        batch.busy || library.session == nil || library.offline || pendingFavorites.isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 9) {
+            HStack {
+                Text("已选 \(selected.count) 首")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                Spacer(minLength: 6)
+                Text(summaryHint)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(Theme.secondary)
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    if multiSelect.mode == .downloads {
+                        confirmDelete = true
+                    } else {
+                        runBatch(.download, tracks: pendingDownloads)
+                    }
+                } label: {
+                    Label(
+                        primaryLabel,
+                        systemImage: multiSelect.mode == .downloads ? "trash" : "arrow.down.to.line"
+                    )
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .padding(.horizontal, 10)
+                    .background(
+                        multiSelect.mode == .downloads ? Theme.dangerSurface : Theme.accentFill,
+                        in: RoundedRectangle(cornerRadius: 11)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 11)
+                            .stroke(multiSelect.mode == .downloads ? Theme.danger.opacity(0.35) : Color.clear)
+                    )
+                    .foregroundStyle(multiSelect.mode == .downloads ? Theme.danger : Theme.accentOn)
+                }
+                .buttonStyle(.plain)
+                .disabled(primaryDisabled)
+                .opacity(primaryDisabled ? 0.42 : 1)
+                .accessibilityIdentifier("batch-primary")
+
+                Button {
+                    runBatch(.favorite, tracks: pendingFavorites)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "heart")
+                            .foregroundStyle(favoriteDisabled ? Theme.muted : Theme.accent)
+                        Text("喜欢")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .frame(minHeight: 44)
+                    .padding(.horizontal, 12)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 11))
+                    .overlay(RoundedRectangle(cornerRadius: 11).stroke(Theme.border))
+                    .foregroundStyle(Theme.ink)
+                }
+                .buttonStyle(.plain)
+                .disabled(favoriteDisabled)
+                .opacity(favoriteDisabled ? 0.42 : 1)
+                .accessibilityLabel("喜欢所选歌曲")
+                .accessibilityIdentifier("batch-favorite")
+
+                Button {
+                    let count = selected.count
+                    player.append(selected, session: library.session)
+                    multiSelect.exit()
+                    multiSelect.showToast("已将 \(count) 首歌曲加入播放列表")
+                } label: {
+                    Label("加入列表", systemImage: "text.badge.plus")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(minHeight: 44)
+                        .padding(.horizontal, 12)
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 11))
+                        .overlay(RoundedRectangle(cornerRadius: 11).stroke(Theme.border))
+                        .foregroundStyle(Theme.ink)
+                }
+                .buttonStyle(.plain)
+                .disabled(batch.busy || selected.isEmpty)
+                .opacity((batch.busy || selected.isEmpty) ? 0.42 : 1)
+                .accessibilityIdentifier("batch-queue")
+            }
+        }
+        .confirmationDialog(
+            "确定删除所选 \(selected.count) 首离线下载？",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
+            Button("删除 \(selected.count) 首离线文件", role: .destructive) {
+                runBatch(.removeDownload, tracks: selected)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("删除后将从本机移除已保存的音频、封面与歌词，正在播放的选中曲目会先停止。")
+        }
+    }
+
+    private func runBatch(_ action: TrackBatchActions.Action, tracks: [Track]) {
+        guard !tracks.isEmpty else { return }
+        batch.start(action, tracks: tracks, library: library, player: player) { outcome in
+            if outcome.succeeded {
+                multiSelect.exit()
+                switch outcome.action {
+                case .download:
+                    multiSelect.showToast("已完成下载 \(outcome.completed) 首，可离线播放")
+                case .favorite:
+                    multiSelect.showToast("已收藏 \(outcome.completed) 首歌曲")
+                case .removeDownload:
+                    multiSelect.showToast("已删除 \(outcome.completed) 首离线下载")
+                }
+            } else if outcome.cancelled {
+                if outcome.action == .download {
+                    let existing = Set(library.downloaded.map(\.id))
+                    multiSelect.selection.selectedIDs.subtract(existing)
+                }
+                let msg = outcome.completed > 0
+                    ? "已取消剩余任务（已完成 \(outcome.completed) 首）"
+                    : "已取消批量操作"
+                multiSelect.showToast(msg)
             }
         }
     }
 }
 
+struct BatchProgressBar: View {
+    @EnvironmentObject private var batch: TrackBatchActions
+
+    private var titlePrefix: String {
+        switch batch.activeAction {
+        case .download, .none: return "正在下载"
+        case .favorite: return "正在收藏"
+        case .removeDownload: return "正在删除"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("\(titlePrefix) \(min(batch.completed + 1, max(batch.total, 1))) / \(batch.total)\(batch.currentTrackTitle.map { " · \($0)" } ?? "")")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button("取消") { batch.cancel() }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("batch-cancel")
+            }
+            ProgressView(value: Double(batch.completed), total: Double(max(batch.total, 1)))
+                .tint(Theme.accentFill)
+        }
+    }
+}
+
 struct TrackListView: View {
+    @EnvironmentObject private var library: LibraryModel
     let title: String
     let tracks: [Track]
+
+    private var resolvedTracks: [Track] {
+        let current = Dictionary(library.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return tracks.map { current[$0.id] ?? $0 }
+    }
+
     var body: some View {
-        ScrollView { TrackRows(tracks: tracks).padding(20) }.foregroundStyle(Theme.ink).background(Theme.paper).navigationTitle(title)
+        ScrollView {
+            TrackCollectionSection(tracks: resolvedTracks, scope: "artist-\(title)", mode: .library)
+                .padding(20)
+        }
+        .foregroundStyle(Theme.ink)
+        .background(Theme.paper)
+        .navigationTitle(title)
     }
 }
 
 struct SearchView: View {
     @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var multiSelect: TrackMultiSelectController
     @State private var query = ""
     @FocusState private var searchFocused: Bool
     private var results: [Track] {
@@ -414,9 +994,15 @@ struct SearchView: View {
             ScrollView {
                 if query.trimmingCharacters(in: .whitespaces).isEmpty { EmptyLibrary(title: "找一首，此刻想听的歌", message: "搜索歌曲、专辑或艺术家。").padding(.top, 60) }
                 else if results.isEmpty { EmptyLibrary(title: "还没有找到这段旋律", message: "试试其他关键词。").padding(.top, 60) }
-                else { TrackRows(tracks: results).padding(20) }
+                else { TrackCollectionSection(tracks: results, scope: "search-results", mode: .library).padding(20) }
             }.scrollDismissesKeyboard(.interactively)
-        }.foregroundStyle(Theme.ink).background(Theme.paper).navigationTitle("寻找共鸣")
+        }
+        .onChange(of: query) { _, _ in
+            if results.isEmpty {
+                multiSelect.exit(scope: "search-results")
+            }
+        }
+        .foregroundStyle(Theme.ink).background(Theme.paper).navigationTitle("寻找共鸣")
     }
 }
 
@@ -955,16 +1541,26 @@ func clock(_ seconds: Double) -> String {
 
 struct DownloadsView: View {
     @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var batch: TrackBatchActions
+
+    private var resolvedTracks: [Track] {
+        let current = Dictionary(library.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return library.libraryDownloads.map { current[$0.id] ?? $0 }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
-                Text("已下载 \(library.libraryDownloads.count) 首 · 无需登录即可播放").font(.caption).foregroundStyle(Theme.muted)
-                if !library.downloading.isEmpty { ProgressView("正在下载 \(library.downloading.count) 首") }
-                if library.libraryDownloads.isEmpty {
-                    EmptyLibrary(title: "把喜欢的音乐，带在身边", message: "在设置中连接服务器，通过歌曲右侧菜单下载。退出登录后仍可聆听。")
+                if !library.downloading.isEmpty && !batch.busy {
+                    ProgressView("正在下载 \(library.downloading.count) 首")
                 }
-                TrackRows(tracks: library.libraryDownloads)
+                if resolvedTracks.isEmpty {
+                    Text("已下载 0 首 · 无需登录即可播放").font(.caption).foregroundStyle(Theme.muted)
+                    EmptyLibrary(title: "把喜欢的音乐，带在身边", message: "在设置中连接服务器，通过歌曲右侧菜单下载。退出登录后仍可聆听。")
+                } else {
+                    TrackCollectionSection(tracks: resolvedTracks, scope: "downloads", mode: .downloads)
+                }
             }.padding(20)
-        }.background(Theme.paper).navigationTitle("已下载")
+        }.foregroundStyle(Theme.ink).background(Theme.paper).navigationTitle("已下载")
     }
 }

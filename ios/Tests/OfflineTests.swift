@@ -386,6 +386,8 @@ struct OfflineTests {
         assert(renewalLibrary.session == nil && renewalLibrary.offline && renewalLibrary.downloaded.count == 1,
                "401 during renewal did not clear session while preserving offline downloads")
 
+        try await batchSelectionTests(media: media, baseURL: baseURL, root: root)
+
         library.removeDownload(track)
         assert(library.downloaded.isEmpty && library.tracks.isEmpty && store.audio(track) == nil)
         assert(store.sidecar("../escape", name: "cover") == nil)
@@ -395,5 +397,157 @@ struct OfflineTests {
         print("PASS: automatic playback cache, persistence, account/server isolation, truncated cache rejection/repair, cached playback during outage, clearing preserves downloads and cancels pending writes")
         print("PASS: favorite metadata persists in downloads and automatic cache; tokenless restart restores automatic cache after expired credentials")
         print("PASS: Apple automatic session keepalive, legacy /auth/session fallback, transient outage preservation and 401 expiry handling")
+    }
+
+    @MainActor
+    static func batchSelectionTests(media: URL, baseURL: URL, root: URL) async throws {
+        func controlPost(_ path: String) async throws {
+            var req = URLRequest(url: baseURL.appendingPathComponent(path))
+            req.httpMethod = "POST"
+            _ = try await URLSession.shared.data(for: req)
+        }
+
+        try await controlPost("__online")
+        let batchRoot = root.appendingPathComponent("batch-tests", isDirectory: true)
+        let batchStore = OfflineStore(root: batchRoot.appendingPathComponent("downloads", isDirectory: true))
+        let batchCache = PlaybackCache(root: batchRoot.appendingPathComponent("cache", isDirectory: true))
+        let batchLib = LibraryModel(downloads: batchStore, persistsSession: false, cache: batchCache)
+        batchLib.serverInput = baseURL.absoluteString
+        batchLib.username = "admin"
+        batchLib.password = "test-password"
+        await batchLib.login()
+        assert(batchLib.session != nil && !batchLib.offline && batchLib.tracks.count == 1,
+               batchLib.error ?? "batch login failed")
+
+        let firstTrack = batchLib.tracks[0]
+        let original = try Data(contentsOf: media)
+        let secondData = original + Data([0])
+        let secondID = SHA256.hash(data: secondData).map { String(format: "%02x", $0) }.joined()
+        let secondTrack = Track(
+            id: secondID,
+            title: "Second Song",
+            artist: firstTrack.artist,
+            albumArtist: firstTrack.albumArtist,
+            album: firstTrack.album,
+            year: firstTrack.year,
+            number: 2,
+            disc: 1,
+            duration: firstTrack.duration,
+            format: firstTrack.format,
+            bitrate: firstTrack.bitrate,
+            sampleRate: firstTrack.sampleRate,
+            artwork: "/api/v1/tracks/\(secondID)/cover",
+            favorite: false
+        )
+        let thirdTrack = Track(
+            id: String(repeating: "c", count: 64),
+            title: "Third Song",
+            artist: firstTrack.artist,
+            albumArtist: firstTrack.albumArtist,
+            album: firstTrack.album,
+            year: firstTrack.year,
+            number: 3,
+            disc: 1,
+            duration: firstTrack.duration,
+            format: firstTrack.format,
+            bitrate: firstTrack.bitrate,
+            sampleRate: firstTrack.sampleRate,
+            artwork: nil,
+            favorite: true
+        )
+
+        var sel = TrackSelection()
+        let downloadedSet: Set<String> = [firstTrack.id]
+        let visible = [firstTrack, secondTrack, thirdTrack]
+        assert(!sel.hasSelection(in: visible) && !sel.allSelected(in: visible))
+        sel.selectedIDs = [firstTrack.id, "hidden-track"]
+        assert(sel.hasSelection(in: visible))
+        assert(sel.undownloaded(in: visible, downloadedIDs: downloadedSet).map(\.id) == [secondTrack.id, thirdTrack.id])
+        assert(!sel.allUndownloadedSelected(in: visible, downloadedIDs: downloadedSet))
+
+        sel.toggleUndownloaded(in: visible, downloadedIDs: downloadedSet)
+        assert(sel.selectedIDs == [secondTrack.id, thirdTrack.id, "hidden-track"],
+               "Selecting undownloaded must select only pending tracks while preserving off-screen IDs")
+        assert(sel.allUndownloadedSelected(in: visible, downloadedIDs: downloadedSet))
+
+        sel.toggleUndownloaded(in: visible, downloadedIDs: downloadedSet)
+        assert(sel.selectedIDs == ["hidden-track"],
+               "Second toggleUndownloaded must clear visible selection while keeping off-screen IDs")
+
+        sel.toggleAll(in: visible)
+        assert(sel.allSelected(in: visible))
+        assert(sel.selected(in: visible).map(\.id) == visible.map(\.id))
+        assert(sel.pendingDownloads(in: visible, downloadedIDs: downloadedSet).map(\.id) == [secondTrack.id, thirdTrack.id])
+        assert(sel.pendingFavorites(in: visible).map(\.id) == [firstTrack.id, secondTrack.id])
+
+        // Test TrackBatchActions.download skipping already-downloaded tracks and ignoring missing 404 lyrics sidecar
+        await batchLib.download(firstTrack)
+        assert(batchLib.downloaded.count == 1 && batchStore.audio(firstTrack) != nil)
+        batchLib.tracks = [firstTrack, secondTrack]
+        let batchPlayer = PlayerModel(downloads: batchStore, cache: batchCache)
+        batchPlayer.volume = 0
+        let batch = TrackBatchActions()
+        let dlOk = await batch.run(.download, tracks: [firstTrack, secondTrack], library: batchLib, player: batchPlayer)
+        assert(dlOk && batch.completed == 2 && batch.total == 2 && !batch.busy, "Batch download failed")
+        assert(batch.lastOutcome == .init(action: .download, completed: 2, total: 2, succeeded: true, cancelled: false))
+        assert(batchLib.error == nil, "Missing optional lyrics in batch download must not surface an alert")
+        assert(batchLib.downloaded.count == 2 && batchStore.audio(secondTrack) != nil)
+        let savedSecondData = try Data(contentsOf: batchStore.audio(secondTrack)!)
+        assert(savedSecondData == secondData)
+
+        // Test TrackBatchActions.favorite syncing tracks and PlayerModel.current
+        batchPlayer.current = firstTrack
+        let favOk = await batch.run(.favorite, tracks: [firstTrack, secondTrack], library: batchLib, player: batchPlayer)
+        assert(favOk && batch.completed == 2 && batchLib.tracks.allSatisfy(\.favorite) && batchPlayer.current?.favorite == true,
+               "Batch favorite did not update library and current player track")
+        let relikeOk = await batch.run(.favorite, tracks: [batchLib.tracks[0]], library: batchLib, player: batchPlayer)
+        assert(relikeOk && batchLib.tracks[0].favorite, "Batch favorite must not toggle an already-liked track off")
+
+        // Test TrackBatchActions.removeDownload works offline & logged out and stops playing deleted track
+        await batchLib.logout()
+        assert(batchLib.session == nil && batchLib.offline)
+        batchPlayer.current = firstTrack
+        let removeOk = await batch.run(.removeDownload, tracks: [firstTrack, secondTrack], library: batchLib, player: batchPlayer)
+        assert(removeOk && batch.completed == 2 && batch.lastOutcome?.succeeded == true, "Offline batch removeDownload failed")
+        assert(batchLib.downloaded.isEmpty && batchStore.audio(firstTrack) == nil && batchStore.audio(secondTrack) == nil)
+        assert(batchPlayer.current == nil, "Deleting the currently playing download in batch must stop playback")
+
+        // Test TrackBatchActions cancellation during in-flight slow download
+        batchLib.password = "test-password"
+        await batchLib.login()
+        assert(batchLib.session != nil && !batchLib.offline && batchLib.downloaded.isEmpty)
+        try await controlPost("__slow_download")
+        let slowTask = batch.start(.download, tracks: [firstTrack, secondTrack], library: batchLib, player: batchPlayer)
+        assert(slowTask != nil)
+        try await Task.sleep(nanoseconds: 60_000_000)
+        assert(batch.busy, "Slow batch task should still be running before cancel")
+        batch.cancel()
+        let cancelledOk = await slowTask!.value
+        try await controlPost("__slow_download")
+        assert(!cancelledOk && !batch.busy && batchLib.error == nil,
+               "Cancelled batch download must exit cleanly without surfacing an error")
+        assert(batch.lastOutcome?.cancelled == true && batch.lastOutcome?.succeeded == false)
+
+        // Clean any leftover file before guard checks
+        for item in batchLib.downloaded { batchLib.removeDownload(item) }
+        assert(batchLib.downloaded.isEmpty)
+
+        // Test offline and scope/session switch guards
+        batchLib.offline = true
+        let offlineDownloadOk = await batch.run(.download, tracks: [firstTrack], library: batchLib, player: batchPlayer)
+        let offlineFavoriteOk = await batch.run(.favorite, tracks: [firstTrack], library: batchLib, player: batchPlayer)
+        assert(!offlineDownloadOk && !offlineFavoriteOk)
+        batchLib.offline = false
+
+        try await controlPost("__slow_download")
+        let scopeTask = batch.start(.download, tracks: [firstTrack, secondTrack], library: batchLib, player: batchPlayer)
+        try await Task.sleep(nanoseconds: 60_000_000)
+        batchLib.libraryScope = "cloud"
+        let scopeOk = await scopeTask!.value
+        try await controlPost("__slow_download")
+        assert(!scopeOk && batchStore.audio(secondTrack) == nil,
+               "Switching libraryScope mid-batch must abort remaining downloads")
+
+        print("PASS: iOS multi-select TrackSelection helpers, batch download, batch favorite, offline batch delete, cancellation and guard rails")
     }
 }

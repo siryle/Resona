@@ -94,6 +94,8 @@ enum Theme {
     static let accentOn = Color(uiColor: hex(0xFCFBF8))
     static let sage = dynamic(light: 0xE4EADB, dark: 0x222A1F)
     static let sageInk = dynamic(light: 0x2B3A22, dark: 0xC2D6B0)
+    static let danger = dynamic(light: 0xB42318, dark: 0xF97066)
+    static let dangerSurface = dynamic(light: 0xB42318, dark: 0xF97066, alpha: 0.13)
     static let playerBar = dynamic(light: 0xFCFBF8, dark: 0x191815, alpha: 0.96)
     static let heroStart = dynamic(light: 0xEEEAE0, dark: 0x211F1B)
     static let heroEnd = dynamic(light: 0xF4E9E0, dark: 0x281E18)
