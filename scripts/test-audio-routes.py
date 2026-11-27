@@ -75,6 +75,7 @@ def main():
             "LSRequiresIPhoneOS": True,
             "UIDeviceFamily": [1],
             "UIBackgroundModes": ["audio"],
+            "AVInitialRouteSharingPolicy": "LongFormAudio",
             "UILaunchScreen": {},
             "UIApplicationSceneManifest": {"UIApplicationSupportsMultipleScenes": False},
         }))

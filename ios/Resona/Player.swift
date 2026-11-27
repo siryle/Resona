@@ -262,7 +262,11 @@ final class PlayerModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, self.player.currentItem != nil else { return }
                 self.position = time.seconds.isFinite ? time.seconds : 0
-                if let value = self.player.currentItem?.duration.seconds, value.isFinite, value > 0 { self.duration = value }
+                if let value = self.player.currentItem?.duration.seconds, value.isFinite, value > 0 {
+                    let changed = abs(value - self.duration) >= 0.5
+                    self.duration = value
+                    if changed { self.updateNowPlaying() }
+                }
                 if abs(self.position - self.savedPosition) >= 5 { self.savePlaybackState() }
                 if self.position > 0, !self.isLocal, !self.cacheRequested,
                    let track = self.current, let session = self.session {
@@ -309,6 +313,7 @@ final class PlayerModel: ObservableObject {
                 }
             }
         }
+        try? configureAudioSession()
         refreshAudioOutputs()
         #else
         audioListeners.register(selector: kAudioHardwarePropertyDevices, queue: .main) { [weak self] in
@@ -369,6 +374,10 @@ final class PlayerModel: ObservableObject {
         volume = min(max(0, state.volume), 1)
         playbackRate = Self.normalizePlaybackRate(state.playbackRate ?? 1.0)
         player.defaultRate = playbackRate
+        if let current {
+            loadNowPlayingArtwork(for: current, session: session)
+            updateNowPlaying()
+        }
     }
 
     func savePlaybackState() {
@@ -385,6 +394,39 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    private func localStore(for track: Track) -> OfflineStore? {
+        downloads.audio(track) != nil ? downloads : cache.store
+    }
+
+    private func loadNowPlayingArtwork(for track: Track, session: Session?) {
+        artworkTask?.cancel()
+        #if os(iOS)
+        let brand = PlatformImage(named: "BrandIcon")
+        #else
+        let brand = Bundle.main.url(forResource: "BrandIcon", withExtension: "png").flatMap { PlatformImage(contentsOf: $0) }
+        #endif
+        nowPlayingArtwork = brand.map { image in
+            MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        }
+        if let cover = localStore(for: track)?.sidecar(track.id, name: "cover"),
+           let image = PlatformImage(contentsOfFile: cover.path) {
+            nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            return
+        }
+        guard localAudio(track) == nil, let session, track.artwork != nil else { return }
+        artworkTask = Task { [weak self] in
+            var request = URLRequest(url: session.server.appendingPathComponent("api/v1/tracks/\(track.id)/cover"))
+            request.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  data.count <= 5 * 1024 * 1024, let image = PlatformImage(data: data),
+                  !Task.isCancelled, let self, self.current?.id == track.id,
+                  self.session?.token == session.token else { return }
+            self.nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            self.updateNowPlaying()
+        }
+    }
+
     func play(_ track: Track, queue: [Track], session: Session?, recovering: Bool = false, startPosition: Double = 0) {
         if let session { cache.activate(session) }
         let local = localAudio(track)
@@ -397,20 +439,7 @@ final class PlayerModel: ObservableObject {
         reachedEnd = false
         cacheRequested = false
         current = track
-        artworkTask?.cancel()
-        #if os(iOS)
-        let brand = PlatformImage(named: "BrandIcon")
-        #else
-        let brand = Bundle.main.url(forResource: "BrandIcon", withExtension: "png").flatMap { PlatformImage(contentsOf: $0) }
-        #endif
-        nowPlayingArtwork = brand.map { image in
-            MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-        }
-        let localStore = downloads.audio(track) != nil ? downloads : cache.store
-        if let cover = localStore?.sidecar(track.id, name: "cover"),
-           let image = PlatformImage(contentsOfFile: cover.path) {
-            nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-        }
+        loadNowPlayingArtwork(for: track, session: session)
         duration = track.duration
         position = min(max(0, startPosition), duration)
         lyrics = []
@@ -469,20 +498,8 @@ final class PlayerModel: ObservableObject {
         }
         savePlaybackState()
         resume()
-        artworkTask = Task { [weak self] in
-            guard local == nil, let session, track.artwork != nil else { return }
-            var request = URLRequest(url: session.server.appendingPathComponent("api/v1/tracks/\(track.id)/cover"))
-            request.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
-            guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  (response as? HTTPURLResponse)?.statusCode == 200,
-                  data.count <= 5 * 1024 * 1024, let image = PlatformImage(data: data),
-                  !Task.isCancelled, let self, self.current?.id == track.id,
-                  self.session?.token == session.token else { return }
-            self.nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-            self.updateNowPlaying()
-        }
         lyricTask?.cancel()
-        if let url = localStore?.sidecar(track.id, name: "lyrics"),
+        if let url = localStore(for: track)?.sidecar(track.id, name: "lyrics"),
            let text = try? String(contentsOf: url, encoding: .utf8) {
             lyrics = Lyrics.parse(text)
             plainLyrics = lyrics.isEmpty ? text : ""
@@ -509,9 +526,8 @@ final class PlayerModel: ObservableObject {
         if reachedEnd || (duration > 0 && position >= duration) { seek(0) }
         do {
             #if os(iOS)
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .default, policy: .longFormAudio)
-            try audioSession.setActive(true)
+            try configureAudioSession()
+            try AVAudioSession.sharedInstance().setActive(true)
             refreshAudioOutputs()
             #endif
             playbackRequested = true
@@ -625,26 +641,53 @@ final class PlayerModel: ObservableObject {
         duration = 0
         savePlaybackState()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        #if os(macOS)
         MPNowPlayingInfoCenter.default().playbackState = .stopped
-        #endif
     }
 
     private func updateNowPlaying() {
         guard let current else { return }
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: current.title, MPMediaItemPropertyArtist: current.artist,
-            MPMediaItemPropertyAlbumTitle: current.album, MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: position, MPNowPlayingInfoPropertyPlaybackRate: playing ? playbackRate : 0.0
+            MPMediaItemPropertyTitle: current.title,
+            MPMediaItemPropertyArtist: current.artist,
+            MPMediaItemPropertyAlbumTitle: current.album,
+            MPMediaItemPropertyPlaybackDuration: duration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
+            MPNowPlayingInfoPropertyPlaybackRate: playing ? Double(playbackRate) : 0.0,
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: Double(playbackRate),
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+            MPNowPlayingInfoPropertyIsLiveStream: false,
         ]
+        if let index = queue.firstIndex(where: { $0.id == current.id }) {
+            info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = index
+            info[MPNowPlayingInfoPropertyPlaybackQueueCount] = queue.count
+        }
         if let nowPlayingArtwork { info[MPMediaItemPropertyArtwork] = nowPlayingArtwork }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        #if os(macOS)
         MPNowPlayingInfoCenter.default().playbackState = playing ? .playing : .paused
-        #endif
     }
 
     #if os(iOS)
+    private func configureAudioSession() throws {
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.playback, mode: .default, policy: .longFormAudio)
+    }
+
+    func prepareForAudioRouteSelection() {
+        try? configureAudioSession()
+        if current != nil {
+            try? AVAudioSession.sharedInstance().setActive(true)
+            updateNowPlaying()
+        }
+        refreshAudioOutputs()
+    }
+
+    func handleAudioRouteSelectionEnded() {
+        refreshAudioOutputs()
+        if current != nil {
+            updateNowPlaying()
+        }
+    }
+
     static func classifyPort(_ port: AVAudioSession.Port) -> AudioOutputKind {
         switch port {
         case .airPlay:

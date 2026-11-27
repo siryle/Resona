@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import AVFoundation
+import MediaPlayer
 
 @main
 struct OfflineTests {
@@ -167,6 +168,18 @@ struct OfflineTests {
         let restoredEngine = AVPlayer()
         let restoredPlayer = PlayerModel(downloads: store, cache: cache, player: restoredEngine)
         restoredPlayer.restorePlayback(session: library.session)
+        let restoredCenter = MPNowPlayingInfoCenter.default()
+        let restoredInfo = restoredCenter.nowPlayingInfo
+        assert(restoredCenter.playbackState == .paused,
+               "Restored playback must report paused Now Playing state")
+        assert(restoredInfo?[MPMediaItemPropertyTitle] as? String == track.title,
+               "Restored playback must populate Now Playing title")
+        assert(restoredInfo?[MPMediaItemPropertyArtwork] != nil,
+               "Restored local playback must populate Now Playing artwork")
+        assert((restoredInfo?[MPNowPlayingInfoPropertyMediaType] as? NSNumber)?.uintValue == MPNowPlayingInfoMediaType.audio.rawValue,
+               "Restored playback must set audio media type")
+        assert((restoredInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue == 0,
+               "Restored playback must report playback rate 0 while paused")
         assert(restoredPlayer.current == track && restoredPlayer.queue.map(\.id) == [cloud.id, track.id],
                "Restart lost the current song or queue order, including uncached cloud tracks")
         assert(restoredPlayer.position == 3 && restoredPlayer.duration == track.duration &&
@@ -244,8 +257,25 @@ struct OfflineTests {
         }
         assert(player.isLocal && player.playing && player.position > 0, player.error ?? "offline playback did not start")
         assert(player.lyrics.count == 2)
+        let playingCenter = MPNowPlayingInfoCenter.default()
+        let playingInfo = playingCenter.nowPlayingInfo
+        assert(playingCenter.playbackState == .playing,
+               "Active playback must report MPNowPlayingPlaybackState.playing")
+        assert(playingInfo?[MPMediaItemPropertyTitle] as? String == track.title &&
+               playingInfo?[MPMediaItemPropertyArtist] as? String == track.artist &&
+               playingInfo?[MPMediaItemPropertyAlbumTitle] as? String == track.album &&
+               playingInfo?[MPMediaItemPropertyArtwork] != nil,
+               "Active playback must populate title, artist, album and artwork")
+        assert((playingInfo?[MPNowPlayingInfoPropertyMediaType] as? NSNumber)?.uintValue == MPNowPlayingInfoMediaType.audio.rawValue,
+               "Active playback must set audio media type")
+        assert(((playingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue ?? 0) > 0 &&
+               ((playingInfo?[MPNowPlayingInfoPropertyDefaultPlaybackRate] as? NSNumber)?.doubleValue ?? 0) > 0,
+               "Active playback must report positive playback rates")
         player.pause()
         assert(!player.playing)
+        assert(MPNowPlayingInfoCenter.default().playbackState == .paused &&
+               (MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue == 0,
+               "Paused playback must report paused state and rate 0")
         player.resume()
         assert(player.isLocal)
         _ = try await library.request("../../__expire", method: "POST")
@@ -305,6 +335,9 @@ struct OfflineTests {
         assert(player.playing && player.position < 2)
         player.stop()
         assert(player.current == nil && !player.playing)
+        assert(MPNowPlayingInfoCenter.default().nowPlayingInfo == nil &&
+               MPNowPlayingInfoCenter.default().playbackState == .stopped,
+               "Stopped playback must clear nowPlayingInfo and report stopped state")
 
         // Session automatic renewal, legacy fallback, outage preservation, and 401 expiry handling
         let baseURL = URL(string: CommandLine.arguments[2])!

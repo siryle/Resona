@@ -527,7 +527,7 @@ struct NowPlayingView: View {
                         .background(Theme.surface, in: Capsule())
                         .overlay(Capsule().stroke(Theme.border))
                         Spacer()
-                        AirPlayRoutePicker().frame(width: 44, height: 44)
+                        AirPlayRoutePicker(player: player).frame(width: 44, height: 44)
                     }
                     if let track = player.current {
                         Group {
@@ -763,18 +763,51 @@ private struct PlaybackSpeedRulerCard: View {
 }
 
 struct AirPlayRoutePicker: UIViewRepresentable {
+    let player: PlayerModel
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(player: player)
+    }
+
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
         picker.prioritizesVideoDevices = false
         picker.tintColor = UIColor(Theme.secondary)
         picker.activeTintColor = UIColor(Theme.accent)
+        picker.delegate = context.coordinator
         picker.accessibilityLabel = "AirPlay 与蓝牙音频输出"
         return picker
     }
 
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+        context.coordinator.player = player
+        uiView.delegate = context.coordinator
         uiView.tintColor = UIColor(Theme.secondary)
         uiView.activeTintColor = UIColor(Theme.accent)
+    }
+
+    final class Coordinator: NSObject, AVRoutePickerViewDelegate {
+        var player: PlayerModel
+
+        init(player: PlayerModel) {
+            self.player = player
+        }
+
+        func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { player.prepareForAudioRouteSelection() }
+            } else {
+                Task { @MainActor [player] in player.prepareForAudioRouteSelection() }
+            }
+        }
+
+        func routePickerViewDidEndPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { player.handleAudioRouteSelectionEnded() }
+            } else {
+                Task { @MainActor [player] in player.handleAudioRouteSelectionEnded() }
+            }
+        }
     }
 }
 
